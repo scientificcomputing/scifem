@@ -7,7 +7,7 @@ on:
 
 jobs:
   test-code:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     container: ghcr.io/fenics/dolfinx/dolfinx:nightly
     env:
       DEB_PYTHON_INSTALL_LAYOUT: deb_system
