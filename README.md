@@ -1,11 +1,7 @@
 # Scientific Computing Tools for Finite Element Methods
 
-TBW
-
-## LICENSE
-MIT
-
-
+## Features
+- Real-space implementation for usage in DOLFINx (>=v0.8.0)
 ## Installation
 
 ### Requirements
