@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
 authors = [
-    { email = "dokken@simula.no", name = "Jørgen Dokken" },
+    { email = "dokken@simula.no", name = "Jørgen S. Dokken" },
     { email = "henriknf@simula.no" , name = "Henrik N.T. Finsberg" },
 ]
 dependencies = []
