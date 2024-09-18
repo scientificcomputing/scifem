@@ -20,8 +20,9 @@ def create_real_functionspace(
 
     """
 
+    dtype = mesh.geometry.x.dtype
     ufl_e = basix.ufl.element(
-        "P", mesh.basix_cell(), 0, dtype=float, discontinuous=True, shape=value_shape
+        "P", mesh.basix_cell(), 0, dtype=dtype, discontinuous=True, shape=value_shape
     )
 
     if (dtype := mesh.geometry.x.dtype) == np.float64:
