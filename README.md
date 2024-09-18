@@ -2,7 +2,7 @@
 
 This package contains a collection of tools for scientific computing with a focus on finite element methods. The tools are written in Python and are intended to be used in conjunction with the [dolfinx](https://github.com/FEniCS/dolfinx).
 
-Many users that are transitioning from legacy FEniCS to FEniCSx may find the transition difficult due to the lack of some functionalities in FEniCSx. This package aims to provide some of the functionalities that are missing in FEniCSx. The package is still in its early stages and many functionalities are still missing. 
+Many users that are transitioning from legacy FEniCS to FEniCSx may find the transition difficult due to the lack of some functionalities in FEniCSx. This package aims to provide some of the functionalities that are missing in FEniCSx. The package is still in its early stages and many functionalities are still missing.
 
 
 ## Installation

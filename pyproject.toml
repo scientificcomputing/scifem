@@ -21,6 +21,7 @@ repository = "https://github.com/scientificcomputing/scifem.git"
 [project.optional-dependencies]
 docs = []
 test = ["pytest"]
+dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
 
 
 [tool.pytest.ini_options]
@@ -88,3 +89,43 @@ max-complexity = 10
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+
+[tool.ruff.lint.isort]
+known-first-party = ["scifem"]
+known-third-party = [
+    "basix",
+    "dolfinx",
+    "ffcx",
+    "ufl",
+    "gmsh",
+    "numpy",
+    "pytest",
+]
+section-order = [
+    "future",
+    "standard-library",
+    "mpi",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+[tool.ruff.lint.isort.sections]
+"mpi" = ["mpi4py", "petsc4py"]
+
+
+[tool.bumpversion]
+allow_dirty = false
+commit = true
+message = "Bump version: {current_version} → {new_version}"
+tag = true
+sign_tags = false
+tag_name = "v{new_version}"
+tag_message = "Bump version: {current_version} → {new_version}"
+current_version = "0.1.0"
+
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
