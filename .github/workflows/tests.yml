@@ -7,10 +7,18 @@ on:
 
 jobs:
   test-code:
+    name: Test on ${{ matrix.container }}
     runs-on: ubuntu-24.04
-    container: ghcr.io/fenics/dolfinx/dolfinx:nightly
+    container: ${{ matrix.container }}
     env:
       DEB_PYTHON_INSTALL_LAYOUT: deb_system
+    strategy:
+      fail-fast: false
+      matrix:
+        container: [
+          "ghcr.io/fenics/dolfinx/dolfinx:stable",
+          "ghcr.io/fenics/dolfinx/dolfinx:nightly"
+        ]
 
 
     steps:
