@@ -11,13 +11,17 @@
 #include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
+
 using namespace dolfinx;
 
 namespace scifem
 {
 template <typename T>
 dolfinx::fem::FunctionSpace<T>
-create_real_functionspace(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh)
+create_real_functionspace(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+                          std::vector<std::size_t> value_shape)
 {
 
   basix::FiniteElement e_v = basix::create_element<T>(
@@ -36,10 +40,12 @@ create_real_functionspace(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh)
   std::shared_ptr<const dolfinx::common::IndexMap> imap
       = std::make_shared<const dolfinx::common::IndexMap>(
           MPI_COMM_WORLD, num_dofs, ghosts, owners);
-  int index_map_bs = 1;
-  int bs = 1;
+  std::size_t value_size = std::accumulate(
+      value_shape.begin(), value_shape.end(), 1, std::multiplies{});
+  int index_map_bs = value_size;
+  int bs = value_size;
   // Element dof layout
-  fem::ElementDofLayout dof_layout(1, e_v.entity_dofs(),
+  fem::ElementDofLayout dof_layout(value_size, e_v.entity_dofs(),
                                    e_v.entity_closure_dofs(), {}, {});
   std::size_t num_cells_on_process
       = mesh->topology()->index_map(mesh->topology()->dim())->size_local()
@@ -50,10 +56,10 @@ create_real_functionspace(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh)
   std::shared_ptr<const dolfinx::fem::DofMap> real_dofmap
       = std::make_shared<const dolfinx::fem::DofMap>(dof_layout, imap,
                                                      index_map_bs, dofmap, bs);
-  std::vector<std::size_t> value_shape(0);
 
   std::shared_ptr<const dolfinx::fem::FiniteElement<T>> d_el
-      = std::make_shared<const dolfinx::fem::FiniteElement<T>>(e_v, 1, false);
+      = std::make_shared<const dolfinx::fem::FiniteElement<T>>(e_v, value_size,
+                                                               false);
 
   return dolfinx::fem::FunctionSpace<T>(mesh, d_el, real_dofmap, value_shape);
 }
@@ -67,8 +73,9 @@ void declare_real_function_space(nanobind::module_& m, std::string type)
   std::string pyfunc_name = "create_real_functionspace_" + type;
   m.def(
       pyfunc_name.c_str(),
-      [](std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh)
-      { return scifem::create_real_functionspace<T>(mesh); },
+      [](std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
+         std::vector<std::size_t> value_shape)
+      { return scifem::create_real_functionspace<T>(mesh, value_shape); },
       "Create a real function space");
 }
 

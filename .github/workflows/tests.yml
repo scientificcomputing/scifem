@@ -20,4 +20,7 @@ jobs:
         run: python3 -m pip install .[test] --no-build-isolation
 
       - name: Run tests
-        run: python3 -m pytest
+        run: python3 -m pytest -v
+
+      - name: Run tests in parallel
+        run: mpiexec -n 4 python3 -m pytest -v
