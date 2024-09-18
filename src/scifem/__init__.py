@@ -18,8 +18,8 @@ def create_real_functionspace(mesh: dolfinx.mesh.Mesh, value_shape: tuple[int, .
 
     """
 
-    
-    ufl_e = basix.ufl.element("P", mesh.basix_cell(), 0, dtype=float, discontinuous=True,
+    dtype = mesh.geometry.x.dtype
+    ufl_e = basix.ufl.element("P", mesh.basix_cell(), 0, dtype=dtype, discontinuous=True,
                               shape=value_shape)
     
     if (dtype:=mesh.geometry.x.dtype) == np.float64:
