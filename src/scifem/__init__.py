@@ -2,6 +2,7 @@ import dolfinx
 import basix
 import numpy as np
 from . import _scifem  # type: ignore
+from . import xdmf
 
 
 def create_real_functionspace(
@@ -32,3 +33,6 @@ def create_real_functionspace(
     else:
         raise ValueError(f"Unsupported dtype: {dtype}")
     return dolfinx.fem.FunctionSpace(mesh, ufl_e, cppV)
+
+
+__all__ = ["create_real_functionspace", "xdmf"]
