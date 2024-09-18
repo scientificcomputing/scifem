@@ -1,0 +1,24 @@
+name: Test package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test-code:
+    runs-on: ubuntu-24.04
+    container: ghcr.io/fenics/dolfinx/dolfinx:nightly
+    env:
+      DEB_PYTHON_INSTALL_LAYOUT: deb_system
+
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install package
+        run: python3 -m pip install .[test] --no-build-isolation
+
+      - name: Run tests
+        run: python3 -m pytest
+
