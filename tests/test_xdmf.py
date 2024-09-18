@@ -13,6 +13,8 @@ import pytest
 )
 @pytest.mark.parametrize("value_shape", [(), (2,)])
 def test_create_ponitcloud_2D(cell_type, degree, value_shape, tmp_path):
+    folder = MPI.COMM_WORLD.bcast(tmp_path, root=0)
+
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10, cell_type, dtype=np.float64)
 
     el = basix.ufl.quadrature_element(
@@ -32,9 +34,9 @@ def test_create_ponitcloud_2D(cell_type, degree, value_shape, tmp_path):
 
     v.name = "v"
 
-    scifem.xdmf.create_pointcloud(tmp_path / "data.xdmf", [u, v])
-    assert (tmp_path / "data.xdmf").is_file()
-    assert (tmp_path / "data.h5").is_file()
+    scifem.xdmf.create_pointcloud(folder / "data.xdmf", [u, v])
+    assert (folder / "data.xdmf").is_file()
+    assert (folder / "data.h5").is_file()
 
 
 @pytest.mark.parametrize("degree", [1, 2, 3])
@@ -43,6 +45,7 @@ def test_create_ponitcloud_2D(cell_type, degree, value_shape, tmp_path):
 )
 @pytest.mark.parametrize("value_shape", [(), (3,)])
 def test_create_ponitcloud_3D(cell_type, degree, value_shape, tmp_path):
+    folder = MPI.COMM_WORLD.bcast(tmp_path, root=0)
     mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 2, 3, 5, cell_type, dtype=np.float64)
 
     el = basix.ufl.quadrature_element(
@@ -62,6 +65,6 @@ def test_create_ponitcloud_3D(cell_type, degree, value_shape, tmp_path):
     u.name = "u"
     v.name = "v"
 
-    scifem.xdmf.create_pointcloud(tmp_path / "data.xdmf", [u, v])
-    assert (tmp_path / "data.xdmf").is_file()
-    assert (tmp_path / "data.h5").is_file()
+    scifem.xdmf.create_pointcloud(folder / "data.xdmf", [u, v])
+    assert (folder / "data.xdmf").is_file()
+    assert (folder / "data.h5").is_file()
