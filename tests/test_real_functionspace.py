@@ -10,14 +10,18 @@ import pytest
 
 @pytest.mark.parametrize("L", [0.1, 0.2, 0.3])
 @pytest.mark.parametrize("H", [1.3, 0.8, 0.2])
-@pytest.mark.parametrize("cell_type", [dolfinx.mesh.CellType.triangle, dolfinx.mesh.CellType.quadrilateral])
+@pytest.mark.parametrize(
+    "cell_type", [dolfinx.mesh.CellType.triangle, dolfinx.mesh.CellType.quadrilateral]
+)
 @pytest.mark.parametrize("dtype", [np.float64, np.float32])
 def test_real_function_space_mass(L, H, cell_type, dtype):
     """
     Check that real space mass matrix is the same as assembling the volume of the mesh
     """
 
-    mesh = dolfinx.mesh.create_rectangle(MPI.COMM_WORLD, [[0.,0.],[L,H]], [7,9],cell_type, dtype=dtype)
+    mesh = dolfinx.mesh.create_rectangle(
+        MPI.COMM_WORLD, [[0.0, 0.0], [L, H]], [7, 9], cell_type, dtype=dtype
+    )
 
     V = scifem.create_real_functionspace(mesh)
     u = ufl.TrialFunction(V)
@@ -30,17 +34,19 @@ def test_real_function_space_mass(L, H, cell_type, dtype):
 
     assert len(A.data) == 1
     if MPI.COMM_WORLD.rank == 0:
-        assert np.isclose(A.data[0], L*H, atol=tol)
+        assert np.isclose(A.data[0], L * H, atol=tol)
+
 
 @pytest.mark.parametrize("dtype", [np.float64, np.float32])
-@pytest.mark.parametrize("cell_type", [dolfinx.mesh.CellType.tetrahedron, dolfinx.mesh.CellType.hexahedron])
+@pytest.mark.parametrize(
+    "cell_type", [dolfinx.mesh.CellType.tetrahedron, dolfinx.mesh.CellType.hexahedron]
+)
 def test_real_function_space_vector(cell_type, dtype):
     """
     Test that assembling against a real space test function is equivalent to assembling a vector
     """
 
-
-    mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 2,3,5, cell_type, dtype=dtype)
+    mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 2, 3, 5, cell_type, dtype=dtype)
 
     V = dolfinx.fem.functionspace(mesh, ("Lagrange", 3))
     v = ufl.TrialFunction(V)
@@ -70,14 +76,17 @@ def test_real_function_space_vector(cell_type, dtype):
         np.testing.assert_allclose(A_R.indices, np.arange(num_dofs_global))
         np.testing.assert_allclose(b.array[:num_dofs], A_R.data[:num_dofs], atol=tol)
     else:
-        assert num_local_rows == 0 
+        assert num_local_rows == 0
+
 
 @pytest.mark.parametrize("dtype", [PETSc.RealType])
 @pytest.mark.parametrize("tensor", [0, 1, 2])
 @pytest.mark.parametrize("degree", range(1, 5))
 def test_singular_poisson(tensor, degree, dtype):
     M = 25
-    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, M, M, dolfinx.mesh.CellType.triangle, dtype=dtype)
+    mesh = dolfinx.mesh.create_unit_square(
+        MPI.COMM_WORLD, M, M, dolfinx.mesh.CellType.triangle, dtype=dtype
+    )
 
     if tensor == 0:
         value_shape = ()
@@ -86,7 +95,7 @@ def test_singular_poisson(tensor, degree, dtype):
     else:
         value_shape = (3, 2)
 
-    V = dolfinx.fem.functionspace(mesh, ("Lagrange",  degree, value_shape))
+    V = dolfinx.fem.functionspace(mesh, ("Lagrange", degree, value_shape))
     R = scifem.create_real_functionspace(mesh, value_shape)
 
     u = ufl.TrialFunction(V)
@@ -94,23 +103,27 @@ def test_singular_poisson(tensor, degree, dtype):
     c = ufl.TrialFunction(R)
     d = ufl.TestFunction(R)
     x = ufl.SpatialCoordinate(mesh)
-    pol = x[0]**degree - 2*x[1]**degree
+    pol = x[0] ** degree - 2 * x[1] ** degree
     # Compute average value of polynomial to make mean 0
-    C = mesh.comm.allreduce(dolfinx.fem.assemble_scalar(dolfinx.fem.form(pol*ufl.dx, dtype=dtype)), op=MPI.SUM)
+    C = mesh.comm.allreduce(
+        dolfinx.fem.assemble_scalar(dolfinx.fem.form(pol * ufl.dx, dtype=dtype)), op=MPI.SUM
+    )
     u_scalar = pol - dolfinx.fem.Constant(mesh, dtype(C))
     if tensor == 0:
         u_ex = u_scalar
         zero = dolfinx.fem.Constant(mesh, dtype(0.0))
     elif tensor == 1:
         u_ex = ufl.as_vector([u_scalar, -u_scalar])
-        zero = dolfinx.fem.Constant(mesh, dtype((0.0,0.0)))
+        zero = dolfinx.fem.Constant(mesh, dtype((0.0, 0.0)))
     else:
-        u_ex = ufl.as_tensor([[u_scalar, 2*u_scalar], [3*u_scalar, -u_scalar],
-                                                                  [u_scalar, 2*u_scalar],
-                                                                  ])
-        zero = dolfinx.fem.Constant(mesh, dtype(((0.0,0.0),
-                                           (0.0,0.0),
-                                           (0.0,0.0))))
+        u_ex = ufl.as_tensor(
+            [
+                [u_scalar, 2 * u_scalar],
+                [3 * u_scalar, -u_scalar],
+                [u_scalar, 2 * u_scalar],
+            ]
+        )
+        zero = dolfinx.fem.Constant(mesh, dtype(((0.0, 0.0), (0.0, 0.0), (0.0, 0.0))))
 
     dx = ufl.Measure("dx", domain=mesh)
     f = -ufl.div(ufl.grad(u_ex))
@@ -120,12 +133,11 @@ def test_singular_poisson(tensor, degree, dtype):
     a01 = ufl.inner(c, v) * dx
     a10 = ufl.inner(u, d) * dx
 
-    L0 = ufl.inner(f , v) * dx + ufl.inner(g, v) * ufl.ds
-    L1 = ufl.inner(zero,  d) * dx
-    
+    L0 = ufl.inner(f, v) * dx + ufl.inner(g, v) * ufl.ds
+    L1 = ufl.inner(zero, d) * dx
+
     a = dolfinx.fem.form([[a00, a01], [a10, None]], dtype=dtype)
     L = dolfinx.fem.form([L0, L1], dtype=dtype)
-
 
     A = dolfinx.fem.petsc.assemble_matrix_block(a)
     A.assemble()
@@ -133,7 +145,6 @@ def test_singular_poisson(tensor, degree, dtype):
     with b.localForm() as loc:
         loc.set(0)
     dolfinx.fem.petsc.assemble_vector_block(b, L, a, bcs=[])
-
 
     ksp = PETSc.KSP().create(mesh.comm)
     ksp.setOperators(A)
@@ -146,9 +157,11 @@ def test_singular_poisson(tensor, degree, dtype):
     ksp.solve(b, x)
     x.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
     uh = dolfinx.fem.Function(V)
-    x_local = dolfinx.cpp.la.petsc.get_local_vectors(x, [(V.dofmap.index_map, V.dofmap.index_map_bs),
-                                                         (R.dofmap.index_map, R.dofmap.index_map_bs)])
-    uh.x.array[:len(x_local[0])] = x_local[0]
+    x_local = dolfinx.cpp.la.petsc.get_local_vectors(
+        x,
+        [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)],
+    )
+    uh.x.array[: len(x_local[0])] = x_local[0]
     uh.x.scatter_forward()
 
     error = dolfinx.fem.form(ufl.inner(u_ex - uh, u_ex - uh) * dx, dtype=dtype)
@@ -183,7 +196,6 @@ def test_complex_real_space(ftype, stype):
     b_const = dolfinx.fem.assemble_vector(dolfinx.fem.form(L_const, dtype=stype))
     b_const.scatter_reverse(dolfinx.la.InsertMode.add)
     b_const.scatter_forward()
-
 
     tol = 100 * np.finfo(stype).eps
     np.testing.assert_allclose(b.array, b_const.array, atol=tol)

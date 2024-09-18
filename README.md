@@ -3,7 +3,7 @@ This package contains a collection of tools for scientific computing with a focu
 
 Many users that are transitioning from legacy FEniCS to FEniCSx may find the transition difficult due to the lack of some functionalities in FEniCSx.
 This package aims to provide some of the functionalities that are missing in FEniCSx.
-The package is still in its early stages and many functionalities are still missing. 
+The package is still in its early stages and many functionalities are still missing.
 
 ## Features
 - Real-space implementation for usage in DOLFINx (>=v0.8.0)
@@ -28,6 +28,3 @@ python3 -m pip install --no-build-isolation git+https://github.com/scientificcom
 ## Having issues or want to contribute?
 
 If you are having issues, feature request or would like to contribute, please let us know. You can do so by opening an issue on the [issue tracker](https://github.com/scientificcomputing/scifem/issues).
-
-
-
