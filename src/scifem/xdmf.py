@@ -8,6 +8,17 @@ import dolfinx
 
 
 def create_pointcloud(filename: os.PathLike, us: typing.Sequence[dolfinx.fem.Function]) -> None:
+    """Create a point cloud from a list of functions to be visualized in Paraview.
+    The point cloud is written to a file in XDMF format.
+
+    Args:
+        filename: The name of the file to write the point cloud to.
+        us: The functions to write to the point cloud.
+
+    Note:
+        This is useful for visualizing functions in quadrature spaces.
+
+    """
     # Adopted from https://gist.github.com/jorgensd/8bae61ad7a0c211570dff0116a68a356
     if len(us) == 0:
         return
