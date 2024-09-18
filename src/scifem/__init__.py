@@ -5,6 +5,18 @@ from . import _scifem
 
 
 def create_real_functionspace(mesh: dolfinx.mesh.Mesh, value_shape: tuple[int, ...]=()) -> dolfinx.fem.FunctionSpace:
+    """Create a real function space.
+
+    Args:
+        mesh: The mesh the real space is defined on.
+        value_shape: The shape of the values in the real space.
+
+    Returns:
+        The real valued function space.
+    Note:
+        For scalar elements value shape is ``()``.
+
+    """
 
     
     ufl_e = basix.ufl.element("P", mesh.basix_cell(), 0, dtype=float, discontinuous=True,
