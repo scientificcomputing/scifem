@@ -31,4 +31,4 @@ jobs:
         run: python3 -m pytest -v
 
       - name: Run tests in parallel
-        run: mpiexec -n 4 python3 -m pytest -v
+        run: mpiexec -n 4 python3 -m pytest -v  -m "not serial"

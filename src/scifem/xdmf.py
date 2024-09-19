@@ -139,6 +139,8 @@ def write_hdf5_h5py(
         warnings.warn("No functions to write to point cloud")
         return
 
+    assert data.comm == 1, "Only serial writing is supported with h5py"
+
     with h5pyfile(h5name=h5name, filemode="w", comm=data.comm) as h5file:
         step = h5file.create_group(np.bytes_("Step0"))
         step.create_dataset("Points", data=data.points_out)
