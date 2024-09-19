@@ -4,14 +4,20 @@ When contributing to this repository, please first [create an issue](https://git
 
 Please note we have a code of conduct, please follow it in all your interactions with the project.
 
+## Adding a new feature
+We really appreciate contributions to the project. If you want to add a new feature, please create an issue first to discuss the feature you would like to add. This way we can make sure that the feature is in line with the goals of the project and that it is not already being worked on by someone else.
+
+Any new feature should be accompanied by tests and an example that should be part of the documentation. The tests should be added to the test suite in the `tests` folder and the example should be added to the `example` folder, and added to the `_toc.yml` file so that it is included in the documentation.
+
 ## New contributor guide
 
-To get an overview of the project, read the [documentation](https://finsberg.github.io/gotranx/). Here are some resources to help you get started with open source contributions:
+To get an overview of the project, read the [documentation](https://scientificcomputing.github.io/scifem/). Here are some resources to help you get started with open source contributions:
 
 - [Finding ways to contribute to open source on GitHub](https://docs.github.com/en/get-started/exploring-projects-on-github/finding-ways-to-contribute-to-open-source-on-github)
 - [Set up Git](https://docs.github.com/en/get-started/quickstart/set-up-git)
 - [GitHub flow](https://docs.github.com/en/get-started/quickstart/github-flow)
 - [Collaborating with pull requests](https://docs.github.com/en/github/collaborating-with-pull-requests)
+
 
 ## Pull Request Process
 
@@ -53,7 +59,7 @@ For every new feature of bugfix you should also make sure to not lower the code 
 
 To run the test suite, please install the package with the optional dependencies `test`, i.e
 ```
-python3 -m pip install -e ".[test]"
+python3 -m pip install -e ".[all]"
 ```
 in the root of the repository. To run the tests you can execute the command
 ```
@@ -67,6 +73,24 @@ Note that we have a [GitHub action](https://github.com/scientificcomputing/scife
 
 You can read more about using pytest in the [official documentation of pytest](https://docs.pytest.org/).
 
+## Documentation
+The documentation is hosted at GitHub pages and created with [`JupyterBook`](https://jupyterbook.org/en/stable/intro.html). Contributions to the documentation is very welcomed.
+
+To build the documentation locally you can installed the `docs` optional dependencies, i.e
+```
+python3 -m pip install -e ".[docs]"
+```
+in the root of the repository. Now you can build the documentation by running the command
+```
+jupyter-book build .
+```
+from the root of the repository. The command should complete without errors or warnings. In particular, you might want to run the command
+```
+jupyter-book build -W --keep-going .
+```
+which will turn warnings into errors.
+
+For reference, please see the [github workflow](https://github.com/scientificcomputing/scifem/blob/main/.github/workflows/pages.yml) that is used for building the pages.
 
 
 ## Need help?

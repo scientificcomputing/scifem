@@ -1,0 +1,46 @@
+# Book settings
+# Learn more at https://jupyterbook.org/customize/config.html
+
+title: scifem
+author: Jørgen Dokken and Henrik Finsberg
+copyright: "2024"
+only_build_toc_files: true
+
+
+execute:
+  execute_notebooks: cache
+  timeout: 3000
+
+# Information about where the book exists on the web
+repository:
+  url: https://github.com/scientificcomputing/scifem # Online location of your book
+  branch: main
+
+
+html:
+  use_issues_button: true
+  use_repository_button: true
+
+parse:
+  myst_enable_extensions:
+    - amsmath
+    - dollarmath
+    - linkify
+
+sphinx:
+
+  config:
+    html_last_updated_fmt: "%b %d, %Y"
+    nb_execution_show_tb: True
+    suppress_warnings: ["mystnb.unknown_mime_type"]
+    nb_custom_formats:  # https://jupyterbook.org/en/stable/file-types/jupytext.html#file-types-custom
+        .py:
+            - jupytext.reads
+            - fmt: py
+
+  extra_extensions:
+  - 'sphinx.ext.autodoc'
+  - 'sphinx.ext.napoleon'
+  - 'sphinx.ext.viewcode'
+
+exclude_patterns: [".pytest_cache/*" ,"tests", venv, .vcode, .ruff_cache, .github, .git]

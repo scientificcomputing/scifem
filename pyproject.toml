@@ -19,9 +19,14 @@ dependencies = ["fenics-dolfinx", "numpy"]
 repository = "https://github.com/scientificcomputing/scifem.git"
 
 [project.optional-dependencies]
-docs = []
+docs = ["jupyter-book", "jupytext"]
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
 test = ["pytest", "petsc4py"]
+all = [
+    "scifem[docs]",
+    "scifem[dev]",
+    "scifem[test]",
+]
 
 
 [tool.pytest.ini_options]
