@@ -1,3 +1,4 @@
+from __future__ import annotations
 import typing
 import xml.etree.ElementTree as ET
 import contextlib
@@ -119,17 +120,23 @@ def h5pyfile(h5name, filemode="r", force_serial: bool = False, comm=None):
 def write_hdf5_h5py(
     us: typing.Sequence[dolfinx.fem.Function],
     h5name: Path,
-    data: FunctionSpaceData,
+    data: FunctionSpaceData | None = None,
 ) -> None:
     """Write the point cloud to an HDF5 file using h5py.
 
     Args:
         us: The functions to write to the point cloud.
         h5name: The name of the file to write the point cloud to.
-        data: The function space data
+        data: The function space data.
 
     """
     if len(us) == 0:
+        return
+
+    if data is None:
+        data = check_function_space(us)
+    if data is None:
+        warnings.warn("No functions to write to point cloud")
         return
 
     with h5pyfile(h5name=h5name, filemode="w", comm=data.comm) as h5file:
@@ -144,7 +151,7 @@ def write_hdf5_h5py(
 def write_hdf5_adios(
     us: typing.Sequence[dolfinx.fem.Function],
     h5name: Path,
-    data: FunctionSpaceData,
+    data: FunctionSpaceData | None = None,
 ) -> None:
     """Write the point cloud to an HDF5 file using ADIOS2.
 
@@ -162,6 +169,12 @@ def write_hdf5_adios(
     adios2 = resolve_adios_scope(adios2)
 
     if len(us) == 0:
+        return
+
+    if data is None:
+        data = check_function_space(us)
+    if data is None:
+        warnings.warn("No functions to write to point cloud")
         return
 
     # Create ADIOS2 reader
@@ -256,6 +269,7 @@ def create_pointcloud(filename: os.PathLike, us: typing.Sequence[dolfinx.fem.Fun
     """
     data = check_function_space(us)
     if data is None:
+        warnings.warn("No functions to write to point cloud")
         return
 
     h5name = Path(filename).with_suffix(".h5")
