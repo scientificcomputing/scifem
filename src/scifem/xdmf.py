@@ -101,7 +101,6 @@ def h5pyfile(h5name, filemode="r", force_serial: bool = False, comm=None):
 
     """
     import h5py
-    from mpi4py import MPI
 
     if comm is None:
         comm = MPI.COMM_WORLD
