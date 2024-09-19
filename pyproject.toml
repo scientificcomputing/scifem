@@ -21,7 +21,7 @@ repository = "https://github.com/scientificcomputing/scifem.git"
 [project.optional-dependencies]
 docs = []
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
-test = ["pytest", "petsc4py"]
+test = ["pytest", "petsc4py", "h5py"]
 
 
 [tool.pytest.ini_options]
