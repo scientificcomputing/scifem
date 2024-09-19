@@ -92,6 +92,7 @@ def test_different_function_spaces_raises_ValueError(tmp_path):
 @pytest.mark.parametrize("value_shape", [(), (3,)])
 def test_h5py_fallback_3D(cell_type, degree, value_shape, tmp_path):
     folder = MPI.COMM_WORLD.bcast(tmp_path, root=0)
+
     mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 2, 3, 5, cell_type, dtype=np.float64)
 
     el = basix.ufl.quadrature_element(
@@ -112,6 +113,6 @@ def test_h5py_fallback_3D(cell_type, degree, value_shape, tmp_path):
     v.name = "v"
 
     with patch.dict("sys.modules", {"adios2": None}):
-        scifem.xdmf.create_pointcloud("data.xdmf", [u, v])
+        scifem.xdmf.create_pointcloud(folder / "data.xdmf", [u, v])
     assert (folder / "data.xdmf").is_file()
     assert (folder / "data.h5").is_file()

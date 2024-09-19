@@ -132,11 +132,12 @@ def write_hdf5_h5py(
     if len(us) == 0:
         return
 
-    with h5pyfile(h5name=h5name, filemode="r", comm=data.comm) as h5file:
+    with h5pyfile(h5name=h5name, filemode="w", comm=data.comm) as h5file:
         step = h5file.create_group(np.bytes_("Step0"))
         step.create_dataset("Points", data=data.points_out)
         for u in us:
             array = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
+
             step.create_dataset(f"Values_{u.name}", data=array)
 
 
