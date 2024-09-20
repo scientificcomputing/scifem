@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "scifem"
-version = "0.2.2"
+version = "0.2.3"
 description = "Scientific tools for finite element methods"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -127,7 +127,7 @@ tag = true
 sign_tags = false
 tag_name = "v{new_version}"
 tag_message = "Bump version: {current_version} → {new_version}"
-current_version = "0.2.2"
+current_version = "0.2.3"
 
 
 [[tool.bumpversion.files]]
