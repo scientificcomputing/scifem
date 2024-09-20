@@ -1,5 +1,5 @@
 # # Real function spaces
-# 
+#
 # Author: Jørgen S. Dokken
 #
 # License: MIT
@@ -13,7 +13,7 @@
 # \frac{\partial u}{\partial n} &= g \quad \text{on } \partial \Omega, \\
 # \int_\Omega u &= h.
 # \end{align}
-# 
+#
 # ## Lagrange multiplier
 # We start by considering the equivalent optimization problem:
 # Find $u \in H^1(\Omega)$ such that
@@ -62,14 +62,16 @@ mesh = dolfinx.mesh.create_unit_square(
 )
 V = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
 
+
 def u_exact(x):
-    return 0.3*x[1]**2 + ufl.sin(2*ufl.pi*x[0])
+    return 0.3 * x[1] ** 2 + ufl.sin(2 * ufl.pi * x[0])
+
 
 x = ufl.SpatialCoordinate(mesh)
 n = ufl.FacetNormal(mesh)
 g = ufl.dot(ufl.grad(u_exact(x)), n)
 f = -ufl.div(ufl.grad(u_exact(x)))
-h = assemble_scalar(u_exact(x)*ufl.dx)
+h = assemble_scalar(u_exact(x) * ufl.dx)
 
 # We then create the Lagrange multiplier space
 
@@ -80,11 +82,12 @@ R = create_real_functionspace(mesh)
 W = ufl.MixedFunctionSpace(V, R)
 
 # We can now define the variational problem
+
 u, lmbda = ufl.TrialFunctions(W)
 v, d = ufl.TestFunctions(W)
 zero = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(0.0))
 
-a00 = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx 
+a00 = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx
 a01 = ufl.inner(lmbda, v) * ufl.dx
 a10 = ufl.inner(u, d) * ufl.dx
 L0 = ufl.inner(f, v) * ufl.dx + ufl.inner(g, v) * ufl.ds
@@ -99,27 +102,32 @@ L = dolfinx.fem.form([L0, L1])
 
 # We can now assemble the matrix and vector
 # We start by enforcing the multiplier constraint $h$ by modifying the right hand side vector
+
 h_func = dolfinx.fem.Function(R)
 h_func.x.array[0] = h
 b_zero = dolfinx.fem.Function(V)
 b_zero.x.array[:] = 0
 
 # We now scatter the local initial values into the rhs tensor
+
 maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
 b = dolfinx.fem.petsc.create_vector_block(L)
 with b_zero.x.petsc_vec.localForm() as _b, h_func.x.petsc_vec.localForm() as _h:
-    scatter_local_vectors(                b,
-                    [_b.array_r, _h.array_r],
-                    maps,
+    scatter_local_vectors(
+        b,
+        [_b.array_r, _h.array_r],
+        maps,
     )
 b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # Next, we can assemble the matrix and the remainder of the right hand side vector
+
 A = dolfinx.fem.petsc.assemble_matrix_block(a)
 A.assemble()
 dolfinx.fem.petsc.assemble_vector_block(b, L, a, bcs=[])
 
 # We can now solve the linear system
+
 ksp = PETSc.KSP().create(mesh.comm)
 ksp.setOperators(A)
 ksp.setType("preonly")
@@ -132,8 +140,9 @@ ksp.solve(b, xh)
 xh.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # Finally, we extract the solution u from the blocked system and compute the error
+
 uh = dolfinx.fem.Function(V, name="u")
-x_local = get_local_vectors(xh,maps)
+x_local = get_local_vectors(xh, maps)
 uh.x.array[: len(x_local[0])] = x_local[0]
 uh.x.scatter_forward()
 
@@ -144,14 +153,16 @@ error = dolfinx.fem.form(ufl.inner(diff, diff) * ufl.dx)
 print(f"L2 error: {np.sqrt(assemble_scalar(error)):.2e}")
 
 # We can now plot the solution
+
 vtk_mesh = dolfinx.plot.vtk_mesh(V)
 
 import pyvista
+
 pyvista.start_xvfb()
 grid = pyvista.UnstructuredGrid(*vtk_mesh)
 grid.point_data["u"] = uh.x.array.real
 
-warped = grid.warp_by_scalar("u", factor=1) 
+warped = grid.warp_by_scalar("u", factor=1)
 plotter = pyvista.Plotter()
 plotter.add_mesh(grid, style="wireframe")
 plotter.add_mesh(warped)
