@@ -26,7 +26,7 @@ jobs:
 
       - name: Install package
         run: |
-          python3 -m pip install Cython
+          python3 -m pip install Cython pkgconfig
           HDF5_MPI=ON HDF5_PKGCONFIG_NAME="hdf5" python3 -m pip install .[test] --no-build-isolation --no-binary=h5py
 
       - name: Run tests
