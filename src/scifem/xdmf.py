@@ -144,8 +144,10 @@ def write_hdf5_h5py(
         step.create_dataset("Points", data=data.points_out)
         for u in us:
             array = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
-
-            step.create_dataset(f"Values_{u.name}", data=array)
+            dset = step.create_dataset(
+                f"Values_{u.name}", (data.num_dofs_global, data.bs), dtype=array.dtype
+            )
+            dset[data.local_range[0] : data.local_range[1], 0:] = array
 
 
 def write_hdf5_adios(
