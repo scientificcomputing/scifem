@@ -31,7 +31,7 @@ jobs:
         run: apt-get update && apt-get install -y libgl1-mesa-glx libxrender1 xvfb
 
       - name: Install dependencies
-        run: python3 -m pip install ".[docs]"
+        run: python3 -m pip install --no-build-isolation ".[docs]"
 
       - name: Build docs
         run: jupyter book build -W --keep-going .
