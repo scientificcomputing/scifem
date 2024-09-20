@@ -80,7 +80,7 @@ R = create_real_functionspace(mesh)
 # Next, we can create a mixed-function space for our problem
 
 if dolfinx.__version__ == "0.8.0":
-    u = ufl.TrialFunction(V) 
+    u = ufl.TrialFunction(V)
     lmbda = ufl.TrialFunction(R)
     v = ufl.TestFunction(V)
     d = ufl.TestFunction(R)
