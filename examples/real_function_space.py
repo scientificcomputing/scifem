@@ -109,34 +109,27 @@ L = dolfinx.fem.form([L0, L1])
 # once we have assembled the right hand side vector.
 
 # We can now assemble the matrix and vector
+
+A = dolfinx.fem.petsc.assemble_matrix_block(a)
+A.assemble()
+b = dolfinx.fem.petsc.assemble_vector_block(L, a, bcs=[])
+
+# Next, we modify the second part of the block to contain `h`
 # We start by enforcing the multiplier constraint $h$ by modifying the right hand side vector
-
-h_func = dolfinx.fem.Function(R)
-h_func.x.array[0] = h
-b_zero = dolfinx.fem.Function(V)
-b_zero.x.array[:] = 0
-
-# We now scatter the local initial values into the rhs tensor
 
 if dolfinx.__version__ == "0.8.0":
     maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
 elif dolfinx.__version__ == "0.9.0.0":
     maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
 
-b = dolfinx.fem.petsc.create_vector_block(L)
-with b_zero.x.petsc_vec.localForm() as _b, h_func.x.petsc_vec.localForm() as _h:
-    scatter_local_vectors(
+b_local = get_local_vectors(b, maps)
+b_local[1][:] = h
+scatter_local_vectors(
         b,
-        [_b.array_r, _h.array_r],
+        b_local,
         maps,
     )
 b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
-
-# Next, we can assemble the matrix and the remainder of the right hand side vector
-
-A = dolfinx.fem.petsc.assemble_matrix_block(a)
-A.assemble()
-dolfinx.fem.petsc.assemble_vector_block(b, L, a, bcs=[])
 
 # We can now solve the linear system
 
