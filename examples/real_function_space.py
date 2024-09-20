@@ -79,12 +79,20 @@ R = create_real_functionspace(mesh)
 
 # Next, we can create a mixed-function space for our problem
 
-W = ufl.MixedFunctionSpace(V, R)
+if dolfinx.__version__ == "0.8.0":
+    u = ufl.TrialFunction(V) 
+    lmbda = ufl.TrialFunction(R)
+    v = ufl.TestFunction(V)
+    d = ufl.TestFunction(R)
+elif dolfinx.__version__ == "0.9.0.0":
+    W = ufl.MixedFunctionSpace(V, R)
+    u, lmbda = ufl.TrialFunctions(W)
+    v, d = ufl.TestFunctions(W)
+else:
+    raise RuntimeError("Unsupported version of dolfinx")
 
 # We can now define the variational problem
 
-u, lmbda = ufl.TrialFunctions(W)
-v, d = ufl.TestFunctions(W)
 zero = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(0.0))
 
 a00 = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx
@@ -110,7 +118,11 @@ b_zero.x.array[:] = 0
 
 # We now scatter the local initial values into the rhs tensor
 
-maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
+if dolfinx.__version__ == "0.8.0":
+    maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
+elif dolfinx.__version__ == "0.9.0.0":
+    maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
+
 b = dolfinx.fem.petsc.create_vector_block(L)
 with b_zero.x.petsc_vec.localForm() as _b, h_func.x.petsc_vec.localForm() as _h:
     scatter_local_vectors(
