@@ -7,6 +7,7 @@ from . import _scifem  # type: ignore
 
 __all__ = ["create_real_functionspace", "assemble_scalar"]
 
+
 def create_real_functionspace(
     mesh: dolfinx.mesh.Mesh, value_shape: tuple[int, ...] = ()
 ) -> dolfinx.fem.FunctionSpace:
@@ -37,7 +38,7 @@ def create_real_functionspace(
     return dolfinx.fem.FunctionSpace(mesh, ufl_e, cppV)
 
 
-def assemble_scalar(J: ufl.form.Form|dolfinx.fem.Form)-> np.floating|np.complexfloating:
+def assemble_scalar(J: ufl.form.Form | dolfinx.fem.Form) -> np.floating | np.complexfloating:
     """Assemble a scalar form and gather result across processes
 
     Args:
@@ -47,8 +48,7 @@ def assemble_scalar(J: ufl.form.Form|dolfinx.fem.Form)-> np.floating|np.complexf
         The accumulated value of the assembled form.
     """
     compiled_form = dolfinx.fem.form(J)
-    if (rank:=compiled_form.rank) != 0:
+    if (rank := compiled_form.rank) != 0:
         raise ValueError(f"Form must be a scalar form, got for of arity {rank}")
     local_result = dolfinx.fem.assemble_scalar(compiled_form)
     return compiled_form.mesh.comm.allreduce(local_result, op=MPI.SUM)
-
