@@ -85,7 +85,6 @@ def test_different_function_spaces_raises_ValueError(tmp_path):
         )
 
 
-@pytest.mark.serial
 @pytest.mark.parametrize("degree", [1, 2, 3])
 @pytest.mark.parametrize(
     "cell_type", [dolfinx.mesh.CellType.tetrahedron, dolfinx.mesh.CellType.hexahedron]
