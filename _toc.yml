@@ -1,0 +1,14 @@
+# Table of contents
+# Learn more at https://jupyterbook.org/customize/toc.html
+
+format: jb-book
+root: README
+parts:
+  - caption: Features
+    chapters:
+    - file: "examples/real_function_space.py"
+  - caption: Reference
+    chapters:
+    - file: "docs/api.rst"
+    - file: CONTRIBUTING
+    - file: CODE_OF_CONDUCT
