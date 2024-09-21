@@ -14,8 +14,6 @@ import ufl
 
 __all__ = ["PointSource"]
 
-_real_arrays = npt.NDArray[np.float32] | npt.NDArray[np.float64]
-
 
 class PointSource:
     """Class for defining a point source in a given function space."""
@@ -23,7 +21,7 @@ class PointSource:
     def __init__(
         self,
         V: dolfinx.fem.FunctionSpace,
-        points: _real_arrays,
+        points: npt.NDArray[np.float32] | npt.NDArray[np.float64],
         magnitude: np.floating | np.complexfloating = dolfinx.default_scalar_type(1),
     ) -> None:
         """Initialize a point source.
