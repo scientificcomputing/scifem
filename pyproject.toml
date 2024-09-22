@@ -19,6 +19,8 @@ dependencies = ["fenics-dolfinx", "numpy"]
 repository = "https://github.com/scientificcomputing/scifem.git"
 
 [project.optional-dependencies]
+h5py = ["h5py"]
+adios2 = ["adios2"]
 docs = ["jupyter-book", "jupytext", "pyvista[all]"]
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
 test = ["pytest", "petsc4py", "h5py"]
@@ -26,6 +28,8 @@ all = [
     "scifem[docs]",
     "scifem[dev]",
     "scifem[test]",
+    "scifem[h5py]",
+    "scifem[adios2]",
 ]
 
 

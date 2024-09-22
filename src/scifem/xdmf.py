@@ -24,7 +24,7 @@ class XDMFData(typing.Protocol):
 
 
 def write_xdmf(
-    us: typing.Sequence[dolfinx.fem.Function],
+    functions: typing.Sequence[dolfinx.fem.Function],
     filename: os.PathLike,
     h5name: Path,
     xdmfdata: XDMFData,
@@ -32,11 +32,15 @@ def write_xdmf(
     """Write the XDMF file for the point cloud.
 
     Args:
-        us: The functions to write to the point cloud.
+        functions: List of functions to write to the point cloud.
         filename: The name of the file to write the XDMF to.
         h5name: The name of the HDF5 file.
         xdmfdata: The XDMF data.
 
+    Note:
+        This function does not check the validity of the input data, i.e.
+        all functions in ``functions`` are assumed to share the same function space,
+        including ``block_size``.
     """
 
     xdmf = ET.Element("XDMF")
@@ -51,21 +55,25 @@ def write_xdmf(
     topology.attrib["TopologyType"] = "PolyVertex"
     topology.attrib["NodesPerElement"] = "1"
     geometry = ET.SubElement(grid, "Geometry")
-    geometry.attrib["GeometryType"] = "XY" if xdmfdata.points.shape[1] == 2 else "XYZ"
-    for u in us:
+    geometry.attrib["GeometryType"] = "XYZ"
+    for u in functions:
         it0 = ET.SubElement(geometry, "DataItem")
         it0.attrib["Dimensions"] = f"{xdmfdata.num_dofs_global} {xdmfdata.points.shape[1]}"
         it0.attrib["Format"] = "HDF"
         it0.text = f"{h5name.name}:/Step0/Points"
         attrib = ET.SubElement(grid, "Attribute")
         attrib.attrib["Name"] = u.name
-        if xdmfdata.bs == 1:
+        out_bs = xdmfdata.bs
+        if out_bs == 1:
             attrib.attrib["AttributeType"] = "Scalar"
         else:
+            if out_bs == 2:
+                # Pad to 3D
+                out_bs = 3
             attrib.attrib["AttributeType"] = "Vector"
         attrib.attrib["Center"] = "Node"
         it1 = ET.SubElement(attrib, "DataItem")
-        it1.attrib["Dimensions"] = f"{xdmfdata.num_dofs_global} {xdmfdata.bs}"
+        it1.attrib["Dimensions"] = f"{xdmfdata.num_dofs_global} {out_bs}"
         it1.attrib["Format"] = "HDF"
         it1.text = f"{h5name.name}:/Step0/Values_{u.name}"
     text = [
@@ -87,7 +95,8 @@ class FunctionSpaceData(typing.NamedTuple):
 
     @property
     def points_out(self) -> npt.NDArray[np.float64]:
-        return self.points[: self.num_dofs_local, :]
+        """Pad points to be 3D"""
+        return np.ascontiguousarray(self.points[: self.num_dofs_local, :])
 
 
 @contextlib.contextmanager
@@ -110,30 +119,32 @@ def h5pyfile(h5name, filemode="r", force_serial: bool = False, comm=None):
         h5file = h5py.File(h5name, filemode, driver="mpio", comm=comm)
     else:
         if comm.size > 1 and not force_serial:
-            warnings.warn("h5py is not installed with MPI support")
+            warnings.warn("h5py is not installed with MPI support, while using {comm.size} processes")
         h5file = h5py.File(h5name, filemode)
     yield h5file
     h5file.close()
 
 
 def write_hdf5_h5py(
-    us: typing.Sequence[dolfinx.fem.Function],
+    functions: typing.Sequence[dolfinx.fem.Function],
     h5name: Path,
     data: FunctionSpaceData | None = None,
 ) -> None:
     """Write the point cloud to an HDF5 file using h5py.
 
     Args:
-        us: The functions to write to the point cloud.
+        functions: The functions to write to the point cloud.
         h5name: The name of the file to write the point cloud to.
         data: The function space data.
 
+    Note:
+        All input ``functions`` has to share the same function space.
     """
-    if len(us) == 0:
+    if len(functions) == 0:
         return
 
     if data is None:
-        data = check_function_space(us)
+        data = check_function_space(functions)
     if data is None:
         warnings.warn("No functions to write to point cloud")
         return
@@ -144,26 +155,31 @@ def write_hdf5_h5py(
             "Points", (data.num_dofs_global, data.points.shape[1]), dtype=data.points.dtype
         )
         points[data.local_range[0] : data.local_range[1], :] = data.points_out
-        for u in us:
-            array = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
+        for u in functions:
+            # Pad array to 3D if vector space with 2 components
+            array = np.zeros((data.num_dofs_local, data.bs if data.bs!=2 else 3),
+                             dtype=u.x.array.dtype)
+            array[:, :data.bs] = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
             dset = step.create_dataset(
-                f"Values_{u.name}", (data.num_dofs_global, data.bs), dtype=array.dtype
+                f"Values_{u.name}", (data.num_dofs_global, array.shape[1]), dtype=array.dtype
             )
             dset[data.local_range[0] : data.local_range[1], :] = array
 
 
 def write_hdf5_adios(
-    us: typing.Sequence[dolfinx.fem.Function],
+    functions: typing.Sequence[dolfinx.fem.Function],
     h5name: Path,
     data: FunctionSpaceData | None = None,
 ) -> None:
     """Write the point cloud to an HDF5 file using ADIOS2.
 
     Args:
-        us: The functions to write to the point cloud.
+        functions: The functions to write to the point cloud.
         h5name: The name of the file to write the point cloud to.
         data: The function space data.
 
+    Note:
+        All input ``functions`` has to share the same function space.
     """
     import adios2
 
@@ -172,11 +188,11 @@ def write_hdf5_adios(
 
     adios2 = resolve_adios_scope(adios2)
 
-    if len(us) == 0:
+    if len(functions) == 0:
         return
 
     if data is None:
-        data = check_function_space(us)
+        data = check_function_space(functions)
     if data is None:
         warnings.warn("No functions to write to point cloud")
         return
@@ -195,15 +211,18 @@ def write_hdf5_adios(
         count=[data.num_dofs_local, data.points.shape[1]],
     )
     outfile.Put(pointvar, data.points_out)
-    for u in us:
-        array = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
+    for u in functions:
+
+        array = np.zeros((data.num_dofs_local, data.bs if data.bs!=2 else 3),
+                        dtype=u.x.array.dtype)
+        array[:, :data.bs] = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
 
         valuevar = io.DefineVariable(
             f"Values_{u.name}",
             array,
-            shape=[data.num_dofs_global, data.bs],
+            shape=[data.num_dofs_global, array.shape[1]],
             start=[data.local_range[0], 0],
-            count=[data.num_dofs_local, data.bs],
+            count=[data.num_dofs_local, array.shape[1]],
         )
         outfile.Put(valuevar, array)
     outfile.PerformPuts()
@@ -236,42 +255,48 @@ def create_function_space_data(V: dolfinx.fem.FunctionSpace) -> FunctionSpaceDat
     )
 
 
-def check_function_space(us: typing.Sequence[dolfinx.fem.Function]) -> FunctionSpaceData | None:
+def check_function_space(functions: typing.Sequence[dolfinx.fem.Function]) -> FunctionSpaceData | None:
     """Check that all functions are in the same function space,
     and return the function space data.
 
     Args:
-        us: The functions to check.
+        functions: The functions to check.
 
     Returns:
         The function space data if all functions are in the same function space, otherwise None.
 
     """
-    if len(us) == 0:
+    if len(functions) == 0:
         return None
 
     # Check that all functions are in the same function space
-    u = us[0]
-    for v in us[1:]:
+    u = functions[0]
+    for v in functions[1:]:
         if u.function_space != v.function_space:
             raise ValueError("All functions must be in the same function space.")
 
     return create_function_space_data(u.function_space)
 
 
-def create_pointcloud(filename: os.PathLike, us: typing.Sequence[dolfinx.fem.Function]) -> None:
+def create_pointcloud(filename: os.PathLike, functions: typing.Sequence[dolfinx.fem.Function]) -> None:
     """Create a point cloud from a list of functions to be visualized in Paraview.
     The point cloud is written to a file in XDMF format.
 
     Args:
         filename: The name of the file to write the point cloud to.
-        us: The functions to write to the point cloud.
+        functions: The functions to write to the point cloud.
 
     Note:
         This is useful for visualizing functions in quadrature spaces.
 
+    Note:
+        Any function space that can call `tabulate_dof_coordinates` can be used.
+
+    Note:
+        ADIOS2 is the preferred backend for writing HDF5 files, and will be used if available.
+        If ADIOS2 is not available, `h5py` will be used.
     """
-    data = check_function_space(us)
+    data = check_function_space(functions)
     if data is None:
         warnings.warn("No functions to write to point cloud")
         return
@@ -280,10 +305,10 @@ def create_pointcloud(filename: os.PathLike, us: typing.Sequence[dolfinx.fem.Fun
 
     # Write XDMF on rank 0
     if data.comm.rank == 0:
-        write_xdmf(us, filename, h5name, data)
+        write_xdmf(functions, filename, h5name, data)
 
     try:
-        write_hdf5_adios(us=us, h5name=h5name, data=data)
+        write_hdf5_adios(functions=functions, h5name=h5name, data=data)
     except (ImportError, TypeError, ValueError):
         warnings.warn("ADIOS2 not available, using h5py")
-        write_hdf5_h5py(us=us, h5name=h5name, data=data)
+        write_hdf5_h5py(functions=functions, h5name=h5name, data=data)
