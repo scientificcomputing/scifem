@@ -8,6 +8,7 @@ parts:
     chapters:
     - file: "examples/real_function_space.py"
     - file: "examples/point_source.py"
+    - file: "examples/xdmf_point_cloud.py"
   - caption: Reference
     chapters:
     - file: "docs/api.rst"

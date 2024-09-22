@@ -25,10 +25,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install package
-        run: python3 -m pip install .[test] --no-build-isolation
+        run: |
+          python3 -m pip install Cython pkgconfig
+          HDF5_MPI=ON HDF5_PKGCONFIG_NAME="hdf5" python3 -m pip install .[test] --no-build-isolation --no-binary=h5py
 
       - name: Run tests
         run: python3 -m pytest -v
 
       - name: Run tests in parallel
-        run: mpiexec -n 4 python3 -m pytest -v
+        run: mpiexec -n 4 python3 -m pytest -v  -m "not serial"
