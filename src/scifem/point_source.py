@@ -35,6 +35,9 @@ class PointSource:
         Note:
             Points should only be defined on one process. If they are sent in
             from multiple processes, multiple point sources will be created.
+
+        Note:
+            If the point source is outside the mesh, a ``ValueError`` will be raised.
         """
         self._function_space = V
         if V.dofmap.bs > 1 and dolfinx.__version__ == "0.8.0":
@@ -65,8 +68,10 @@ class PointSource:
         mesh = self._function_space.mesh
         tol = float(1e2 * np.finfo(self._input_points.dtype).eps)
         if dolfinx.__version__ == "0.8.0":
-            _, _, self._points, self._cells = dolfinx.cpp.geometry.determine_point_ownership(
-                mesh._cpp_object, self._input_points, tol
+            src_ranks, _, self._points, self._cells = (
+                dolfinx.cpp.geometry.determine_point_ownership(
+                    mesh._cpp_object, self._input_points, tol
+                )
             )
             self._points = np.array(self._points).reshape(-1, 3)
         elif dolfinx.__version__ == "0.9.0.0":
@@ -75,8 +80,11 @@ class PointSource:
             )
             self._points = collision_data.dest_points
             self._cells = collision_data.dest_cells
+            src_ranks = collision_data.src_owner
         else:
             raise NotImplementedError(f"Unsupported version of dolfinx: {dolfinx.__version__}")
+        if -1 in src_ranks:
+            raise ValueError("Point source is outside the mesh.")
 
     def compute_cell_contributions(self):
         """Compute the basis function values at the point sources."""
@@ -131,6 +139,10 @@ class PointSource:
             If a PETSc vector is passed in, one has to call ``b.assemble()`` prior to solving the
             linear system (post scattering).
         """
+        if recompute:
+            self.recompute_sources()
+            self.compute_cell_contributions()
+
         # Apply the point sources to the vector
         _dofs = self._function_space.dofmap.list[self._cells]
         unrolled_dofs = unroll_dofmap(_dofs, self._function_space.dofmap.bs)

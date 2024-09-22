@@ -12,6 +12,19 @@
 # f &= \gamma \delta(x - p) \quad \text{in } \Omega,
 # \end{align}
 # $$
+#
+# with homogeneous Dirichlet boundary conditions.
+#
+# Using integration by parts, we obtain the variational problem:
+#
+# Find $u_h\in V_0$ such that
+#
+# $$
+# \begin{align}
+# \int_\Omega \nabla u_h \cdot \nabla v \mathrm{d}x &= \int_\Omega \gamma\delta(x-p) v \mathrm{d}x
+# = \gamma v(p) \quad \forall v \in V_0,
+# \end{align}
+# $$
 
 from mpi4py import MPI
 from petsc4py import PETSc
