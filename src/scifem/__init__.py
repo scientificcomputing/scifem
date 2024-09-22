@@ -4,6 +4,7 @@ import basix
 import numpy as np
 import ufl
 from . import _scifem  # type: ignore
+from . import xdmf
 
 __all__ = ["create_real_functionspace", "assemble_scalar"]
 
@@ -52,3 +53,6 @@ def assemble_scalar(J: ufl.form.Form | dolfinx.fem.Form) -> np.floating | np.com
         raise ValueError(f"Form must be a scalar form, got for of arity {rank}")
     local_result = dolfinx.fem.assemble_scalar(compiled_form)
     return compiled_form.mesh.comm.allreduce(local_result, op=MPI.SUM)
+
+
+__all__ = ["create_real_functionspace", "xdmf", "assemble_scalar"]
