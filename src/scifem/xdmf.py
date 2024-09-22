@@ -119,7 +119,9 @@ def h5pyfile(h5name, filemode="r", force_serial: bool = False, comm=None):
         h5file = h5py.File(h5name, filemode, driver="mpio", comm=comm)
     else:
         if comm.size > 1 and not force_serial:
-            warnings.warn("h5py is not installed with MPI support, while using {comm.size} processes")
+            warnings.warn(
+                "h5py is not installed with MPI support, while using {comm.size} processes"
+            )
         h5file = h5py.File(h5name, filemode)
     yield h5file
     h5file.close()
@@ -157,9 +159,10 @@ def write_hdf5_h5py(
         points[data.local_range[0] : data.local_range[1], :] = data.points_out
         for u in functions:
             # Pad array to 3D if vector space with 2 components
-            array = np.zeros((data.num_dofs_local, data.bs if data.bs!=2 else 3),
-                             dtype=u.x.array.dtype)
-            array[:, :data.bs] = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
+            array = np.zeros(
+                (data.num_dofs_local, data.bs if data.bs != 2 else 3), dtype=u.x.array.dtype
+            )
+            array[:, : data.bs] = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
             dset = step.create_dataset(
                 f"Values_{u.name}", (data.num_dofs_global, array.shape[1]), dtype=array.dtype
             )
@@ -212,10 +215,10 @@ def write_hdf5_adios(
     )
     outfile.Put(pointvar, data.points_out)
     for u in functions:
-
-        array = np.zeros((data.num_dofs_local, data.bs if data.bs!=2 else 3),
-                        dtype=u.x.array.dtype)
-        array[:, :data.bs] = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
+        array = np.zeros(
+            (data.num_dofs_local, data.bs if data.bs != 2 else 3), dtype=u.x.array.dtype
+        )
+        array[:, : data.bs] = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
 
         valuevar = io.DefineVariable(
             f"Values_{u.name}",
@@ -255,7 +258,9 @@ def create_function_space_data(V: dolfinx.fem.FunctionSpace) -> FunctionSpaceDat
     )
 
 
-def check_function_space(functions: typing.Sequence[dolfinx.fem.Function]) -> FunctionSpaceData | None:
+def check_function_space(
+    functions: typing.Sequence[dolfinx.fem.Function],
+) -> FunctionSpaceData | None:
     """Check that all functions are in the same function space,
     and return the function space data.
 
@@ -278,7 +283,9 @@ def check_function_space(functions: typing.Sequence[dolfinx.fem.Function]) -> Fu
     return create_function_space_data(u.function_space)
 
 
-def create_pointcloud(filename: os.PathLike, functions: typing.Sequence[dolfinx.fem.Function]) -> None:
+def create_pointcloud(
+    filename: os.PathLike, functions: typing.Sequence[dolfinx.fem.Function]
+) -> None:
     """Create a point cloud from a list of functions to be visualized in Paraview.
     The point cloud is written to a file in XDMF format.
 

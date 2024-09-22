@@ -10,7 +10,7 @@
 # which can be loaded into ParaView for visualization.
 #
 # ```{note}
-# This demo requires a backend for writing HDF5 files. Please install `scifem` with either `scifem[adios2]` or `scifem[h5py]`. 
+# This demo requires a backend for writing HDF5 files. Please install `scifem` with either `scifem[adios2]` or `scifem[h5py]`.
 # ```
 
 # First, we import the necessary modules.
