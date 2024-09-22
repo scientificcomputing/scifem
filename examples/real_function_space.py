@@ -33,11 +33,15 @@
 # \frac{\partial \mathcal{L}}{\partial u}[\delta u] &= \int_\Omega \nabla u \cdot \nabla \delta u \mathrm{d}x + \lambda\int \delta u \mathrm{d}x - \int_\Omega f \delta u ~\mathrm{d}x - \int_{\partial \Omega} g \delta u~\mathrm{d}s = 0, \\
 # \frac{\partial \mathcal{L}}{\partial \lambda}[\delta \lambda] &=\delta \lambda (\int_\Omega u \mathrm{d}x -h)= 0.
 # \end{align}
-# We write the weak formulation (replacing $\delta u$ with $v$ and $\delta \lambda$ with $d$):
+# We write the weak formulation:
+#
+# $$
 # \begin{align}
-# \int_\Omega \nabla u \cdot \nabla v \mathrm{d}x + \int_\Omega \lambda v\mathrm{d}x = \int_\Omega f v \mathrm{d}x + \int_{\partial \Omega} g v \mathrm{d}s\\
+# \int_\Omega \nabla u \cdot \nabla \delta u~\mathrm{d}x + \int_\Omega \lambda \delta u~\mathrm{d}x = \int_\Omega f \delta u~\mathrm{d}x + \int_{\partial \Omega} g v \mathrm{d}s\\
 # \int_\Omega u \delta \lambda  \mathrm{d}x = h \delta \lambda .
 # \end{align}
+# $$
+#
 # where we have moved $\delta\lambda$ into the integral as it is a spatial constant.
 
 # ## Implementation
@@ -82,12 +86,12 @@ R = create_real_functionspace(mesh)
 if dolfinx.__version__ == "0.8.0":
     u = ufl.TrialFunction(V)
     lmbda = ufl.TrialFunction(R)
-    v = ufl.TestFunction(V)
-    d = ufl.TestFunction(R)
+    du = ufl.TestFunction(V)
+    dl = ufl.TestFunction(R)
 elif dolfinx.__version__ == "0.9.0.0":
     W = ufl.MixedFunctionSpace(V, R)
     u, lmbda = ufl.TrialFunctions(W)
-    v, d = ufl.TestFunctions(W)
+    du, dl = ufl.TestFunctions(W)
 else:
     raise RuntimeError("Unsupported version of dolfinx")
 
@@ -95,11 +99,11 @@ else:
 
 zero = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(0.0))
 
-a00 = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx
-a01 = ufl.inner(lmbda, v) * ufl.dx
-a10 = ufl.inner(u, d) * ufl.dx
-L0 = ufl.inner(f, v) * ufl.dx + ufl.inner(g, v) * ufl.ds
-L1 = ufl.inner(zero, d) * ufl.dx
+a00 = ufl.inner(ufl.grad(u), ufl.grad(du)) * ufl.dx
+a01 = ufl.inner(lmbda, du) * ufl.dx
+a10 = ufl.inner(u, dl) * ufl.dx
+L0 = ufl.inner(f, du) * ufl.dx + ufl.inner(g, du) * ufl.ds
+L1 = ufl.inner(zero, dl) * ufl.dx
 
 a = dolfinx.fem.form([[a00, a01], [a10, None]])
 L = dolfinx.fem.form([L0, L1])
