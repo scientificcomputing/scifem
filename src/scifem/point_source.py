@@ -2,7 +2,7 @@
 # Author: Jørgen S. Dokken
 # SPDX-License-Identifier: MIT
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mpi4py import MPI
 from petsc4py import PETSc
@@ -18,7 +18,7 @@ from .utils import unroll_dofmap
 __all__ = ["PointSource"]
 
 
-@dataclass
+@dataclass(slots=True)
 class PointSource:
     """Class for defining a point source in a given function space.
 
@@ -39,6 +39,9 @@ class PointSource:
     V: dolfinx.fem.FunctionSpace
     points: npt.NDArray[np.float32] | npt.NDArray[np.float64]
     magnitude: np.floating | np.complexfloating = dolfinx.default_scalar_type(1)
+    _points: npt.NDArray[np.float32] | npt.NDArray[np.float64] = field(init=False, repr=False)
+    _cells: npt.NDArray[np.int32] = field(init=False, repr=False)
+    _basis_values: npt.NDArray[np.float32] | npt.NDArray[np.float64] = field(init=False, repr=False)
 
     def __post_init__(self):
         if self.V.dofmap.bs > 1 and dolfinx.__version__ == "0.8.0":

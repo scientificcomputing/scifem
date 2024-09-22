@@ -48,7 +48,7 @@ domain.topology.create_connectivity(tdim-1, tdim)
 # Create the two-component vector space.
 # The solution in the first component will be 0.
 
-d = value_shape = (2,)
+value_shape = (2,)
 V = dolfinx.fem.functionspace(domain, ("Lagrange", 2, value_shape))
 
 # Create standard variational form
