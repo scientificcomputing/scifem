@@ -5,6 +5,9 @@ from . import _scifem  # type: ignore
 from .point_source import PointSource
 from .assembly import assemble_scalar
 from . import xdmf
+from .mesh import create_meshtags
+
+__all__ = ["PointSource", "assemble_scalar", "create_meshtags", "xdmf"]
 
 
 def create_real_functionspace(
