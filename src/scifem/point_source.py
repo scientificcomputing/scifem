@@ -2,7 +2,8 @@
 # Author: Jørgen S. Dokken
 # SPDX-License-Identifier: MIT
 
-from .utils import unroll_dofmap
+from dataclasses import dataclass
+
 from mpi4py import MPI
 from petsc4py import PETSc
 
@@ -12,48 +13,45 @@ import numpy as np
 import numpy.typing as npt
 import ufl
 
+from .utils import unroll_dofmap
+
 __all__ = ["PointSource"]
 
 
+@dataclass
 class PointSource:
-    """Class for defining a point source in a given function space."""
+    """Class for defining a point source in a given function space.
 
-    def __init__(
-        self,
-        V: dolfinx.fem.FunctionSpace,
-        points: npt.NDArray[np.float32] | npt.NDArray[np.float64],
-        magnitude: np.floating | np.complexfloating = dolfinx.default_scalar_type(1),
-    ) -> None:
-        """Initialize a point source.
+    Args:
+        V: The function space the point source is defined in.
+        points: The points where the point source is located.
+            Input shape: ``(num_points, 3)``
+        magnitude: The magnitudes of the point sources.
 
-        Args:
-            V: The function space the point source is defined in.
-            points: The points where the point source is located.
-                Input shape: ``(num_points, 3)``
-            magnitude: The magnitudes of the point sources.
+    Note:
+        Points should only be defined on one process. If they are sent in
+        from multiple processes, multiple point sources will be created.
 
-        Note:
-            Points should only be defined on one process. If they are sent in
-            from multiple processes, multiple point sources will be created.
+    Note:
+        If the point source is outside the mesh, a ``ValueError`` will be raised.
+    """
 
-        Note:
-            If the point source is outside the mesh, a ``ValueError`` will be raised.
-        """
-        self._function_space = V
-        if V.dofmap.bs > 1 and dolfinx.__version__ == "0.8.0":
+    V: dolfinx.fem.FunctionSpace
+    points: npt.NDArray[np.float32] | npt.NDArray[np.float64]
+    magnitude: np.floating | np.complexfloating = dolfinx.default_scalar_type(1)
+
+    def __post_init__(self):
+        if self.V.dofmap.bs > 1 and dolfinx.__version__ == "0.8.0":
             raise NotImplementedError(
                 "Block function spaces are not supported in dolfinx 0.8.0. "
                 "Please upgrade dolfinx"
             )
-        self._input_points = points
-        self._magnitude = magnitude
+
         # Initialize empty arrays
-        self._points = np.empty((0, 3), dtype=points.dtype)
+        self._points = np.empty((0, 3), dtype=self.points.dtype)
         self._cells = np.empty(0, dtype=np.int32)
-        num_dofs = self._function_space.dofmap.dof_layout.num_dofs * self._function_space.dofmap.bs
-        self._basis_values = np.empty(
-            (0, num_dofs), dtype=self._function_space.mesh.geometry.x.dtype
-        )
+        num_dofs = self.V.dofmap.dof_layout.num_dofs * self.V.dofmap.bs
+        self._basis_values = np.empty((0, num_dofs), dtype=self.V.mesh.geometry.x.dtype)
 
         self.recompute_sources()
         self.compute_cell_contributions()
@@ -65,18 +63,19 @@ class PointSource:
         """
 
         # Determine what process owns a point and what cells it lies within
-        mesh = self._function_space.mesh
-        tol = float(1e2 * np.finfo(self._input_points.dtype).eps)
+        mesh = self.V.mesh
+        tol = float(1e2 * np.finfo(self.points.dtype).eps)
         if dolfinx.__version__ == "0.8.0":
-            src_ranks, _, self._points, self._cells = (
-                dolfinx.cpp.geometry.determine_point_ownership(
-                    mesh._cpp_object, self._input_points, tol
-                )
-            )
+            (
+                src_ranks,
+                _,
+                self._points,
+                self._cells,
+            ) = dolfinx.cpp.geometry.determine_point_ownership(mesh._cpp_object, self.points, tol)
             self._points = np.array(self._points).reshape(-1, 3)
         elif dolfinx.__version__ == "0.9.0.0":
             collision_data = dolfinx.cpp.geometry.determine_point_ownership(
-                mesh._cpp_object, self._input_points, tol
+                mesh._cpp_object, self.points, tol
             )
             self._points = collision_data.dest_points
             self._cells = collision_data.dest_cells
@@ -88,7 +87,7 @@ class PointSource:
 
     def compute_cell_contributions(self):
         """Compute the basis function values at the point sources."""
-        mesh = self._function_space.mesh
+        mesh = self.V.mesh
         # Pull owning points back to reference cell
         mesh_nodes = mesh.geometry.x
         cmap = mesh.geometry.cmap
@@ -99,9 +98,9 @@ class PointSource:
             ref_x[i] = cmap.pull_back(point.reshape(-1, 3), mesh_nodes[geom_dofs])
 
         # Create expression evaluating a trial function (i.e. just the basis function)
-        u = ufl.TestFunction(self._function_space)
-        bs = self._function_space.dofmap.bs
-        num_dofs = self._function_space.dofmap.dof_layout.num_dofs * bs
+        u = ufl.TestFunction(self.V)
+        bs = self.V.dofmap.bs
+        num_dofs = self.V.dofmap.dof_layout.num_dofs * bs
         if len(self._cells) > 0:
             # NOTE: Expression lives on only this communicator rank
             expr = dolfinx.fem.Expression(u, ref_x, comm=MPI.COMM_SELF)
@@ -144,16 +143,16 @@ class PointSource:
             self.compute_cell_contributions()
 
         # Apply the point sources to the vector
-        _dofs = self._function_space.dofmap.list[self._cells]
-        unrolled_dofs = unroll_dofmap(_dofs, self._function_space.dofmap.bs)
+        _dofs = self.V.dofmap.list[self._cells]
+        unrolled_dofs = unroll_dofmap(_dofs, self.V.dofmap.bs)
         for dofs, values in zip(unrolled_dofs, self._basis_values, strict=True):
             if isinstance(b, dolfinx.fem.Function):
-                b.x.array[dofs] += values * self._magnitude
+                b.x.array[dofs] += values * self.magnitude
             elif isinstance(b, dolfinx.la.Vector):
-                b.array[dofs] += values * self._magnitude
+                b.array[dofs] += values * self.magnitude
             elif isinstance(b, PETSc.Vec):
                 b.setValuesLocal(
                     dofs,
-                    values * self._magnitude,
+                    values * self.magnitude,
                     addv=PETSc.InsertMode.ADD_VALUES,
                 )
