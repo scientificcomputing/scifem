@@ -26,6 +26,7 @@ parse:
     - amsmath
     - dollarmath
     - linkify
+    - html_admonition
 
 sphinx:
 
