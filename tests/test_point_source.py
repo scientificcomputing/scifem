@@ -85,15 +85,16 @@ def test_outside():
     # Check sanity of values in b
     bbtree = dolfinx.geometry.bb_tree(mesh, mesh.topology.dim)
     cell_candidates = dolfinx.geometry.compute_collisions_points(bbtree, point)
-    cell = dolfinx.geometry.compute_colliding_cells(mesh, cell_candidates, point).links(0)
-
+    cells = dolfinx.geometry.compute_colliding_cells(mesh, cell_candidates, point)
     # Only use evaluate for points on current processor
-    if len(cell) > 0:
-        geom_dofs = mesh.geometry.dofmap[cell[0]]
+    # BUG: In DOLFINx 0.8.0, links(0) yields a too long array
+    if cells.offsets[-1] > 0:
+        cell = cells.links(0)[0]
+        geom_dofs = mesh.geometry.dofmap[cell]
         ref_x = mesh.geometry.cmap.pull_back(point.reshape(-1, 3), mesh.geometry.x[geom_dofs])
         ref_values = V.ufl_element().tabulate(0, ref_x).flatten()
         b_nonzero = np.flatnonzero(b.x.array)
-        dofs = V.dofmap.cell_dofs(cell[0])
+        dofs = V.dofmap.cell_dofs(cell)
         assert len(b_nonzero) == len(dofs)
         assert len(np.intersect1d(b_nonzero, dofs)) == len(dofs)
         b_contributions = b.x.array[dofs]
