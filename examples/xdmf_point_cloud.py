@@ -24,19 +24,19 @@ u.interpolate(lambda x: np.sin(np.pi * x[0]) * np.sin(np.pi * x[1]))
 # We can now plot the solution with pyvista.
 
 
-import pyvista
+# import pyvista
 
-pyvista.start_xvfb()
-plotter = pyvista.Plotter()
-plotter.add_points(
-    V.tabulate_dof_coordinates(),
-    scalars=u.x.array,
-    render_points_as_spheres=True,
-    point_size=20,
-    show_scalar_bar=False,
-)
-if not pyvista.OFF_SCREEN:
-    plotter.show()
+# pyvista.start_xvfb()
+# plotter = pyvista.Plotter()
+# plotter.add_points(
+#     V.tabulate_dof_coordinates(),
+#     scalars=u.x.array,
+#     render_points_as_spheres=True,
+#     point_size=20,
+#     show_scalar_bar=False,
+# )
+# if not pyvista.OFF_SCREEN:
+#     plotter.show()
 
 
 # We can also save the point cloud to a file using the `scifem` module.

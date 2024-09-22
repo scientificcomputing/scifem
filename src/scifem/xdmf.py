@@ -113,7 +113,6 @@ def h5pyfile(h5name, filemode="r", force_serial: bool = False, comm=None):
             warnings.warn("h5py is not installed with MPI support")
         h5file = h5py.File(h5name, filemode)
     yield h5file
-
     h5file.close()
 
 
@@ -141,13 +140,16 @@ def write_hdf5_h5py(
 
     with h5pyfile(h5name=h5name, filemode="w", comm=data.comm) as h5file:
         step = h5file.create_group(np.bytes_("Step0"))
-        step.create_dataset("Points", data=data.points_out)
+        points = step.create_dataset(
+            "Points", (data.num_dofs_global, data.points.shape[1]), dtype=data.points.dtype
+        )
+        points[data.local_range[0] : data.local_range[1], :] = data.points_out
         for u in us:
             array = u.x.array[: data.num_dofs_local * data.bs].reshape(-1, data.bs)
             dset = step.create_dataset(
                 f"Values_{u.name}", (data.num_dofs_global, data.bs), dtype=array.dtype
             )
-            dset[data.local_range[0] : data.local_range[1], 0:] = array
+            dset[data.local_range[0] : data.local_range[1], :] = array
 
 
 def write_hdf5_adios(
