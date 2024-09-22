@@ -7,6 +7,7 @@ The package is still in its early stages and many functionalities are still miss
 
 ## Features
 - Real-space implementation for usage in DOLFINx (>=v0.8.0)
+- Save quadrature functions as point clouds
 
 
 
