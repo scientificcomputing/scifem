@@ -7,6 +7,8 @@ The package is still in its early stages and many functionalities are still miss
 
 ## Features
 - Real-space implementation for usage in DOLFINx (>=v0.8.0)
+- Save quadrature functions as point clouds
+- Save any function that can tabulate dof coordinates as point clouds.
 - Point sources for usage in DOLFINx (>=v0.8.0)
   - Point sources in vector spaces are only supported on v0.9.0, post [DOLFINx PR 3429](https://github.com/FEniCS/dolfinx/pull/3429).
     For older versions, apply one point source in each sub space.
