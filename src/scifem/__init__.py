@@ -1,10 +1,16 @@
 import dolfinx
 import basix
 import numpy as np
+import numpy.typing as npt
 from . import _scifem  # type: ignore
 from .point_source import PointSource
 from .assembly import assemble_scalar
 from . import xdmf
+
+from .mesh import create_meshtags
+
+__all__ = ["PointSource", "assemble_scalar", "create_meshtags", "xdmf","create_real_functionspace", "assemble_scalar", "PointSource", "xdmf",
+           "vertex_to_dofmap"]
 
 
 def create_real_functionspace(
@@ -37,4 +43,18 @@ def create_real_functionspace(
     return dolfinx.fem.FunctionSpace(mesh, ufl_e, cppV)
 
 
-__all__ = ["create_real_functionspace", "assemble_scalar", "PointSource", "xdmf"]
+def vertex_to_dofmap(V: dolfinx.fem.FunctionSpace)-> npt.NDArray[np.int32]:
+    """
+    Create a map from the vertices (local to the process) to the correspondning degrees
+    of freedom.
+
+    Args:
+        V: The function space
+    
+    Returns:
+        An array mapping local vertex i to local degree of freedom i
+
+    Note:
+        If using a blocked space this map is not unrolled for the DofMap block size.
+    """
+    return _scifem.vertex_to_dofmap(V.mesh._cpp_object.topology, V.dofmap._cpp_object)
