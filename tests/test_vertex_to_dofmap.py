@@ -4,19 +4,22 @@ import dolfinx
 from scifem import vertex_to_dofmap, dof_to_vertexmap
 import numpy as np
 
+
 @pytest.mark.parametrize("degree", range(1, 4))
-@pytest.mark.parametrize("value_size", [(),(2,), (2,3)])
+@pytest.mark.parametrize("value_size", [(), (2,), (2, 3)])
 def test_vertex_to_dofmap_P(degree, value_size):
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 2)
     V = dolfinx.fem.functionspace(mesh, ("Lagrange", degree, value_size))
-    
+
     v_to_d = vertex_to_dofmap(V)
     mesh.topology.create_connectivity(0, mesh.topology.dim)
-    geom_indices = dolfinx.mesh.entities_to_geometry(mesh, 0, np.arange(len(v_to_d), dtype=np.int32))
+    geom_indices = dolfinx.mesh.entities_to_geometry(
+        mesh, 0, np.arange(len(v_to_d), dtype=np.int32)
+    )
 
     x_V = V.tabulate_dof_coordinates()
     x_g = mesh.geometry.x
-    tol = 1e3 * np.finfo(x_g.dtype).eps  
+    tol = 1e3 * np.finfo(x_g.dtype).eps
     mesh = V.mesh
 
     np.testing.assert_allclose(x_V[v_to_d], x_g[geom_indices.flatten()], atol=tol)
