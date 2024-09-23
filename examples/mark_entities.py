@@ -6,7 +6,7 @@
 #
 # DOLFINx gives you full control for marking entities.
 # However, sometimes this can feel a bit repetative.
-# In this example we will show how to use :func:`scifem.mark_entities`
+# In this example we will show how to use {py:func}`scifem.create_meshtags`.
 
 from mpi4py import MPI
 import dolfinx

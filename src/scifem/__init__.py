@@ -7,8 +7,6 @@ from .assembly import assemble_scalar
 from . import xdmf
 from .mesh import create_meshtags
 
-__all__ = ["PointSource", "assemble_scalar", "create_meshtags", "xdmf"]
-
 
 def create_real_functionspace(
     mesh: dolfinx.mesh.Mesh, value_shape: tuple[int, ...] = ()
@@ -40,4 +38,4 @@ def create_real_functionspace(
     return dolfinx.fem.FunctionSpace(mesh, ufl_e, cppV)
 
 
-__all__ = ["create_real_functionspace", "assemble_scalar", "PointSource", "xdmf"]
+__all__ = ["create_real_functionspace", "assemble_scalar", "PointSource", "xdmf", "create_meshtags"]
