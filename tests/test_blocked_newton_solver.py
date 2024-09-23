@@ -22,10 +22,10 @@ def test_NewtonSolver(factor):
     du = ufl.TrialFunction(V)
     dp = ufl.TrialFunction(Q)
     # elif dolfinx.__version__ == "0.9.0.0":
-        # Relies on: https://github.com/FEniCS/ufl/pull/308
-        # W = ufl.MixedFunctionSpace(V, Q)
-        # v, q = ufl.TestFunctions(W)
-        # du, dp = ufl.TrialFunctions(W)
+    # Relies on: https://github.com/FEniCS/ufl/pull/308
+    # W = ufl.MixedFunctionSpace(V, Q)
+    # v, q = ufl.TestFunctions(W)
+    # du, dp = ufl.TrialFunctions(W)
     # else:
     #     raise ValueError("Unsupported version of dolfinx")
 
@@ -49,10 +49,10 @@ def test_NewtonSolver(factor):
         [ufl.derivative(F1, u, du), ufl.derivative(F1, p, dp)],
     ]
     # elif dolfinx.__version__ == "0.9.0.0":
-        # Relies on: https://github.com/FEniCS/ufl/pull/308
-        # F_ = F0 + F1
-        # F = list(ufl.extract_blocks(F_))
-        # J = ufl.extract_blocks(ufl.derivative(F_, u, du) + ufl.derivative(F_, p, dp))
+    # Relies on: https://github.com/FEniCS/ufl/pull/308
+    # F_ = F0 + F1
+    # F = list(ufl.extract_blocks(F_))
+    # J = ufl.extract_blocks(ufl.derivative(F_, u, du) + ufl.derivative(F_, p, dp))
     petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"}
     solver = NewtonSolver(F, J, [u, p], max_iterations=25, petsc_options=petsc_options)
     solver.solve()
