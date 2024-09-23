@@ -12,7 +12,7 @@ import pytest
 def test_NewtonSolver(factor):
     dtype = PETSc.RealType
     ftype = PETSc.ScalarType
-    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 2, 2, dtype=dtype)
+    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 12, dtype=dtype)
     V = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
     Q = dolfinx.fem.functionspace(mesh, ("Lagrange", 2))
 
