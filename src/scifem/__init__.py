@@ -5,6 +5,7 @@ from . import _scifem  # type: ignore
 from .point_source import PointSource
 from .assembly import assemble_scalar
 from . import xdmf
+from .solvers import NewtonSolver
 
 
 def create_real_functionspace(
@@ -37,4 +38,4 @@ def create_real_functionspace(
     return dolfinx.fem.FunctionSpace(mesh, ufl_e, cppV)
 
 
-__all__ = ["create_real_functionspace", "assemble_scalar", "PointSource", "xdmf"]
+__all__ = ["create_real_functionspace", "assemble_scalar", "PointSource", "xdmf", "NewtonSolver"]
