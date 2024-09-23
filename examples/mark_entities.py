@@ -20,29 +20,35 @@ mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 60, 60)
 # We create three marker functions below.
 # Each of them takes in a ``(3, num_points)`` array, and returns a boolean array of size ``num_points``.
 
+
 def left(x):
     return x[0] < 0.2
 
+
 def right(x):
     return x[0] > 0.9
+
 
 def inner(x):
     # We use numpy bit operator `&` for "and"
     return (x[0] > 0.3) & (x[0] < 0.7)
 
+
 # We want to mark these entities with  with unique integers 1, 3 and 7.
 
 from scifem import create_meshtags
 
-cell_tag = create_meshtags(mesh, mesh.topology.dim, {1: left, 3:right, 7:inner})
+cell_tag = create_meshtags(
+    mesh,
+    mesh.topology.dim,
+    [{"tag": 1, "locator": left}, {"tag": 3, "locator": right}, {"tag": 7, "locator": inner}],
+)
 
 # Next we can plot these marked entities
 
 import pyvista
 pyvista.start_xvfb()
-
 vtk_grid = dolfinx.plot.vtk_mesh(mesh, cell_tag.dim, cell_tag.indices)
-
 grid = pyvista.UnstructuredGrid(*vtk_grid)
 grid.cell_data["Marker"] = cell_tag.values
 
@@ -57,14 +63,18 @@ if not pyvista.OFF_SCREEN:
 
 # We can also mark lower order entities, such as facets
 
+
 def circle(x):
-    return x[0]**2 + x[1]**2 <= 0.16**2
+    return x[0] ** 2 + x[1] ** 2 <= 0.16**2
+
 
 def top(x):
-    return np.isclose(x[1], 1.0)
+    return x[1] > 0.9
 
 
-facet_tags = create_meshtags(mesh, mesh.topology.dim-1, {2: top, 7:circle})
+facet_tags = create_meshtags(
+    mesh, mesh.topology.dim - 1, [{"tag": 2, "locator": top}, {"tag": 7, "locator": circle}]
+)
 
 
 facet_grid = dolfinx.plot.vtk_mesh(mesh, facet_tags.dim, facet_tags.indices)
@@ -78,9 +88,16 @@ fplotter.view_xy()
 if not pyvista.OFF_SCREEN:
     fplotter.show()
 
-# We can also exclude all interior facets by adding `on_boundary=True`.
+# We can also exclude interior facets by adding `on_boundary: True` (by default this is set to False).
 
-boundary_facet_tags = create_meshtags(mesh, mesh.topology.dim-1, {2:top, 7: circle}, on_boundary=True)
+boundary_facet_tags = create_meshtags(
+    mesh,
+    mesh.topology.dim - 1,
+    [
+        {"tag": 2, "locator": top, "on_boundary": True},
+        {"tag": 7, "locator": circle, "on_boundary": False},
+    ],
+)
 
 
 boundary_grid = dolfinx.plot.vtk_mesh(mesh, boundary_facet_tags.dim, boundary_facet_tags.indices)

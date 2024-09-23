@@ -7,16 +7,22 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "entities_dict, set_values",
+    "entities_list, set_values",
     [
-        ({1: lambda x: x[0] <= 1.0}, {1}),
-        ({2: lambda x: x[0] <= 1.0}, {2}),
-        ({1: lambda x: x[0] <= 1.0, 2: lambda x: x[0] >= 0.0}, {2}),
+        ([{"tag": 1, "locator": lambda x: x[0] <= 1.0}], {1}),
+        ([{"tag": 2, "locator": lambda x: x[0] <= 1.0}], {2}),
+        (
+            [
+                {"tag": 1, "locator": lambda x: x[0] <= 1.0},
+                {"tag": 2, "locator": lambda x: x[0] >= 0.0},
+            ],
+            {2},
+        ),
     ],
 )
-def test_create_meshtags_celltags_all(entities_dict, set_values):
+def test_create_meshtags_celltags_all(entities_list, set_values):
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
-    cell_tag = scifem.create_meshtags(mesh, mesh.topology.dim, entities_dict=entities_dict)
+    cell_tag = scifem.create_meshtags(mesh, mesh.topology.dim, entities_list=entities_list)
 
     im = mesh.topology.index_map(mesh.topology.dim)
     assert cell_tag.dim == mesh.topology.dim
@@ -26,11 +32,16 @@ def test_create_meshtags_celltags_all(entities_dict, set_values):
     assert set(cell_tag.values) == set_values
 
 
-def test_create_meshtags_celltags_empty():
+@pytest.mark.parametrize(
+    "entities_list",
+    [
+        ([{"tag": 1, "locator": lambda x: x[0] < 0.0}]),
+        ([]),
+    ],
+)
+def test_create_meshtags_celltags_empty(entities_list):
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
-    cell_tag = scifem.create_meshtags(
-        mesh, mesh.topology.dim, entities_dict={1: lambda x: x[0] < 0.0}
-    )
+    cell_tag = scifem.create_meshtags(mesh, mesh.topology.dim, entities_list=entities_list)
 
     assert cell_tag.dim == mesh.topology.dim
     assert cell_tag.indices.shape[0] == 0

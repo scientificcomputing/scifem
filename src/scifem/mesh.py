@@ -6,20 +6,33 @@ import numpy.typing as npt
 __all__ = ["create_meshtags"]
 
 
+# Workaround to make id and locator required but on_boundary optional
+# see https://peps.python.org/pep-0655/
+class _TaggedEntities(typing.TypedDict):
+    tag: int
+    locator: typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]]
+
+
+class TaggedEntities(_TaggedEntities, total=False):
+    on_boundary: bool
+
+
 def create_meshtags(
     domain: dolfinx.mesh.Mesh,
     dim: int,
-    entities_dict: dict[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]]],
-    on_boundary: bool = False,
+    entities_list: list[TaggedEntities],
 ) -> dolfinx.mesh.MeshTags:
     """Mark entities of specified dimension according to a geometrical marker function.
 
     Args:
         domain: A ``dolfinx.mesh.Mesh`` object
         dim: Dimension of the entities to mark
-        entities_dict : A dictionary mapping integer tags with a geometrical marker function.
-            Example ``{tag: lambda x: x[0]<0}``
-        on_boundary: If ``True`` only locate entities on the boundary
+        entities_list: A list of dictionaries with the following keys
+
+            - ``tag``: The tag to assign to the entities
+            - ``locator``: A function that takes a point and returns a boolean array
+              indicating whether the point is inside the entity
+            - ``on_boundary``: Optional, if True, the entities will be marked on the boundary
 
     Returns:
         A ``dolfinx.mesh.MeshTags`` object with the corresponding entities marked.
@@ -39,15 +52,17 @@ def create_meshtags(
     num_entities_local = e_map.size_local + e_map.num_ghosts
     markers = np.full(num_entities_local, -1, dtype=np.int32)
 
-    if on_boundary:
-        locator = dolfinx.mesh.locate_entities_boundary
-    else:
-        locator = dolfinx.mesh.locate_entities
+    locate_entities = (
+        lambda on_boundary: dolfinx.mesh.locate_entities_boundary
+        if on_boundary
+        else dolfinx.mesh.locate_entities
+    )
 
     # Concatenate and sort the arrays based on indices
-    for tag, location in entities_dict.items():
-        entities = locator(domain, dim, location)
-        markers[entities] = tag
+    for tagged_entity in entities_list:
+        on_boundary = tagged_entity.get("on_boundary", False)
+        entities = locate_entities(on_boundary)(domain, dim, tagged_entity["locator"])
+        markers[entities] = tagged_entity["tag"]
 
     facets = np.flatnonzero(markers != -1).astype(np.int32)
     return dolfinx.mesh.meshtags(domain, dim, facets, markers[facets])
