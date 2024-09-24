@@ -38,15 +38,12 @@ def inner(x):
 
 from scifem import create_meshtags
 
-cell_tag = create_meshtags(
-    mesh,
-    mesh.topology.dim,
-    [{"tag": 1, "locator": left}, {"tag": 3, "locator": right}, {"tag": 7, "locator": inner}],
-)
+cell_tag = create_meshtags(mesh, mesh.topology.dim, [(1, left), (3, right), (7, inner)])
 
 # Next we can plot these marked entities
 
 import pyvista
+
 pyvista.start_xvfb()
 vtk_grid = dolfinx.plot.vtk_mesh(mesh, cell_tag.dim, cell_tag.indices)
 grid = pyvista.UnstructuredGrid(*vtk_grid)
@@ -72,9 +69,7 @@ def top(x):
     return x[1] > 0.9
 
 
-facet_tags = create_meshtags(
-    mesh, mesh.topology.dim - 1, [{"tag": 2, "locator": top}, {"tag": 7, "locator": circle}]
-)
+facet_tags = create_meshtags(mesh, mesh.topology.dim - 1, [(2, top), (7, circle)])
 
 
 facet_grid = dolfinx.plot.vtk_mesh(mesh, facet_tags.dim, facet_tags.indices)
@@ -91,12 +86,7 @@ if not pyvista.OFF_SCREEN:
 # We can also exclude interior facets by adding `on_boundary: True` (by default this is set to False).
 
 boundary_facet_tags = create_meshtags(
-    mesh,
-    mesh.topology.dim - 1,
-    [
-        {"tag": 2, "locator": top, "on_boundary": True},
-        {"tag": 7, "locator": circle, "on_boundary": False},
-    ],
+    mesh, mesh.topology.dim - 1, [(2, top, True), (7, circle, False)]
 )
 
 
