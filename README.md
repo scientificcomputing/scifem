@@ -1,4 +1,5 @@
 # Scientific Computing Tools for Finite Element Methods
+
 This package contains a collection of tools for scientific computing with a focus on finite element methods. The tools are written in Python and are intended to be used in conjunction with the [dolfinx](https://github.com/FEniCS/dolfinx).
 
 Many users that are transitioning from legacy FEniCS to FEniCSx may find the transition difficult due to the lack of some functionalities in FEniCSx.
@@ -6,13 +7,14 @@ This package aims to provide some of the functionalities that are missing in FEn
 The package is still in its early stages and many functionalities are still missing.
 
 ## Features
+
 - Real-space implementation for usage in DOLFINx (>=v0.8.0)
 - Save quadrature functions as point clouds
 - Save any function that can tabulate dof coordinates as point clouds.
 - Point sources for usage in DOLFINx (>=v0.8.0)
   - Point sources in vector spaces are only supported on v0.9.0, post [DOLFINx PR 3429](https://github.com/FEniCS/dolfinx/pull/3429).
     For older versions, apply one point source in each sub space.
-
+- Maps between degrees of freedom and vertices: `vertex_to_dofmap` and `dof_to_vertex`
 
 ## Installation
 
