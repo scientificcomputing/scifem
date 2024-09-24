@@ -3,7 +3,7 @@ import typing
 import numpy as np
 import numpy.typing as npt
 
-__all__ = ["create_meshtags"]
+__all__ = ["create_entity_markers"]
 
 
 # (tag, locator, on_boundary) where on_boundary is optional
@@ -13,7 +13,7 @@ TaggedEntities = (
 )
 
 
-def create_meshtags(
+def create_entity_markers(
     domain: dolfinx.mesh.Mesh,
     dim: int,
     entities_list: list[TaggedEntities],

@@ -5,7 +5,7 @@ from . import _scifem  # type: ignore
 from .point_source import PointSource
 from .assembly import assemble_scalar
 from . import xdmf
-from .mesh import create_meshtags
+from .mesh import create_entity_markers
 
 
 def create_real_functionspace(
@@ -38,4 +38,10 @@ def create_real_functionspace(
     return dolfinx.fem.FunctionSpace(mesh, ufl_e, cppV)
 
 
-__all__ = ["create_real_functionspace", "assemble_scalar", "PointSource", "xdmf", "create_meshtags"]
+__all__ = [
+    "create_real_functionspace",
+    "assemble_scalar",
+    "PointSource",
+    "xdmf",
+    "create_entity_markers",
+]

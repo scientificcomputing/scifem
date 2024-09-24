@@ -22,7 +22,7 @@ import pytest
 )
 def test_create_celltags_celltags_all(entities_list, set_values):
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
-    cell_tag = scifem.create_meshtags(mesh, mesh.topology.dim, entities_list=entities_list)
+    cell_tag = scifem.create_entity_markers(mesh, mesh.topology.dim, entities_list=entities_list)
 
     im = mesh.topology.index_map(mesh.topology.dim)
     assert cell_tag.dim == mesh.topology.dim
@@ -48,7 +48,9 @@ def test_create_celltags_celltags_all(entities_list, set_values):
 )
 def test_create_facet_tags_all_on_boundary_False(entities_list, set_values):
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
-    facet_tag = scifem.create_meshtags(mesh, mesh.topology.dim - 1, entities_list=entities_list)
+    facet_tag = scifem.create_entity_markers(
+        mesh, mesh.topology.dim - 1, entities_list=entities_list
+    )
     im = mesh.topology.index_map(mesh.topology.dim - 1)
 
     assert facet_tag.dim == mesh.topology.dim - 1
@@ -74,7 +76,9 @@ def test_create_facet_tags_all_on_boundary_False(entities_list, set_values):
 )
 def test_create_facet_tags_all_on_boundary_True(entities_list, set_values):
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
-    facet_tag = scifem.create_meshtags(mesh, mesh.topology.dim - 1, entities_list=entities_list)
+    facet_tag = scifem.create_entity_markers(
+        mesh, mesh.topology.dim - 1, entities_list=entities_list
+    )
 
     mesh.topology.create_entities(1)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
@@ -96,7 +100,7 @@ def test_create_facet_tags_all_on_boundary_True(entities_list, set_values):
 )
 def test_create_celltags_empty(entities_list):
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
-    cell_tag = scifem.create_meshtags(mesh, mesh.topology.dim, entities_list=entities_list)
+    cell_tag = scifem.create_entity_markers(mesh, mesh.topology.dim, entities_list=entities_list)
 
     assert cell_tag.dim == mesh.topology.dim
     assert cell_tag.indices.shape[0] == 0

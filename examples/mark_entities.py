@@ -6,7 +6,7 @@
 #
 # DOLFINx gives you full control for marking entities.
 # However, sometimes this can feel a bit repetative.
-# In this example we will show how to use {py:func}`scifem.create_meshtags`.
+# In this example we will show how to use {py:func}`scifem.create_entity_markers`.
 
 from mpi4py import MPI
 import dolfinx
@@ -36,9 +36,9 @@ def inner(x):
 
 # We want to mark these entities with  with unique integers 1, 3 and 7.
 
-from scifem import create_meshtags
+from scifem import create_entity_markers
 
-cell_tag = create_meshtags(mesh, mesh.topology.dim, [(1, left), (3, right), (7, inner)])
+cell_tag = create_entity_markers(mesh, mesh.topology.dim, [(1, left), (3, right), (7, inner)])
 
 # Next we can plot these marked entities
 
@@ -69,7 +69,7 @@ def top(x):
     return x[1] > 0.9
 
 
-facet_tags = create_meshtags(mesh, mesh.topology.dim - 1, [(2, top), (7, circle)])
+facet_tags = create_entity_markers(mesh, mesh.topology.dim - 1, [(2, top), (7, circle)])
 
 
 facet_grid = dolfinx.plot.vtk_mesh(mesh, facet_tags.dim, facet_tags.indices)
@@ -85,7 +85,7 @@ if not pyvista.OFF_SCREEN:
 
 # We can also exclude interior facets by adding `on_boundary: True` (by default this is set to False).
 
-boundary_facet_tags = create_meshtags(
+boundary_facet_tags = create_entity_markers(
     mesh, mesh.topology.dim - 1, [(2, top, True), (7, circle, False)]
 )
 
