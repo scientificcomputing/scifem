@@ -12,6 +12,7 @@ The package is still in its early stages and many functionalities are still miss
 - Point sources for usage in DOLFINx (>=v0.8.0)
   - Point sources in vector spaces are only supported on v0.9.0, post [DOLFINx PR 3429](https://github.com/FEniCS/dolfinx/pull/3429).
     For older versions, apply one point source in each sub space.
+- Simplified wrapper to create MeshTags based on a list of tags and corresponding locator functions.
 
 
 ## Installation
