@@ -25,8 +25,8 @@ class NewtonSolver:
 
     def __init__(
         self,
-        F: list[dolfinx.fem.form],
-        J: list[list[dolfinx.fem.form]],
+        F: list[dolfinx.fem.Form],
+        J: list[list[dolfinx.fem.Form]],
         w: list[dolfinx.fem.Function],
         bcs: list[dolfinx.fem.DirichletBC] | None = None,
         max_iterations: int = 5,
