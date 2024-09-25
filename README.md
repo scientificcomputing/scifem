@@ -16,6 +16,7 @@ The package is still in its early stages and many functionalities are still miss
     For older versions, apply one point source in each sub space.
 - Simplified wrapper to create MeshTags based on a list of tags and corresponding locator functions.
 - Maps between degrees of freedom and vertices: `vertex_to_dofmap` and `dof_to_vertex`
+- Blocked Newton Solver
 
 ## Installation
 
