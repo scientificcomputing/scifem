@@ -28,11 +28,13 @@ parse:
     - linkify
     - html_admonition
 
+
 sphinx:
 
   config:
     html_last_updated_fmt: "%b %d, %Y"
     nb_execution_show_tb: True
+    bibtex_bibfiles: ["docs/refs.bib"]
     suppress_warnings: ["mystnb.unknown_mime_type"]
     nb_custom_formats:  # https://jupyterbook.org/en/stable/file-types/jupytext.html#file-types-custom
         .py:
@@ -43,5 +45,6 @@ sphinx:
   - 'sphinx.ext.autodoc'
   - 'sphinx.ext.napoleon'
   - 'sphinx.ext.viewcode'
+  - 'sphinxcontrib.bibtex'
 
 exclude_patterns: [".pytest_cache/*" ,"tests", venv, .vcode, .ruff_cache, .github, .git]

@@ -46,6 +46,7 @@
 # \end{align}
 # $$
 #
+# Here $t$ is the traction force which is set to $10$ on the right face of the cube and $0$ elsewhere.
 # The Euler-Lagrange equations for this problem are given by: Find $\mathbf{u} \in V$ and $p \in Q$ such that
 #
 # $$
@@ -55,7 +56,8 @@
 # \end{align}
 # $$
 #
-# where $V$ is the displacement space and $Q$ is the pressure space. For this we select Taylor-Hood finite elements for the displacement and pressure spaces, with second order Lagrange elements for $\mathbf{u}$ and first order Lagrange elements for $p$.
+# where $V$ is the displacement space and $Q$ is the pressure space. For this we select $Q_2/P_1$ elements i.e second order Lagrange elements for $\mathbf{u}$ and [first order discontinuous polynomial cubical elements](https://defelement.com/elements/examples/quadrilateral-dpc-1.html) for $p$, which is a stable element for incompressible elasticity {cite}`auricchio2013approximation`.
+# Note also that the Euler-Lagrange equations can be derived automatically using `ufl`.
 #
 #
 
@@ -68,10 +70,10 @@ import scifem
 # We create the mesh and the function spaces
 
 mesh = dolfinx.mesh.create_unit_cube(
-    MPI.COMM_WORLD, 3,3,3, dolfinx.mesh.CellType.hexahedron, dtype=np.float64
+    MPI.COMM_WORLD, 3, 3, 3, dolfinx.mesh.CellType.hexahedron, dtype=np.float64
 )
 V = dolfinx.fem.functionspace(mesh, ("Lagrange", 2, (3,)))
-Q = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
+Q = dolfinx.fem.functionspace(mesh, ("DPC", 1,))
 
 # And the test and trial functions
 #
@@ -155,12 +157,19 @@ pyvista.start_xvfb()
 p = pyvista.Plotter()
 topology, cell_types, geometry = dolfinx.plot.vtk_mesh(V)
 grid = pyvista.UnstructuredGrid(topology, cell_types, geometry)
+linear_grid = pyvista.UnstructuredGrid(*dolfinx.plot.vtk_mesh(mesh))
 grid["u"] = u.x.array.reshape((geometry.shape[0], 3))
-p.add_mesh(grid, style="wireframe", color="k")
+p.add_mesh(linear_grid, style="wireframe", color="k")
 warped = grid.warp_by_vector("u", factor=1.5)
-p.add_mesh(warped, show_edges=True)
+p.add_mesh(warped, show_edges=False)
 p.show_axes()
 if not pyvista.OFF_SCREEN:
     p.show()
 else:
     figure_as_array = p.screenshot("displacement.png")
+
+
+# # References
+# ```{bibliography}
+# ```
+#
