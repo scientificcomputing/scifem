@@ -127,7 +127,7 @@ psi = (mu / 2)*(I1 - 3)
 
 # We for the total Lagrangian
 
-L = psi*ufl.dx - ufl.dot(t * N, u)*ufl.ds(subdomain_data=facet_tags, subdomain_id=2)  + p * (J - 1) * ufl.dx
+L = psi*ufl.dx - ufl.inner(t * N, u)*ufl.ds(subdomain_data=facet_tags, subdomain_id=2)  + p * (J - 1) * ufl.dx
 
 # and take the first variation of the total Lagrangian to obtain the residual
 
