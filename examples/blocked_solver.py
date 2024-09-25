@@ -144,10 +144,26 @@ K = [
     [ufl.derivative(r_p, u, du), ufl.derivative(r_p, p, dp)],
 ]
 
+
 # Now we can create the Newton solver and solve the problem
 
 petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"}
 solver = scifem.NewtonSolver(R, K, [u, p], max_iterations=25, bcs=[bc], petsc_options=petsc_options)
+
+# We can also set a callback function that is called before and after the solve, which takes the solver object as input
+
+
+def pre_solve(solver: scifem.NewtonSolver):
+    print(f"Starting solve with {solver.max_iterations} iterations")
+
+
+def post_solve(solver: scifem.NewtonSolver):
+    print(f"Solve completed in with correction norm {solver.dx.norm(0)}")
+
+
+solver.set_pre_solve_callback(pre_solve)
+solver.set_post_solve_callback(post_solve)
+
 solver.solve()
 
 # Finally, we can visualize the solution using `pyvista`

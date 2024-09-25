@@ -1,10 +1,14 @@
-import dolfinx
 from typing import Callable
-import ufl
+import logging
+
 import numpy as np
 from petsc4py import PETSc
+import ufl
+import dolfinx
 
 __all__ = ["NewtonSolver"]
+
+logger = logging.getLogger(__name__)
 
 
 class NewtonSolver:
@@ -188,7 +192,7 @@ class NewtonSolver:
 
             # Compute norm of update
             correction_norm = self.dx.norm(0)
-            print(f"Iteration {i}: Correction norm {correction_norm}")
+            logger.info(f"Iteration {i}: Correction norm {correction_norm}")
             if correction_norm < tol:
                 return i
             i += 1
