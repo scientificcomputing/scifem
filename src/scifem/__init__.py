@@ -6,6 +6,7 @@ from . import _scifem  # type: ignore
 from .point_source import PointSource
 from .assembly import assemble_scalar
 from . import xdmf
+from .solvers import NewtonSolver
 from .mesh import create_entity_markers
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "vertex_to_dofmap",
     "dof_to_vertexmap",
     "create_entity_markers",
+    "NewtonSolver",
 ]
 
 
