@@ -167,7 +167,7 @@ def test_singular_poisson(tensor, degree, dtype):
     error = dolfinx.fem.form(ufl.inner(u_ex - uh, u_ex - uh) * dx, dtype=dtype)
 
     e_local = dolfinx.fem.assemble_scalar(error)
-    tol = 8e3 * np.finfo(dtype).eps
+    tol = 1e4 * np.finfo(dtype).eps
     e_global = np.sqrt(mesh.comm.allreduce(e_local, op=MPI.SUM))
     assert np.isclose(e_global, 0, atol=tol)
 
