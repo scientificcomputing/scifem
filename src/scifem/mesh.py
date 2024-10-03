@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dolfinx
 import typing
 import numpy as np
