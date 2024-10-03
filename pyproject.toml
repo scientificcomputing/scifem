@@ -13,7 +13,7 @@ authors = [
     { email = "dokken@simula.no", name = "Jørgen S. Dokken" },
     { email = "henriknf@simula.no", name = "Henrik N.T. Finsberg" },
 ]
-dependencies = ["fenics-dolfinx", "numpy"]
+dependencies = ["fenics-dolfinx", "numpy", "packaging"]
 
 [project.urls]
 repository = "https://github.com/scientificcomputing/scifem.git"
