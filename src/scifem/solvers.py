@@ -1,5 +1,6 @@
 from typing import Callable
 import logging
+from packaging.version import parse as _v
 
 import numpy as np
 from petsc4py import PETSc
@@ -9,6 +10,12 @@ import dolfinx
 __all__ = ["NewtonSolver"]
 
 logger = logging.getLogger(__name__)
+
+# assemble_vector_block(scale=...) is renamed assemble_vector_block(alpha=...)
+# in 0.9
+_alpha_kw: str = "alpha"
+if _v(dolfinx.__version__) < _v("0.9"):
+    _alpha_kw = "scale"
 
 
 class NewtonSolver:
@@ -152,11 +159,13 @@ class NewtonSolver:
                 self._J,
                 bcs=self.bcs,
                 x0=self.x,
-                scale=-1.0,
                 coeffs_a=coeffs_a,
                 constants_a=constants_a,
                 coeffs_L=coeffs_L,
                 constants_L=constants_L,
+                # dolfinx 0.8 compatibility
+                # this is called 'scale' in 0.8, 'alpha' in 0.9
+                **{_alpha_kw: -1.0},
             )
             self.b.ghostUpdate(PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
 
