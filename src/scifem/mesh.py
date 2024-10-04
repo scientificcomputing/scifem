@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dolfinx
 import typing
 import numpy as np
@@ -7,10 +9,11 @@ __all__ = ["create_entity_markers"]
 
 
 # (tag, locator, on_boundary) where on_boundary is optional
-TaggedEntities = (
-    tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]]]
-    | tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]], bool]
-)
+if typing.TYPE_CHECKING:
+    TaggedEntities = (
+        tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]]]
+        | tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]], bool]
+    )
 
 
 def create_entity_markers(

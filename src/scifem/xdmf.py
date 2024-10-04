@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import typing
 import xml.etree.ElementTree as ET
 import contextlib

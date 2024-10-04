@@ -2,6 +2,8 @@
 # Author: Jørgen S. Dokken
 # SPDX-License-Identifier: MIT
 
+from __future__ import annotations
+
 from .utils import unroll_dofmap
 from mpi4py import MPI
 from petsc4py import PETSc
