@@ -163,8 +163,9 @@ def write_hdf5_h5py(
         )
         points[data.local_range[0] : data.local_range[1], :] = data.points_out
         cells = step.create_dataset("Cells", (data.num_dofs_global,), dtype=np.int64)
-        cells[data.local_range[0]:data.local_range[1]] = np.arange(
-            data.local_range[0], data.local_range[1], dtype=np.int64)
+        cells[data.local_range[0] : data.local_range[1]] = np.arange(
+            data.local_range[0], data.local_range[1], dtype=np.int64
+        )
         for u in functions:
             # Pad array to 3D if vector space with 2 components
             array = np.zeros(
