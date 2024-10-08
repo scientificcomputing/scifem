@@ -55,6 +55,10 @@ def write_xdmf(
     topology.attrib["NumberOfElements"] = str(xdmfdata.num_dofs_global)
     topology.attrib["TopologyType"] = "PolyVertex"
     topology.attrib["NodesPerElement"] = "1"
+    top_data = ET.SubElement(topology, "DataItem")
+    top_data.attrib["Dimensions"] = f"{xdmfdata.num_dofs_global} {1}"
+    top_data.attrib["Format"] = "HDF"
+    top_data.text = f"{h5name.name}:/Step0/Cells"
     geometry = ET.SubElement(grid, "Geometry")
     geometry.attrib["GeometryType"] = "XYZ"
     for u in functions:
@@ -158,6 +162,10 @@ def write_hdf5_h5py(
             "Points", (data.num_dofs_global, data.points.shape[1]), dtype=data.points.dtype
         )
         points[data.local_range[0] : data.local_range[1], :] = data.points_out
+        cells = step.create_dataset("Cells", (data.num_dofs_global,), dtype=np.int64)
+        cells[data.local_range[0] : data.local_range[1]] = np.arange(
+            data.local_range[0], data.local_range[1], dtype=np.int64
+        )
         for u in functions:
             # Pad array to 3D if vector space with 2 components
             array = np.zeros(
@@ -215,6 +223,16 @@ def write_hdf5_adios(
         count=[data.num_dofs_local, data.points.shape[1]],
     )
     outfile.Put(pointvar, data.points_out)
+    cells = np.arange(data.local_range[0], data.local_range[1], dtype=np.int64)
+    cellvar = io.DefineVariable(
+        "Cells",
+        cells,
+        shape=[data.num_dofs_global],
+        start=[data.local_range[0]],
+        count=[data.num_dofs_local],
+    )
+    outfile.Put(cellvar, cells)
+
     for u in functions:
         array = np.zeros(
             (data.num_dofs_local, data.bs if data.bs != 2 else 3), dtype=u.x.array.dtype
