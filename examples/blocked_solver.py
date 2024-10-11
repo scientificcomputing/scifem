@@ -61,11 +61,16 @@
 #
 #
 
+import logging
 from mpi4py import MPI
 import numpy as np
 import ufl
 import dolfinx
 import scifem
+
+# Initialize logging and set log level to info
+
+logging.basicConfig(level=logging.INFO)
 
 # We create the mesh and the function spaces
 
