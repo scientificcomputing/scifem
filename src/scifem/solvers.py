@@ -210,8 +210,10 @@ class NewtonSolver:
                 self.residual_0 = residual
             relative_residual = residual / self.residual_0
 
-            logger.info(f"Newton iteration {i}"
-                 f": r (abs) = {residual} (tol = {atol}), r (rel) = {relative_residual} (tol = {rtol})")
+            logger.info(
+                f"Newton iteration {i}"
+                f": r (abs) = {residual} (tol = {atol}), r (rel) = {relative_residual} (tol = {rtol})"
+            )
             if relative_residual < rtol or residual < atol:
                 return i
             i += 1
