@@ -206,7 +206,7 @@ class NewtonSolver:
 
             # Compute norm of update
             residual = self.dx.norm(petsc4py.typing.NormType.NORM_2)
-            if i == 0:
+            if i == 1:
                 self.residual_0 = residual
             relative_residual = residual / self.residual_0
 
