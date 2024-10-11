@@ -212,7 +212,8 @@ class NewtonSolver:
 
             logger.info(
                 f"Newton iteration {i}"
-                f": r (abs) = {residual} (tol = {atol}), r (rel) = {relative_residual} (tol = {rtol})"
+                f": r (abs) = {residual} (tol = {atol}), "
+                f"r (rel) = {relative_residual}(tol = {rtol})"
             )
             if relative_residual < rtol or residual < atol:
                 return i
