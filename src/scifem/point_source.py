@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from .utils import unroll_dofmap
+from packaging.version import Version
 from mpi4py import MPI
 from petsc4py import PETSc
 
@@ -13,6 +13,8 @@ import dolfinx.fem.petsc
 import numpy as np
 import numpy.typing as npt
 import ufl
+
+from .utils import unroll_dofmap
 
 __all__ = ["PointSource"]
 
@@ -76,7 +78,7 @@ class PointSource:
                 )
             )
             self._points = np.array(self._points).reshape(-1, 3)
-        elif dolfinx.__version__ >= "0.9.0.0":
+        elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
             collision_data = dolfinx.cpp.geometry.determine_point_ownership(
                 mesh._cpp_object, self._input_points, tol
             )
