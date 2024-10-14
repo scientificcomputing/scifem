@@ -8,6 +8,8 @@ import numpy as np
 from petsc4py import PETSc
 import ufl
 import dolfinx
+import petsc4py.typing
+
 
 __all__ = ["NewtonSolver"]
 
@@ -97,11 +99,12 @@ class NewtonSolver:
         """Set a callback function that is called after each Newton iteration."""
         self._post_solve_callback = callback
 
-    def solve(self, tol=1e-6, beta=1.0) -> int:
+    def solve(self, atol=1e-10, rtol=1e-10, beta=1.0) -> int:
         """Solve the nonlinear problem using Newton's method.
 
         Args:
-            tol: Tolerance for termination of Newton's method.
+            atol: Absolute tolerance for the update.
+            rtol: Relative tolerance for the update.
             beta: Damping parameter for the update.
 
         Returns:
@@ -202,9 +205,17 @@ class NewtonSolver:
                 self._post_solve_callback(self)
 
             # Compute norm of update
-            correction_norm = self.dx.norm(0)
-            logger.info(f"Iteration {i}: Correction norm {correction_norm}")
-            if correction_norm < tol:
+            residual = self.dx.norm(petsc4py.typing.NormType.NORM_2)
+            if i == 1:
+                self.residual_0 = residual
+            relative_residual = residual / self.residual_0
+
+            logger.info(
+                f"Newton iteration {i}"
+                f": r (abs) = {residual} (tol = {atol}), "
+                f"r (rel) = {relative_residual}(tol = {rtol})"
+            )
+            if relative_residual < rtol or residual < atol:
                 return i
             i += 1
 
