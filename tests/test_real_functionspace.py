@@ -79,13 +79,15 @@ def test_real_function_space_vector(cell_type, dtype):
         assert num_local_rows == 0
 
 
-@pytest.mark.parametrize("dtype", [PETSc.RealType])
+@pytest.mark.parametrize("dtype", [(PETSc.RealType, PETSc.ScalarType)])
 @pytest.mark.parametrize("tensor", [0, 1, 2])
 @pytest.mark.parametrize("degree", range(1, 5))
 def test_singular_poisson(tensor, degree, dtype):
     M = 25
+
+    rtype, stype = dtype
     mesh = dolfinx.mesh.create_unit_square(
-        MPI.COMM_WORLD, M, M, dolfinx.mesh.CellType.triangle, dtype=dtype
+        MPI.COMM_WORLD, M, M, dolfinx.mesh.CellType.triangle, dtype=rtype
     )
 
     if tensor == 0:
@@ -106,15 +108,15 @@ def test_singular_poisson(tensor, degree, dtype):
     pol = x[0] ** degree - 2 * x[1] ** degree
     # Compute average value of polynomial to make mean 0
     C = mesh.comm.allreduce(
-        dolfinx.fem.assemble_scalar(dolfinx.fem.form(pol * ufl.dx, dtype=dtype)), op=MPI.SUM
+        dolfinx.fem.assemble_scalar(dolfinx.fem.form(pol * ufl.dx, dtype=stype)), op=MPI.SUM
     )
-    u_scalar = pol - dolfinx.fem.Constant(mesh, dtype(C))
+    u_scalar = pol - dolfinx.fem.Constant(mesh, stype(C))
     if tensor == 0:
         u_ex = u_scalar
-        zero = dolfinx.fem.Constant(mesh, dtype(0.0))
+        zero = dolfinx.fem.Constant(mesh, stype(0.0))
     elif tensor == 1:
         u_ex = ufl.as_vector([u_scalar, -u_scalar])
-        zero = dolfinx.fem.Constant(mesh, dtype((0.0, 0.0)))
+        zero = dolfinx.fem.Constant(mesh, stype((0.0, 0.0)))
     else:
         u_ex = ufl.as_tensor(
             [
@@ -123,7 +125,7 @@ def test_singular_poisson(tensor, degree, dtype):
                 [u_scalar, 2 * u_scalar],
             ]
         )
-        zero = dolfinx.fem.Constant(mesh, dtype(((0.0, 0.0), (0.0, 0.0), (0.0, 0.0))))
+        zero = dolfinx.fem.Constant(mesh, stype(((0.0, 0.0), (0.0, 0.0), (0.0, 0.0))))
 
     dx = ufl.Measure("dx", domain=mesh)
     f = -ufl.div(ufl.grad(u_ex))
@@ -136,8 +138,8 @@ def test_singular_poisson(tensor, degree, dtype):
     L0 = ufl.inner(f, v) * dx + ufl.inner(g, v) * ufl.ds
     L1 = ufl.inner(zero, d) * dx
 
-    a = dolfinx.fem.form([[a00, a01], [a10, None]], dtype=dtype)
-    L = dolfinx.fem.form([L0, L1], dtype=dtype)
+    a = dolfinx.fem.form([[a00, a01], [a10, None]], dtype=stype)
+    L = dolfinx.fem.form([L0, L1], dtype=stype)
 
     A = dolfinx.fem.petsc.assemble_matrix_block(a)
     A.assemble()
@@ -164,10 +166,10 @@ def test_singular_poisson(tensor, degree, dtype):
     uh.x.array[: len(x_local[0])] = x_local[0]
     uh.x.scatter_forward()
 
-    error = dolfinx.fem.form(ufl.inner(u_ex - uh, u_ex - uh) * dx, dtype=dtype)
+    error = dolfinx.fem.form(ufl.inner(u_ex - uh, u_ex - uh) * dx, dtype=stype)
 
     e_local = dolfinx.fem.assemble_scalar(error)
-    tol = 1e4 * np.finfo(dtype).eps
+    tol = 1e4 * np.finfo(stype).eps
     e_global = np.sqrt(mesh.comm.allreduce(e_local, op=MPI.SUM))
     assert np.isclose(e_global, 0, atol=tol)
 

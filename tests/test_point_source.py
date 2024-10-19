@@ -50,7 +50,7 @@ def test_midpoint():
             "quadrature_rule": "custom",
         },
     )
-    ref_L = dolfinx.fem.form(v / abs(ufl.JacobianDeterminant(mesh)) * dx)
+    ref_L = dolfinx.fem.form(ufl.conj(v) / abs(ufl.JacobianDeterminant(mesh)) * dx)
     dolfinx.fem.assemble_vector(b_ref.x.array, ref_L)
     b_ref.x.scatter_reverse(dolfinx.la.InsertMode.add)
     b_ref.x.scatter_forward()
