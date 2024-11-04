@@ -188,9 +188,10 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     new_c = replacement_map[c_to_v.array]
     new_o = c_to_v.offsets.copy()
     new_c_to_v = dolfinx.graph.adjacencylist(new_c, new_o)
-    new_v_to_v = dolfinx.graph.adjacencylist(np.arange(len(sub_to_parent), dtype=np.int32))
- 
-    print(mesh.comm.rank, len(np.unique(new_c_to_v.array)), len(new_v_to_v.array))
+    new_v_to_v = dolfinx.graph.adjacencylist(np.arange(new_vertex_map.size_local+new_vertex_map.num_ghosts, dtype=np.int32))
+
+    print(new_vertex_map.size_local, new_vertex_map.num_ghosts, new_v_to_v.array.shape, len(np.unique(new_c_to_v.array)))
+
     topology = dolfinx.cpp.mesh.Topology(MPI.COMM_WORLD, mesh.topology.cell_type)
     topology.set_index_map(0, new_vertex_map)
     topology.set_index_map(mesh.topology.dim, mesh.topology.index_map(mesh.topology.dim))
@@ -212,7 +213,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
 
 
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 1, 2)
 
 
 def indicator(x):
@@ -225,10 +226,17 @@ def mapping(x):
 
 # mpirun -n 2 python3 script.py 
 new_mesh = create_periodic_mesh(mesh, indicator, mapping)
+
+c_to_v = new_mesh.topology.connectivity(2, 0)
+v_to_v = new_mesh.topology.connectivity(0, 0)
+print(c_to_v)
+
+
+#new_mesh.topology.create_entities(1)
 exit()
 
-new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
-#exit()
+
+#new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 
 # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
 #     xdmf.write_mesh(new_mesh)
