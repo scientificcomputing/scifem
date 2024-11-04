@@ -207,7 +207,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
 
 
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 7, 13)
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 26, 13)
 
 
 def indicator(x):
@@ -233,9 +233,9 @@ print(new_mesh.topology.index_map(0).size_local,new_mesh.topology.index_map(0).s
 V = dolfinx.fem.functionspace(new_mesh, ("Lagrange", 2, (new_mesh.geometry.dim, )))
 u = ufl.TrialFunction(V)
 v = ufl.TestFunction(V)
-a = ufl.inner(u, v) * ufl.dx
+a = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx + 0.1*ufl.inner(u, v) * ufl.dx
 x = ufl.SpatialCoordinate(new_mesh)
-f = ufl.as_vector([10*x[0], x[0]*ufl.sin(3*np.pi * x[1])])
+f = ufl.as_vector([10*x[0], 10**x[0]*ufl.sin(0.5*np.pi * x[1])])
 L = ufl.inner(f, v) * ufl.dx
 import dolfinx.fem.petsc
 problem = dolfinx.fem.petsc.LinearProblem(a, L, bcs=[], petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"})
