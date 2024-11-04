@@ -162,10 +162,9 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     # Check if index is already in (reduced) vertex map
     # If not, add it to a ghost list
+
     parent_global_vertices = vertex_map.local_to_global(sub_to_parent)
-    replacement_map = np.arange(num_vertices_local, dtype=np.int32)
-    # Replace original vertex by its reduced index (after removing indicator vertices)
-    replacement_map[np.arange(sub_to_parent.size)] = sub_to_parent
+    replacement_map = parent_to_sub.copy()
     new_ghosts = []
     new_owners = []
     reduced_ghosts = sub_map_without_ghosts.ghosts
@@ -178,7 +177,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
             new_owners.append(grvo)
         else:
             replacement_map[sv] = grv_pos[0,0]
-
+    assert np.all(replacement_map != -1), "Invalid replacement map"
     new_ghosts = np.hstack([reduced_ghosts, new_ghosts]).astype(np.int64)
     new_owners = np.hstack([reduced_ghost_owners, new_owners]).astype(np.int32)
     new_local_size = int(sub_map_without_ghosts.size_local)
@@ -190,7 +189,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     new_o = c_to_v.offsets.copy()
     new_c_to_v = dolfinx.graph.adjacencylist(new_c, new_o)
     new_v_to_v = dolfinx.graph.adjacencylist(np.arange(len(sub_to_parent), dtype=np.int32))
-
+ 
 
     topology = dolfinx.cpp.mesh.Topology(MPI.COMM_WORLD, mesh.topology.cell_type)
     topology.set_index_map(0, new_vertex_map)
@@ -205,6 +204,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
         cpp_mesh = dolfinx.cpp.mesh.Mesh_float32(mesh.comm, topology, geometry._cpp_object)
     else:
         raise RuntimeError(f"Unsupported dtype for mesh {mesh.geometry.x.dtype}")
+  
 
     new_mesh = dolfinx.mesh.Mesh(cpp_mesh, domain = ufl.Mesh(mesh._ufl_domain.ufl_coordinate_element()))
 
@@ -212,7 +212,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
 
 
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10,10)
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10)
 
 
 
@@ -224,23 +224,23 @@ def mapping(x):
     values[0] += 1
     return values
 
-
+# mpirun -n 5 python3 script.py
 new_mesh = create_periodic_mesh(mesh, indicator, mapping)
 new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
+#exit()
 
-exit()
 # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
 #     xdmf.write_mesh(new_mesh)
 
 # exit()
 
 
-V = dolfinx.fem.functionspace(new_mesh, ("N1curl", 2, (new_mesh.geometry.dim, )))
+V = dolfinx.fem.functionspace(new_mesh, ("Lagrange", 2, (new_mesh.geometry.dim, )))
 u = ufl.TrialFunction(V)
 v = ufl.TestFunction(V)
 a = ufl.inner(u, v) * ufl.dx
 x = ufl.SpatialCoordinate(new_mesh)
-f = ufl.as_vector([5*x[0]*ufl.sin(3*np.pi * x[0])+2*x[1], x[0]*ufl.sin(3*np.pi * x[1])])
+f = ufl.as_vector([10*x[0], x[0]*ufl.sin(3*np.pi * x[1])])
 L = ufl.inner(f, v) * ufl.dx
 import dolfinx.fem.petsc
 problem = dolfinx.fem.petsc.LinearProblem(a, L, bcs=[], petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"})
