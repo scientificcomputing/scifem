@@ -190,7 +190,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     new_c_to_v = dolfinx.graph.adjacencylist(new_c, new_o)
     new_v_to_v = dolfinx.graph.adjacencylist(np.arange(len(sub_to_parent), dtype=np.int32))
  
-
+    print(mesh.comm.rank, len(np.unique(new_c_to_v.array)), len(new_v_to_v.array))
     topology = dolfinx.cpp.mesh.Topology(MPI.COMM_WORLD, mesh.topology.cell_type)
     topology.set_index_map(0, new_vertex_map)
     topology.set_index_map(mesh.topology.dim, mesh.topology.index_map(mesh.topology.dim))
@@ -215,7 +215,6 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
 
 
-
 def indicator(x):
     return np.isclose(x[0], 0.0)
 
@@ -226,6 +225,8 @@ def mapping(x):
 
 # mpirun -n 2 python3 script.py 
 new_mesh = create_periodic_mesh(mesh, indicator, mapping)
+exit()
+
 new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 #exit()
 
