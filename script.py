@@ -83,6 +83,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     # Communicate all vertices that are shared on all procs to all other procs
     vertex_map = mesh.topology.index_map(0)
     vector = dolfinx.la.vector(vertex_map, 1, dtype=np.int32)
+    vector.array[:] = 0
     vector.array[indicator_vertices] = 1
     vector.scatter_reverse(dolfinx.la.InsertMode.add)
     vector.scatter_forward()
@@ -96,6 +97,11 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     keep_vertices[indicator_vertices] = False
     reduced_vertices = np.flatnonzero(keep_vertices)
     sub_map_without_ghosts, sub_to_parent = dolfinx.cpp.common.create_sub_index_map(mesh.topology.index_map(0), reduced_vertices, allow_owner_change=False)
+
+    # Compute reduced index map without indicator vertices
+    num_vertices_local = mesh.topology.index_map(0).size_local + mesh.topology.index_map(0).num_ghosts
+    parent_to_sub = np.full(num_vertices_local, -1, dtype=np.int32)
+    parent_to_sub[sub_to_parent] = np.arange(sub_to_parent.size, dtype=np.int32)
 
     # Only work on owned vertices for mapping   
 
@@ -121,9 +127,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     # Map closest vertex to global index
     vertex_map = mesh.topology.index_map(0)
-    global_vertices = vertex_map.local_to_global(closest_vertex)
+    global_vertices = sub_map_without_ghosts.local_to_global(parent_to_sub[closest_vertex])
 
-    
     vertex_sources, recv_vertices_per_proc = np.unique(vertex_owner.src_owner, return_counts=True)
     vertex_destinations, send_vertices_per_proc,  = np.unique(vertex_owner.dest_owners, return_counts=True)
     reverse_communicator = mesh.comm.Create_dist_graph_adjacent(vertex_sources, vertex_destinations, reorder=False)
@@ -154,43 +159,32 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     global_replacement_owner[proc_to_vertex] = recv_vertex_owner
 
 
-    # Compute reduced index map without indicator vertices
-    num_vertices_local = mesh.topology.index_map(0).size_local + mesh.topology.index_map(0).num_ghosts
-    parent_to_sub = np.full(num_vertices_local, -1, dtype=np.int32)
-    parent_to_sub[sub_to_parent] = np.arange(sub_to_parent.size, dtype=np.int32)
-
-
     # Check if index is already in (reduced) vertex map
     # If not, add it to a ghost list
-
-    parent_global_vertices = vertex_map.local_to_global(sub_to_parent)
+    sub_global_vertices = sub_map_without_ghosts.local_to_global(np.arange(sub_map_without_ghosts.size_local+sub_map_without_ghosts.num_ghosts))
     replacement_map = parent_to_sub.copy()
-    new_ghosts = []
-    new_owners = []
-    reduced_ghosts = sub_map_without_ghosts.ghosts
-    reduced_ghost_owners = sub_map_without_ghosts.owners
-    for grv, grvo, sv in zip(global_replacement_vertex, global_replacement_owner, indicator_vertices, strict=True):
-        grv_pos = np.argwhere(parent_global_vertices == grv)
-        if grv_pos.shape[0] == 0:
-            replacement_map[sv] = sub_map_without_ghosts.size_local +  len(reduced_ghosts) + len(new_ghosts)
-            new_ghosts.append(grv)
-            new_owners.append(grvo)
+    reduced_ghosts = sub_map_without_ghosts.ghosts.copy()
+    reduced_ghost_owners = sub_map_without_ghosts.owners.copy()
+    c_to_v = mesh.topology.connectivity(mesh.topology.dim, 0)
+    for i in range(len(indicator_vertices)):
+        existing_pos = np.argwhere(sub_global_vertices == global_replacement_vertex[i])
+        if existing_pos.shape[0] == 0:
+            replacement_map[indicator_vertices[i]] = sub_map_without_ghosts.size_local +  len(reduced_ghosts)
+            reduced_ghosts = np.hstack([reduced_ghosts, [global_replacement_vertex[i]]])
+            reduced_ghost_owners = np.hstack([reduced_ghost_owners, [global_replacement_owner[i]]])
         else:
-            replacement_map[sv] = grv_pos[0,0]
-    assert np.all(replacement_map != -1), "Invalid replacement map"
-    new_ghosts = np.hstack([reduced_ghosts, new_ghosts]).astype(np.int64)
-    new_owners = np.hstack([reduced_ghost_owners, new_owners]).astype(np.int32)
-    new_local_size = int(sub_map_without_ghosts.size_local)
-    new_vertex_map = dolfinx.common.IndexMap(mesh.comm, new_local_size,  new_ghosts, new_owners)
+            replacement_map[indicator_vertices[i]] = existing_pos[0,0]
 
+    assert np.all(replacement_map != -1), "Invalid replacement map"
+
+    new_local_size = int(sub_map_without_ghosts.size_local)
+    new_vertex_map = dolfinx.common.IndexMap(mesh.comm, new_local_size,  reduced_ghosts.astype(np.int64), reduced_ghost_owners.astype(np.int32))
     # Convert old vertex_to_dofmap to reduced set
     c_to_v = mesh.topology.connectivity(mesh.topology.dim, 0)
     new_c = replacement_map[c_to_v.array]
     new_o = c_to_v.offsets.copy()
     new_c_to_v = dolfinx.graph.adjacencylist(new_c, new_o)
     new_v_to_v = dolfinx.graph.adjacencylist(np.arange(new_vertex_map.size_local+new_vertex_map.num_ghosts, dtype=np.int32))
-
-    print(new_vertex_map.size_local, new_vertex_map.num_ghosts, new_v_to_v.array.shape, len(np.unique(new_c_to_v.array)))
 
     topology = dolfinx.cpp.mesh.Topology(MPI.COMM_WORLD, mesh.topology.cell_type)
     topology.set_index_map(0, new_vertex_map)
@@ -213,7 +207,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
 
 
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 1, 2)
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 7, 13)
 
 
 def indicator(x):
@@ -226,16 +220,8 @@ def mapping(x):
 
 # mpirun -n 2 python3 script.py 
 new_mesh = create_periodic_mesh(mesh, indicator, mapping)
-
-c_to_v = new_mesh.topology.connectivity(2, 0)
-v_to_v = new_mesh.topology.connectivity(0, 0)
-print(c_to_v)
-
-
-#new_mesh.topology.create_entities(1)
-exit()
-
-
+print(new_mesh.topology.index_map(0).size_local,new_mesh.topology.index_map(0).size_global)
+#exit()
 #new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 
 # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
