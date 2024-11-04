@@ -212,7 +212,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
 
 
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10)
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
 
 
 
@@ -224,7 +224,7 @@ def mapping(x):
     values[0] += 1
     return values
 
-# mpirun -n 5 python3 script.py
+# mpirun -n 2 python3 script.py 
 new_mesh = create_periodic_mesh(mesh, indicator, mapping)
 new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 #exit()
