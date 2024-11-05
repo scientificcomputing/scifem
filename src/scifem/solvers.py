@@ -208,7 +208,7 @@ class NewtonSolver:
             residual = self.dx.norm(petsc4py.typing.NormType.NORM_2)
             if i == 1:
                 self.residual_0 = residual
-            relative_residual = residual / self.residual_0
+            relative_residual = residual / max(self.residual_0, atol)
 
             logger.info(
                 f"Newton iteration {i}"
