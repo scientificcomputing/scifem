@@ -99,7 +99,7 @@ class NewtonSolver:
         """Set a callback function that is called after each Newton iteration."""
         self._post_solve_callback = callback
 
-    def solve(self, atol=1e-10, rtol=1e-10, beta=1.0) -> int:
+    def solve(self, atol=1e-6, rtol=1e-6, beta=1.0) -> int:
         """Solve the nonlinear problem using Newton's method.
 
         Args:
