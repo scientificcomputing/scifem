@@ -81,6 +81,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     geometry = mesh.geometry._cpp_object
     topology = mesh.topology
+    num_vertices = dolfinx.cpp.mesh.cell_num_vertices(mesh.topology.cell_type)
+
 
     mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim-1)
     mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
@@ -111,6 +113,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     num_vertices_local = mesh.topology.index_map(0).size_local + mesh.topology.index_map(0).num_ghosts
     parent_to_sub = np.full(num_vertices_local, -1, dtype=np.int32)
     parent_to_sub[sub_to_parent] = np.arange(sub_to_parent.size, dtype=np.int32)
+
+
 
     # Only work on owned vertices for mapping   
 
@@ -180,7 +184,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     cell_map = mesh.topology.index_map(mesh.topology.dim)
     cell_owners = get_ownership(cell_map)
-    vertex_owners = get_ownership(vertex_map)
+    vertex_owners = get_ownership(sub_map_without_ghosts)
     node_owners = get_ownership(geom_im)
 
     # Get vertex and geometry dofs to send
@@ -192,11 +196,9 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
         con_ext_facets = np.intersect1d(connected_facets, exterior_facets)
         con_ext_cells = dolfinx.mesh.compute_incident_entities(mesh.topology, con_ext_facets, mesh.topology.dim-1, mesh.topology.dim)
         for  cell in con_ext_cells:
-            # If cell is not owned by the process the vertex came from
-            if cell_owners[cell] != vertex_owner.dest_cells[i]:
-                new_ghost_cells.append(cell)
-                num_cells_per_proc[i] += 1
-                new_cell_topology_dm.extend(c_to_v.links(cell))
+            new_ghost_cells.append(cell)
+            num_cells_per_proc[i] += 1
+            new_cell_topology_dm.extend(c_to_v.links(cell))
 
     new_cell_geom_dm = geom_dm[new_ghost_cells]
     new_cell_topology_dm = np.asarray(new_cell_topology_dm, dtype=np.int32)
@@ -204,9 +206,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     # Map to global indices
     gl_new_ghost_cells = cell_map.local_to_global(np.array(new_ghost_cells, dtype=np.int32))
     gl_new_cell_topology_dm = sub_map_without_ghosts.local_to_global(parent_to_sub[new_cell_topology_dm.reshape(-1)])
-    gl_new_cell_geom_dm = geom_im.local_to_global(new_cell_geom_dm.reshape(-1))
+    #gl_new_cell_geom_dm = geom_im.local_to_global(new_cell_geom_dm.reshape(-1))
     cell_owners = cell_owners[new_ghost_cells]
-
     # Send ghost cells to process that has taken over vertex
     recv_num_cells = np.zeros_like(recv_vertices_per_proc, dtype=np.int32)
     reverse_communicator.Neighbor_alltoall(num_cells_per_proc, recv_num_cells)
@@ -231,7 +232,6 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     new_cell_map = dolfinx.common.IndexMap(mesh.comm, cell_map.size_local,  all_cell_ghosts, all_cell_owners)
 
     # Send dofmaps for topology
-    num_vertices = dolfinx.cpp.mesh.cell_num_vertices(mesh.topology.cell_type)
     new_top_dm_on_proc = np.empty(num_vertices*recv_num_cells.sum(), dtype=np.int64)
     send_top_msg = [gl_new_cell_topology_dm, num_vertices*num_cells_per_proc, MPI.INT64_T]
     recv_top_msg = [new_top_dm_on_proc, num_vertices*recv_num_cells, MPI.INT64_T]
@@ -239,7 +239,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     # Send ownership of vertices
     top_dm_ownership = np.empty(num_vertices*recv_num_cells.sum(), dtype=np.int32)
-    send_top_omsg = [vertex_owners[gl_new_cell_topology_dm], num_vertices*num_cells_per_proc, MPI.INT32_T]
+    send_top_omsg = [vertex_owners[parent_to_sub[new_cell_topology_dm.reshape(-1)]], num_vertices*num_cells_per_proc, MPI.INT32_T]
     recv_top_omsg = [top_dm_ownership, num_vertices*recv_num_cells, MPI.INT32_T]
     reverse_communicator.Neighbor_alltoallv(send_top_omsg, recv_top_omsg)
 
@@ -253,56 +253,46 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     new_ghost_pos = new_local_size + sub_map_without_ghosts.num_ghosts
     local_ghost_indexing = new_ghost_pos + np.arange(len(new_ghost_vertices))
     local_dm[local_dm == -1] = local_ghost_indexing[inverse_map]
+
+    
     new_ghosts = np.hstack([sub_map_without_ghosts.ghosts,new_ghost_vertices]).astype(np.int64)
     new_owners = np.hstack([sub_map_without_ghosts.owners, new_ghost_owners]).astype(np.int32)
-
 
     # Check if index is already in (reduced) vertex map
     local_replacement_vertex = sub_map_without_ghosts.global_to_local(global_replacement_vertex)
     is_local_indicator = local_replacement_vertex != -1
     existing_vertices = np.flatnonzero(is_local_indicator)
+    new_vertex_map = dolfinx.common.IndexMap(mesh.comm, new_local_size,  new_ghosts, new_owners)
+
 
     # Create replacement map
     replacement_map = parent_to_sub.copy()
+
     # Replace existing vertices
     replacement_map[indicator_vertices[existing_vertices]] = local_replacement_vertex[existing_vertices]
 
     # For new ghosts, add the to replacement map
     is_new_replacement = np.invert(is_local_indicator)
     replacement_ghosts = global_replacement_vertex[is_new_replacement]
+
     assert np.isin(replacement_ghosts, new_ghosts).all(), "Replacement ghost not in new ghost list"
     if len(replacement_ghosts) > 0:
         local_replacement_position = (new_ghosts==replacement_ghosts[:, None]).argmax(1)
-        replacement_map[indicator_vertices[is_new_replacement]] =local_replacement_position
+        replacement_map[indicator_vertices[is_new_replacement]] = new_local_size + local_replacement_position
 
-    
-    new_vertex_map = dolfinx.common.IndexMap(mesh.comm, new_local_size,  new_ghosts, new_owners)
-
-    #  num_nodes = mesh.geometry.dofmap.shape[1]
-    # new_geom_dm_on_proc = np.empty(num_nodes*recv_num_cells.sum(), dtype=np.int64)
-    # send_geom_msg = [gl_new_cell_geom_dm, num_nodes*num_cells_per_proc, MPI.INT64_T]
-    # recv_geom_msg = [new_geom_dm_on_proc, num_nodes*recv_num_cells, MPI.INT64_T]
-    # reverse_communicator.Neighbor_alltoallv(send_geom_msg, recv_geom_msg)
-
-    #local_geom_dm = geom_im.global_to_local(new_geom_dm_on_proc)
-    # new_local_geometry = new_geom_dm_on_proc[local_geom_dm  == -1]
-    # new_node_owners = top_dm_ownership[local_dm == 1]
- 
  
     # Convert old vertex_to_dofmap to reduced set
     c_to_v = mesh.topology.connectivity(mesh.topology.dim, 0)
-    new_c = replacement_map[c_to_v.array]
-    new_o = c_to_v.offsets.copy()
-    new_c_to_v = dolfinx.graph.adjacencylist(new_c, new_o)
+    new_c = replacement_map[c_to_v.array].reshape(-1, num_vertices)
+    extra_dm = local_dm.reshape(-1, num_vertices)[ghost_pos]
+
+    new_c_to_v = dolfinx.graph.adjacencylist(np.vstack([new_c, extra_dm]))
     new_v_to_v = dolfinx.graph.adjacencylist(np.arange(new_vertex_map.size_local+new_vertex_map.num_ghosts, dtype=np.int32))
     assert (new_c_to_v.array < new_vertex_map.size_local + new_vertex_map.num_ghosts).all(), "Cell to vertex map is out of bounds"
-)
-
-    # print(new_vertex_map.size_local, new_vertex_map.ghosts, new_vertex_map.owners, new_vertex_map.size_global, new_vertex_map.local_range)
-    # exit()
+ 
     topology = dolfinx.cpp.mesh.Topology(MPI.COMM_WORLD, mesh.topology.cell_type)
     topology.set_index_map(0, new_vertex_map)
-    topology.set_index_map(mesh.topology.dim, mesh.topology.index_map(mesh.topology.dim))
+    topology.set_index_map(mesh.topology.dim, new_cell_map)
     topology.set_connectivity(new_v_to_v, 0,0)
     topology.set_connectivity(new_c_to_v, mesh.topology.dim, 0)
     c_el = dolfinx.fem.coordinate_element(mesh._ufl_domain.ufl_coordinate_element().basix_element)
@@ -321,7 +311,16 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
 
 
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 26, 13)
+# mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 1, cell_type=dolfinx.mesh.CellType.quadrilateral)#, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
+
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3,2,ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
+cell_marker = np.arange(*mesh.topology.index_map(mesh.topology.dim).local_range , dtype=np.int32)
+cell_ind = np.arange(len(cell_marker), dtype=np.int32)
+ct = dolfinx.mesh.meshtags(mesh, mesh.topology.dim, cell_ind, cell_marker)
+with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
+    xdmf.write_mesh(mesh)
+    xdmf.write_meshtags(ct, mesh.geometry)
+
 
 
 def indicator(x):
@@ -334,14 +333,15 @@ def mapping(x):
 
 # mpirun -n 2 python3 script.py 
 new_mesh = create_periodic_mesh(mesh, indicator, mapping)
+with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
+    xdmf.write_mesh(new_mesh)
 
-#exit()
+
 new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 
 # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
 #     xdmf.write_mesh(new_mesh)
 
-exit()
 
 
 V = dolfinx.fem.functionspace(new_mesh, ("Lagrange", 2, (new_mesh.geometry.dim, )))
