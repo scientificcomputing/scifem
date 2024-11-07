@@ -110,6 +110,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     # Find facets through indicator function and incident vertices
     indicator_facets = dolfinx.mesh.locate_entities_boundary(mesh, mesh.topology.dim - 1, indicator)
+
     indicator_vertices = dolfinx.mesh.compute_incident_entities(mesh.topology, indicator_facets, mesh.topology.dim -1, 0)
 
     # Communicate all vertices that are shared on all procs to all other procs
@@ -146,11 +147,16 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     # Get vertices on process that has a cell colliding with point
     eps = 100*np.finfo(mesh.geometry.x.dtype).eps
+    
+    # Need to change ghosting here, as we have to add shared facet from 
+    # process that removes a vertex to the process that takes over the vertex.
+    # In some cases the process that had the vertex will only contain it as a vertex (and not through a facet)
+    # I think one can just go through facets, and loop over vertices multiple times, as we do right now anyhow
     vertex_owner = dolfinx.cpp.geometry.determine_point_ownership(mesh._cpp_object, mapped_vertex_coords, eps)
     assert np.all(vertex_owner.dest_owners[:-1] <= vertex_owner.dest_owners[1:]), "Vertex owners are not sorted"
 
     recv_coords = vertex_owner.dest_points
-    recv_vertices =  dolfinx.mesh.compute_incident_entities(mesh.topology, vertex_owner.dest_cells, mesh.topology.dim, 0)
+    recv_vertices = dolfinx.mesh.compute_incident_entities(mesh.topology, vertex_owner.dest_cells, mesh.topology.dim, 0)
     bb_tree = dolfinx.geometry.bb_tree(mesh,0, recv_vertices)
     mid_tree = dolfinx.geometry.create_midpoint_tree(mesh, 0, recv_vertices)
     closest_vertex = dolfinx.geometry.compute_closest_entity(bb_tree, mid_tree, mesh, recv_coords)
@@ -215,7 +221,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
             new_ghost_cells.append(cell)
             num_cells_per_proc[i] += 1
             new_cell_topology_dm.extend(c_to_v.links(cell))
-
+        
 
     new_cell_topology_dm = np.asarray(new_cell_topology_dm, dtype=np.int32)
 
@@ -299,7 +305,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     mapped_midpoint_owner = dolfinx.cpp.geometry.determine_point_ownership(mesh._cpp_object, mapping_facet_midpoints, eps)
     midpoint_cells = dolfinx.fem.compute_integration_domains(dolfinx.fem.IntegralType.exterior_facet, mesh.topology, indicator_facets, mesh.topology.dim-1)[::2]
     midpoint_cells_as_global = cell_map.local_to_global(midpoint_cells)
- 
+  
     # Pack dofmap for each of these cells, replacing the vertices that are removed with mapped vertices
     local_ghosted_map = c_to_v.array.copy().reshape(-1, num_vertices)[midpoint_cells]
     extended_map = replacement_map[local_ghosted_map].reshape(-1)
@@ -345,7 +351,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     ext_cell_msg = [send_ext_cells, num_ext_send_cells, MPI.INT64_T]
     ext_recv_cells = [np.empty(num_ext_recv_cells.sum(), dtype=np.int64), num_ext_recv_cells, MPI.INT64_T]
     remove_to_owner_comm.Neighbor_alltoallv(ext_cell_msg, ext_recv_cells)
-
+  
     # Communicate owners of potential new ghost cells
     ext_cello_msg = [np.full_like(send_ext_cells, mesh.comm.rank, dtype=np.int32), num_ext_send_cells, MPI.INT32_T]
     ext_recv_cowner = [np.empty(num_ext_recv_cells.sum(), dtype=np.int32), num_ext_recv_cells, MPI.INT32_T]
@@ -387,10 +393,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     # Check if received cells are already in cell map
     recv_ext_ghosts = cell_map.global_to_local(ext_recv_cells[0])
     ext_ghost_pos = np.flatnonzero(recv_ext_ghosts == -1)
-
     all_cell_ghosts = np.hstack([cell_map.ghosts, new_cells_on_proc[ghost_pos], ext_recv_cells[0][ext_ghost_pos]]).astype(np.int64)
     all_cell_owners = np.hstack([cell_map.owners, new_owners_on_proc[ghost_pos], ext_recv_cowner[0][ext_ghost_pos]]).astype(np.int32)
-
     assert (all_cell_owners != mesh.comm.rank).all(), "Ghosted cells on owned process"
     new_cell_map = dolfinx.common.IndexMap(mesh.comm, cell_map.size_local,  all_cell_ghosts, all_cell_owners)
 
@@ -509,7 +513,11 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
 # mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 1, cell_type=dolfinx.mesh.CellType.quadrilateral)#, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 100, 100, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
+# Fails on 7 proc, missing ghost
+#mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 100, 100, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
+
+# Fails on 2 proc, missing mid cell 
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 5, 5, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
 mesh.topology.create_connectivity(0,2)
 cell_marker = np.arange(mesh.topology.index_map(mesh.topology.dim).size_local, dtype=np.int32)#np.arange(*mesh.topology.index_map(mesh.topology.dim).local_range , dtype=np.int32)
