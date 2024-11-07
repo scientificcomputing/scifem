@@ -579,7 +579,7 @@ F += -ufl.inner(ufl.jump(v, n), ufl.avg(ufl.grad(u))) * ufl.dS
 F += -ufl.inner(ufl.avg(ufl.grad(v)), ufl.jump(u, n)) * ufl.dS
 F += +gamma / h_avg * ufl.inner(ufl.jump(v, n), ufl.jump(u, n)) * ufl.dS
 
-F += ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx - ufl.inner(n, ufl.grad(u)) * v * ufl.ds
+F += -ufl.inner(n, ufl.grad(u)) * v * ufl.ds
 
 F += -ufl.inner(n, ufl.grad(v)) * u * ufl.ds + alpha / h * ufl.inner(u, v) * ufl.ds
 F -= -ufl.inner(n, ufl.grad(v)) * u_ex * ufl.ds + alpha / h * ufl.inner(u_ex, v) * ufl.ds
