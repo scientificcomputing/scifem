@@ -348,7 +348,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     # Communicate owners of potential new ghost cells
     ext_cello_msg = [np.full_like(send_ext_cells, mesh.comm.rank, dtype=np.int32), num_ext_send_cells, MPI.INT32_T]
-    ext_recv_cowner = [np.empty(num_ext_recv_cells.sum(), dtype=np.int64), num_ext_recv_cells, MPI.INT32_T]
+    ext_recv_cowner = [np.empty(num_ext_recv_cells.sum(), dtype=np.int32), num_ext_recv_cells, MPI.INT32_T]
     remove_to_owner_comm.Neighbor_alltoallv(ext_cello_msg, ext_recv_cowner)
 
     # Communicate dofmap and ownership info
@@ -390,6 +390,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     all_cell_ghosts = np.hstack([cell_map.ghosts, new_cells_on_proc[ghost_pos], ext_recv_cells[0][ext_ghost_pos]]).astype(np.int64)
     all_cell_owners = np.hstack([cell_map.owners, new_owners_on_proc[ghost_pos], ext_recv_cowner[0][ext_ghost_pos]]).astype(np.int32)
+
     assert (all_cell_owners != mesh.comm.rank).all(), "Ghosted cells on owned process"
     new_cell_map = dolfinx.common.IndexMap(mesh.comm, cell_map.size_local,  all_cell_ghosts, all_cell_owners)
 
