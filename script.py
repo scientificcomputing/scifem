@@ -185,7 +185,6 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     cell_map = mesh.topology.index_map(mesh.topology.dim)
     cell_owners = get_ownership(cell_map)
     vertex_owners = get_ownership(sub_map_without_ghosts)
-    node_owners = get_ownership(geom_im)
 
     # Get vertex and geometry dofs to send
     geom_dm = mesh.geometry.dofmap
@@ -200,13 +199,13 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
             num_cells_per_proc[i] += 1
             new_cell_topology_dm.extend(c_to_v.links(cell))
 
-    new_cell_geom_dm = geom_dm[new_ghost_cells]
+
     new_cell_topology_dm = np.asarray(new_cell_topology_dm, dtype=np.int32)
 
     # Map to global indices
     gl_new_ghost_cells = cell_map.local_to_global(np.array(new_ghost_cells, dtype=np.int32))
     gl_new_cell_topology_dm = sub_map_without_ghosts.local_to_global(parent_to_sub[new_cell_topology_dm.reshape(-1)])
-    #gl_new_cell_geom_dm = geom_im.local_to_global(new_cell_geom_dm.reshape(-1))
+    
     cell_owners = cell_owners[new_ghost_cells]
     # Send ghost cells to process that has taken over vertex
     recv_num_cells = np.zeros_like(recv_vertices_per_proc, dtype=np.int32)
@@ -246,17 +245,17 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     # Compute the vertex ghosts
     local_dm = sub_map_without_ghosts.global_to_local(new_top_dm_on_proc)
-    shared_facet_vertices = new_top_dm_on_proc[local_dm == -1]
+    new_vertex_indicator = local_dm == -1
+    shared_facet_vertices = new_top_dm_on_proc[new_vertex_indicator]
     new_ghost_vertices, pos, inverse_map = np.unique(shared_facet_vertices, return_index=True, return_inverse=True)    
-    new_ghost_owners = top_dm_ownership[local_dm == -1][pos]
+    new_ghost_owners = top_dm_ownership[new_vertex_indicator][pos]
     new_local_size = int(sub_map_without_ghosts.size_local)
     new_ghost_pos = new_local_size + sub_map_without_ghosts.num_ghosts
     local_ghost_indexing = new_ghost_pos + np.arange(len(new_ghost_vertices))
-    local_dm[local_dm == -1] = local_ghost_indexing[inverse_map]
-
-    
+    local_dm[new_vertex_indicator] = local_ghost_indexing[inverse_map]
     new_ghosts = np.hstack([sub_map_without_ghosts.ghosts,new_ghost_vertices]).astype(np.int64)
     new_owners = np.hstack([sub_map_without_ghosts.owners, new_ghost_owners]).astype(np.int32)
+    assert (new_owners != mesh.comm.rank).all()
 
     # Check if index is already in (reduced) vertex map
     local_replacement_vertex = sub_map_without_ghosts.global_to_local(global_replacement_vertex)
@@ -267,7 +266,6 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     # Create replacement map
     replacement_map = parent_to_sub.copy()
-
     # Replace existing vertices
     replacement_map[indicator_vertices[existing_vertices]] = local_replacement_vertex[existing_vertices]
 
@@ -296,7 +294,59 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     topology.set_connectivity(new_v_to_v, 0,0)
     topology.set_connectivity(new_c_to_v, mesh.topology.dim, 0)
     c_el = dolfinx.fem.coordinate_element(mesh._ufl_domain.ufl_coordinate_element().basix_element)
-    geometry = dolfinx.mesh.create_geometry(mesh.geometry.index_map(), mesh.geometry.dofmap, c_el._cpp_object, mesh.geometry.x[:, :mesh.geometry.dim].copy(),  mesh.geometry.input_global_indices)
+
+    # Extend geometry with extra cells
+    new_cell_geom_dm = geom_dm[new_ghost_cells]
+    node_owners = get_ownership(geom_im)
+    gl_new_cell_geom_dm = geom_im.local_to_global(new_cell_geom_dm.reshape(-1))
+
+    # Send potential new ghosts
+    num_nodes = geom_dm.shape[1]
+    add_geom_dm = np.empty(num_nodes*recv_num_cells.sum(), dtype=np.int64)
+    send_geom_msg = [gl_new_cell_geom_dm, num_nodes*num_cells_per_proc, MPI.INT64_T]
+    recv_geom_msg = [add_geom_dm, num_nodes*recv_num_cells, MPI.INT64_T]
+    reverse_communicator.Neighbor_alltoallv(send_geom_msg, recv_geom_msg)
+
+    # Send owners of potential new ghost nodes
+    send_geom_owners = node_owners[new_cell_geom_dm.reshape(-1)]
+    add_geom_own = np.empty(num_nodes*recv_num_cells.sum(), dtype=np.int32)
+    send_geom_msg = [send_geom_owners, num_nodes*num_cells_per_proc, MPI.INT32_T]
+    recv_geom_msg = [add_geom_own, num_nodes*recv_num_cells, MPI.INT32_T]
+    reverse_communicator.Neighbor_alltoallv(send_geom_msg, recv_geom_msg)
+
+    # Send igi for potential new nodes
+    send_igi = mesh.geometry.input_global_indices[new_cell_geom_dm.reshape(-1)]
+    recv_igi = np.empty(num_nodes*recv_num_cells.sum(), dtype=np.int64)
+    send_igi_msg = [send_igi, num_nodes*num_cells_per_proc, MPI.INT64_T]
+    recv_igi_msg = [recv_igi, num_nodes*recv_num_cells, MPI.INT64_T]
+    reverse_communicator.Neighbor_alltoallv(send_igi_msg, recv_igi_msg)
+
+    # Compute new ghost nodes
+    local_geometry_dm = geom_im.global_to_local(add_geom_dm)
+    new_local_nodes = np.flatnonzero(local_geometry_dm == -1)
+    new_ghost_nodes, gpos, ginverse_map = np.unique(add_geom_dm[new_local_nodes], return_index=True, return_inverse=True)    
+    new_ghost_owners = add_geom_own[new_local_nodes][gpos]
+    num_local_nodes = geom_im.size_local
+    new_node_pos = num_local_nodes + geom_im.num_ghosts
+    local_geometry_dm[new_local_nodes] = (new_node_pos + np.arange(len(new_ghost_nodes),dtype=np.int32))[ginverse_map]
+
+    node_coordinates = mesh.geometry.x[new_cell_geom_dm.reshape(-1)].flatten()
+    geom_coords = np.empty(num_nodes*3*recv_num_cells.sum(), dtype=mesh.geometry.x.dtype)
+    mpi_dtype = {np.float64: MPI.DOUBLE, np.float32: MPI.FLOAT}
+    send_coord_msg = [node_coordinates, num_nodes*3*num_cells_per_proc, mpi_dtype[mesh.geometry.x.dtype.type]]
+    recv_coord_msg = [geom_coords, num_nodes*3*recv_num_cells, mpi_dtype[mesh.geometry.x.dtype.type]]
+    reverse_communicator.Neighbor_alltoallv(send_coord_msg, recv_coord_msg)
+
+    extra_geom_dm = local_geometry_dm.reshape(-1, num_nodes)[ghost_pos]
+    extended_geom_ghosts = np.hstack([geom_im.ghosts, new_ghost_nodes]).astype(np.int64)
+    extended_geom_owners = np.hstack([geom_im.owners, new_ghost_owners]).astype(np.int32)
+    extra_node_coords = geom_coords.reshape(-1, 3)[gpos]
+    extended_dofmap = np.vstack([mesh.geometry.dofmap, extra_geom_dm]).astype(np.int32)
+    extended_coords = np.vstack([mesh.geometry.x, extra_node_coords]).astype(mesh.geometry.x.dtype)[:, :mesh.geometry.dim]
+    new_node_im = dolfinx.common.IndexMap(mesh.comm, num_local_nodes, extended_geom_ghosts, extended_geom_owners)
+    extended_igi = np.hstack([mesh.geometry.input_global_indices, recv_igi[gpos]]).astype(np.int64)
+
+    geometry = dolfinx.mesh.create_geometry(new_node_im, extended_dofmap, c_el._cpp_object, extended_coords, extended_igi)
     if mesh.geometry.x.dtype == np.float64:
         cpp_mesh = dolfinx.cpp.mesh.Mesh_float64(mesh.comm, topology, geometry._cpp_object)
     elif mesh.geometry.x.dtype == np.float32:
@@ -313,15 +363,13 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
 # mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 1, cell_type=dolfinx.mesh.CellType.quadrilateral)#, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3,2,ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 2,3,ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 cell_marker = np.arange(*mesh.topology.index_map(mesh.topology.dim).local_range , dtype=np.int32)
 cell_ind = np.arange(len(cell_marker), dtype=np.int32)
 ct = dolfinx.mesh.meshtags(mesh, mesh.topology.dim, cell_ind, cell_marker)
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
     xdmf.write_mesh(mesh)
     xdmf.write_meshtags(ct, mesh.geometry)
-
-
 
 def indicator(x):
     return np.isclose(x[0], 0.0)
@@ -337,6 +385,14 @@ with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
     xdmf.write_mesh(new_mesh)
 
 
+# V_out = dolfinx.fem.functionspace(new_mesh, ("DG", 2, (new_mesh.geometry.dim, )))
+# u_out = dolfinx.fem.Function(V_out)
+# u_out.interpolate(lambda x:( np.sin(2*np.pi*x[0]), x[0]))
+
+# with dolfinx.io.VTXWriter(new_mesh.comm, "u_periodic.bp", [u_out]) as writer:
+#     writer.write(0.0)
+# exit()
+
 new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 
 # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
@@ -351,6 +407,7 @@ a = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx + 0.1*ufl.inner(u, v) * ufl.dx
 x = ufl.SpatialCoordinate(new_mesh)
 f = ufl.as_vector([10*x[0], 10**x[0]*ufl.sin(0.5*np.pi * x[1])])
 L = ufl.inner(f, v) * ufl.dx
+
 import dolfinx.fem.petsc
 problem = dolfinx.fem.petsc.LinearProblem(a, L, bcs=[], petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"})
 uh = problem.solve()
@@ -359,5 +416,8 @@ uh = problem.solve()
 V_out = dolfinx.fem.functionspace(new_mesh, ("DG", 2, (new_mesh.geometry.dim, )))
 u_out = dolfinx.fem.Function(V_out)
 u_out.interpolate(uh)
+
 with dolfinx.io.VTXWriter(new_mesh.comm, "u_periodic.bp", [u_out]) as writer:
     writer.write(0.0)
+
+exit()
