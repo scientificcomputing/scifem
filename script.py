@@ -558,8 +558,6 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     return new_mesh
 
 
-# 5 proc, 26x25 failing with missing ghost 
-# 9 procs 11x10 failing with missing ghost
 N = 25
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N+1, N,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
@@ -583,7 +581,6 @@ def mapping(x):
     values[0] += 1
     return values
 
-# mpirun -n 2 python3 script.py 
 new_mesh = create_periodic_mesh(mesh, indicator, mapping)
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
     xdmf.write_mesh(new_mesh)
@@ -596,34 +593,6 @@ left_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1, in
 lfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, left_facets)
 for facet, midpoint in zip(left_facets, lfm):
     assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
-
-right_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1, lambda x: mapping(indicator(x)))
-rfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, right_facets)
-for facet,midpoint in zip(right_facets, rfm):
-    assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Right facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
-
-
-# new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
-# new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-
-# c_to_f_new = new_mesh.topology.connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
-# mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim-1)
-# c_to_f = mesh.topology.connectivity(mesh.topology.dim, mesh.topology.dim-1)
-# new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-# f_to_c_new = new_mesh.topology.connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-# new_mesh.topology.create_connectivity(new_mesh.topology.dim-1,0)
-# f_to_v_new = new_mesh.topology.connectivity(new_mesh.topology.dim-1,0)
-# if MPI.COMM_WORLD.rank == 1:
-#     print(f_to_c_new.links(5), dolfinx.mesh.compute_midpoints(new_mesh, 1, np.array([5],dtype=np.int32)))
-#     print(f_to_v_new.links(5))
-
-# V_out = dolfinx.fem.functionspace(new_mesh, ("DG", 2, (new_mesh.geometry.dim, )))
-# u_out = dolfinx.fem.Function(V_out)
-# u_out.interpolate(lambda x:( np.sin(2*np.pi*x[0]), x[0]))
-
-# with dolfinx.io.VTXWriter(new_mesh.comm, "u_periodic.bp", [u_out]) as writer:
-#     writer.write(0.0)
-# exit()
 
 new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 
