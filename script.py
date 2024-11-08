@@ -9,6 +9,18 @@ import ufl
 import numpy.typing as npt
 
 
+mpi_dtype = {np.float64: MPI.DOUBLE, np.float32: MPI.FLOAT,
+             np.int32: MPI.INT32_T, np.int64: MPI.INT64_T,
+             np.complex128: MPI.DOUBLE_COMPLEX, np.complex64: MPI.COMPLEX}
+
+
+def all_to_allv(comm, send_data, num_send_data, recv_data, num_recv_data):
+    dtype = mpi_dtype[send_data.dtype.type]
+    assert recv_data.dtype == send_data.dtype, f"Data types do not match, {recv_data.dtype} != {send_data.dtype}"
+    send_msg = [send_data, num_send_data, dtype]
+    recv_msg = [recv_data, num_recv_data, dtype]
+    comm.Neighbor_alltoallv(send_msg, recv_msg)
+
 
 def get_ownership(imap)->npt.NDArray[np.int32]:
     """
@@ -379,103 +391,95 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     org_dm_cells_losing_vertex = c_to_v.array.copy().reshape(-1, num_vertices)[cells_losing_vertex]
     renumbered_dm = replacement_map[org_dm_cells_losing_vertex].reshape(-1)
     lost_cells_dm_global = tmp_vertex_map.local_to_global(renumbered_dm)
-    lost_cells_dm_owners = tmp_vertex_ownership[lost_cells_dm_global]
+    lost_cells_dm_owners = tmp_vertex_ownership[renumbered_dm]
 
-    # Pack geometry dofmap, owners, igi and coordinates
+    # Pack dofmap,owners and igi of geometry, not in sorted by communication proc
     org_geom_dm_cells_losing_vertex = mesh.geometry.dofmap[cells_losing_vertex].reshape(-1)
     lost_geom_dm = geom_im.local_to_global(org_geom_dm_cells_losing_vertex)
     lost_geom_owner = node_owners[org_geom_dm_cells_losing_vertex]
     lost_geom_igi = mesh.geometry.input_global_indices[org_geom_dm_cells_losing_vertex]
-    lost_geom_coords = mesh.geometry.x[org_geom_dm_cells_losing_vertex].flatten()
 
-    # Compute insertion maps
+    # Compute insertion position based on cell ownership
     lost_src_ranks, num_send_lost_cells = np.unique(mapped_midpoint_owner.src_owner, return_counts=True)
     lost_cell_insert_pos = compute_insert_position(mapped_midpoint_owner.src_owner, lost_src_ranks, num_send_lost_cells)
-    lost_insert_pos_top_dm = unroll_insert_position(lost_cell_insert_pos, num_vertices)
-    lost_insert_pos_geom_dm = unroll_insert_position(lost_cell_insert_pos, num_nodes)
-    lost_insert_pos_geom_coord = unroll_insert_position(lost_cell_insert_pos, 3*num_nodes)
-
+ 
     # Pack cells data
     lost_cells_send_buffer = np.empty(len(cells_losing_vertex), dtype=np.int64)
     lost_cells_send_buffer[lost_cell_insert_pos] = cells_losing_vertex_gl
     lost_owners_send_buffer = np.empty_like(lost_cells_send_buffer, dtype=np.int32)
     lost_owners_send_buffer[lost_cell_insert_pos] = cell_owners[cells_losing_vertex]
+
     # Pack topology data
+    lost_insert_pos_top_dm = unroll_insert_position(lost_cell_insert_pos, num_vertices)
     lost_cells_dofmap_send_buffer = np.empty_like(lost_insert_pos_top_dm, dtype=np.int64)
     lost_cells_dofmap_send_buffer[lost_insert_pos_top_dm] = lost_cells_dm_global
     lost_cells_dofmap_owners_buffer = np.empty_like(lost_insert_pos_top_dm, dtype=np.int32)
     lost_cells_dofmap_owners_buffer[lost_insert_pos_top_dm] = lost_cells_dm_owners
 
 
+    lost_insert_pos_geom_dm = unroll_insert_position(lost_cell_insert_pos, num_nodes)
     lost_cells_gdofmap_send_buffer = np.empty_like(lost_insert_pos_geom_dm, dtype=np.int64)
     lost_cells_gdofmap_send_buffer[lost_insert_pos_geom_dm] =  lost_geom_dm
-    
-    send_ext_gm_owners = np.empty_like(lost_insert_pos_geom_dm, dtype=np.int32)
-    send_ext_gm_owners[lost_insert_pos_geom_dm] = lost_geom_owner
-    send_ext_igi =np.empty_like(lost_insert_pos_geom_dm, dtype=np.int64)
-    send_ext_igi[lost_insert_pos_geom_dm] = lost_geom_igi
-    send_ext_coords = np.empty_like(lost_insert_pos_geom_coord)
-    send_ext_coords[lost_insert_pos_geom_coord] = lost_geom_coords
+    lost_cells_gdofmap_owner_buffer = np.empty_like(lost_insert_pos_geom_dm, dtype=np.int32)
+    lost_cells_gdofmap_owner_buffer[lost_insert_pos_geom_dm] = lost_geom_owner
+    lost_cells_gdofmap_igi_buffer =np.empty_like(lost_insert_pos_geom_dm, dtype=np.int64)
+    lost_cells_gdofmap_igi_buffer[lost_insert_pos_geom_dm] = lost_geom_igi
+
+    xtype = mesh.geometry.x.dtype
+    xdtype = mpi_dtype[xtype.type]
+    lost_insert_pos_geom_coord = unroll_insert_position(lost_cell_insert_pos, 3*num_nodes)
+    lost_geom_coords = mesh.geometry.x[org_geom_dm_cells_losing_vertex].flatten()
+    lost_cells_coords_buffer = np.empty_like(lost_insert_pos_geom_coord, dtype=xtype)
+    lost_cells_coords_buffer[lost_insert_pos_geom_coord] = lost_geom_coords
+
     # Create communicator
     recv_lost_cells_ranks, num_recv_lost_cells = np.unique(mapped_midpoint_owner.dest_owners, return_counts=True)
-    remove_to_owner_comm = mesh.comm.Create_dist_graph_adjacent(
+    lost_cells_to_gainer_comm = mesh.comm.Create_dist_graph_adjacent(
          recv_lost_cells_ranks.tolist(), lost_src_ranks.tolist(), reorder=False
     )
-    # Communicate potential new ghost cells (shared facet)
+
+
     total_recv_lost_cells = num_recv_lost_cells.sum()
-    ext_cell_msg = [lost_cells_send_buffer, num_send_lost_cells, MPI.INT64_T]
-    ext_recv_cells = [np.empty(total_recv_lost_cells, dtype=np.int64), num_recv_lost_cells, MPI.INT64_T]
-    remove_to_owner_comm.Neighbor_alltoallv(ext_cell_msg, ext_recv_cells)
+    lost_cells_recv_buffer = np.empty(total_recv_lost_cells, dtype=np.int64)
+
+    # Communicate cells
+    all_to_allv(lost_cells_to_gainer_comm, lost_cells_send_buffer, num_send_lost_cells, lost_cells_recv_buffer, num_recv_lost_cells)
 
     # Communicate owners of potential new ghost cells
-    ext_cello_msg = [lost_owners_send_buffer, num_send_lost_cells, MPI.INT32_T]
-    ext_recv_cowner = [np.empty(total_recv_lost_cells, dtype=np.int32), num_recv_lost_cells, MPI.INT32_T]
-    remove_to_owner_comm.Neighbor_alltoallv(ext_cello_msg, ext_recv_cowner)
+    lost_cells_owners_recv_buffer = np.empty_like(lost_cells_recv_buffer, dtype=np.int32)
+    all_to_allv(lost_cells_to_gainer_comm, lost_owners_send_buffer, num_send_lost_cells, lost_cells_owners_recv_buffer, num_recv_lost_cells)
 
     # Communicate dofmap and ownership info
-    ext_topdm_msg = [lost_cells_dofmap_send_buffer, num_send_lost_cells*num_vertices, MPI.INT64_T]
-    ext_recv_top_dm_msg = [np.empty(total_recv_lost_cells*num_vertices, dtype=np.int64), num_recv_lost_cells*num_vertices, MPI.INT64_T]
-    remove_to_owner_comm.Neighbor_alltoallv(ext_topdm_msg, ext_recv_top_dm_msg)
+    lost_cells_dm_recv_buffer = np.empty((total_recv_lost_cells,num_vertices), dtype=np.int64)
+    all_to_allv(lost_cells_to_gainer_comm, lost_cells_dofmap_send_buffer, num_send_lost_cells*num_vertices, lost_cells_dm_recv_buffer, num_recv_lost_cells*num_vertices)
+    lost_cells_dm_owner_recv_buffer = np.empty_like(lost_cells_dm_recv_buffer, dtype=np.int32)
+    all_to_allv(lost_cells_to_gainer_comm, lost_cells_dofmap_owners_buffer, num_send_lost_cells*num_vertices, lost_cells_dm_owner_recv_buffer, num_recv_lost_cells*num_vertices)
 
-    ext_topdmo_msg = [lost_cells_dofmap_owners_buffer, num_send_lost_cells*num_vertices, MPI.INT32_T]
-    ext_recv_top_dmo_msg = [np.empty(total_recv_lost_cells*num_vertices, dtype=np.int32), num_recv_lost_cells*num_vertices, MPI.INT32_T]
-    remove_to_owner_comm.Neighbor_alltoallv(ext_topdmo_msg, ext_recv_top_dmo_msg)
 
     # Communicate geometry dofmap, igi, owners and coordinates
-    ext_geom_msg = [lost_cells_gdofmap_send_buffer, num_send_lost_cells*num_nodes, MPI.INT64_T]
-    ext_recv_geom_msg = [np.empty(total_recv_lost_cells*num_nodes, dtype=np.int64), num_recv_lost_cells*num_nodes, MPI.INT64_T]
-    remove_to_owner_comm.Neighbor_alltoallv(ext_geom_msg, ext_recv_geom_msg)
+    lost_cells_gdofmap_recv_buffer = np.empty((total_recv_lost_cells,num_nodes), dtype=np.int64)
+    all_to_allv(lost_cells_to_gainer_comm, lost_cells_gdofmap_send_buffer, num_send_lost_cells*num_nodes, lost_cells_gdofmap_recv_buffer, num_recv_lost_cells*num_nodes)
+    lost_cells_gdofmap_owner_recv_buffer = np.empty_like(lost_cells_gdofmap_recv_buffer, dtype=np.int32)
+    all_to_allv(lost_cells_to_gainer_comm, lost_cells_gdofmap_owner_buffer, num_send_lost_cells*num_nodes, lost_cells_gdofmap_owner_recv_buffer, num_recv_lost_cells*num_nodes)
+    lost_cells_igi_recv_buffer = np.empty_like(lost_cells_gdofmap_recv_buffer, dtype=np.int64)
+    all_to_allv(lost_cells_to_gainer_comm, lost_cells_gdofmap_igi_buffer, num_send_lost_cells*num_nodes, lost_cells_igi_recv_buffer, num_recv_lost_cells*num_nodes)
 
-    ext_geomo_msg = [send_ext_gm_owners, num_send_lost_cells*num_nodes, MPI.INT32_T]
-    ext_recv_geomo_msg = [np.empty(total_recv_lost_cells*num_nodes, dtype=np.int32), num_recv_lost_cells*num_nodes, MPI.INT32_T]
-    remove_to_owner_comm.Neighbor_alltoallv(ext_geomo_msg, ext_recv_geomo_msg)
+    lost_cells_node_coords_recv_buffer = np.empty((total_recv_lost_cells, num_nodes, 3), dtype=mesh.geometry.x.dtype)   
+    all_to_allv(lost_cells_to_gainer_comm, lost_cells_coords_buffer, num_send_lost_cells*num_nodes*3, lost_cells_node_coords_recv_buffer, num_recv_lost_cells*num_nodes*3)
 
-    recv_ext_igi = np.empty(num_nodes*total_recv_lost_cells, dtype=np.int64)
-    send_ext_igi_msg = [send_ext_igi, num_nodes*num_send_lost_cells, MPI.INT64_T]
-    recv_ext_igi_msg = [recv_ext_igi, num_nodes*num_recv_lost_cells, MPI.INT64_T]
-    remove_to_owner_comm.Neighbor_alltoallv(send_ext_igi_msg, recv_ext_igi_msg)
-
-
-    mpi_dtype = {np.float64: MPI.DOUBLE, np.float32: MPI.FLOAT}
-
-    xdtype = mpi_dtype[mesh.geometry.x.dtype.type]
-    recv_ext_coords = np.empty(3*num_nodes*total_recv_lost_cells, dtype=mesh.geometry.x.dtype)
-    send_ext_coords_msg = [send_ext_coords, 3*num_nodes*num_send_lost_cells, xdtype]
-    recv_ext_coords_msg = [recv_ext_coords, 3*num_nodes*num_recv_lost_cells, xdtype]
-    remove_to_owner_comm.Neighbor_alltoallv(send_ext_coords_msg, recv_ext_coords_msg)
 
     # Check if received cells are already in cell map
-    recv_ext_ghosts = cell_map.global_to_local(ext_recv_cells[0])
+    recv_ext_ghosts = cell_map.global_to_local(lost_cells_recv_buffer)
     ext_cell_filter = np.flatnonzero(recv_ext_ghosts == -1)
-    ext_new_ghosts, ext_ghost_pos = np.unique(ext_recv_cells[0][ext_cell_filter], return_index=True) 
+    ext_new_ghosts, ext_ghost_pos = np.unique(lost_cells_recv_buffer[ext_cell_filter], return_index=True) 
 
     assert len(np.intersect1d(new_cells_on_proc[cell_filter][ghost_pos], ext_new_ghosts)) == 0, "Ghost in both additional maps"
     all_cell_ghosts = np.hstack([cell_map.ghosts, unique_cells ,ext_new_ghosts]).astype(np.int64)
-    all_cell_owners = np.hstack([cell_map.owners, new_owners_on_proc[cell_filter][ghost_pos], ext_recv_cowner[0][ext_cell_filter][ext_ghost_pos]]).astype(np.int32)
+    all_cell_owners = np.hstack([cell_map.owners, new_owners_on_proc[cell_filter][ghost_pos], lost_cells_owners_recv_buffer[ext_cell_filter][ext_ghost_pos]]).astype(np.int32)
     assert (all_cell_owners != mesh.comm.rank).all(), "Ghosted cells on owned process"
     
-    new_ext_cells_dm = ext_recv_top_dm_msg[0].reshape(-1, num_vertices)[ext_cell_filter][ext_ghost_pos].reshape(-1)
-    new_ext_cells_ow =  ext_recv_top_dmo_msg[0].reshape(-1, num_vertices)[ext_cell_filter][ext_ghost_pos].reshape(-1)
+    new_ext_cells_dm = lost_cells_dm_recv_buffer.reshape(-1, num_vertices)[ext_cell_filter][ext_ghost_pos].reshape(-1)
+    new_ext_cells_ow =  lost_cells_dm_owner_recv_buffer.reshape(-1, num_vertices)[ext_cell_filter][ext_ghost_pos].reshape(-1)
     recv_ext_dm = tmp_vertex_map.global_to_local(new_ext_cells_dm)
 
     new_ext_vertices = np.flatnonzero(recv_ext_dm == -1)
@@ -489,17 +493,17 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     assert (all_owners != mesh.comm.rank).all(), "Ghosted vertices on owned process"
     
     # Compute ghost nodes for cells that are sent from process losing a facet
-    filtered_geometry_dm = ext_recv_geom_msg[0].reshape(-1, num_nodes)[ext_cell_filter][ext_ghost_pos].flatten()
+    filtered_geometry_dm = lost_cells_gdofmap_recv_buffer[ext_cell_filter][ext_ghost_pos].flatten()
     ext_geometry_dm = geom_im.global_to_local(filtered_geometry_dm)
     new_ext_nodes = np.flatnonzero(ext_geometry_dm == -1)
     ext_gm_ghosts, extg_pos, extg_inverse_map = np.unique(filtered_geometry_dm[new_ext_nodes], return_index=True, return_inverse=True)
-    filtered_geometry_o = ext_recv_geomo_msg[0].reshape(-1, num_nodes)[ext_cell_filter][ext_ghost_pos].flatten()
+    filtered_geometry_o = lost_cells_gdofmap_owner_recv_buffer[ext_cell_filter][ext_ghost_pos].flatten()
     ext_ghost_owners = filtered_geometry_o[extg_pos]
     ext_node_pos = num_local_nodes + geom_im.num_ghosts+ len(new_ghost_nodes)
     ext_geometry_dm[new_ext_nodes] = (ext_node_pos + np.arange(len(ext_gm_ghosts), dtype=np.int32))[extg_inverse_map]
     ext_geometry_dm = ext_geometry_dm.reshape(-1, num_nodes)
-    filtered_geometry_coords = recv_ext_coords.reshape(-1, num_nodes,3)[ext_cell_filter][ext_ghost_pos].reshape(-1, 3)[extg_pos]
-    filtered_geometry_igi = recv_ext_igi.reshape(-1, num_nodes)[ext_cell_filter][ext_ghost_pos].flatten()[extg_pos]
+    filtered_geometry_coords = lost_cells_node_coords_recv_buffer[ext_cell_filter][ext_ghost_pos].reshape(-1, 3)[extg_pos]
+    filtered_geometry_igi = lost_cells_igi_recv_buffer[ext_cell_filter][ext_ghost_pos].flatten()[extg_pos]
 
     # --- 4 --- Convert extended topology global dofmap into local dofmap
     # Create new cell an dvertex map
