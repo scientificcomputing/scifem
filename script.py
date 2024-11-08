@@ -557,8 +557,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     return new_mesh
 
 
-
-N = 2
+# 5 proc, 25x26 failing with missing ghost 
+N = 10
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N+1, N,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
 
