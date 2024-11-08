@@ -557,7 +557,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     return new_mesh
 
 
-# 5 proc, 25x26 failing with missing ghost 
+# 5 proc, 26x25 failing with missing ghost 
+# 9 procs 11x10 failing with missing ghost
 N = 10
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N+1, N,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
@@ -569,6 +570,9 @@ ct = dolfinx.mesh.meshtags(mesh, mesh.topology.dim, cell_ind, cell_marker)
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
     xdmf.write_mesh(mesh)
     xdmf.write_meshtags(ct, mesh.geometry)
+
+
+
 
 def indicator(x):
     return np.isclose(x[0], 0.0)
@@ -583,7 +587,21 @@ new_mesh = create_periodic_mesh(mesh, indicator, mapping)
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
     xdmf.write_mesh(new_mesh)
 
+new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
+f_to_c = new_mesh.topology.connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
 
+
+left_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1, indicator)
+lfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, left_facets)
+for facet, midpoint in zip(left_facets, lfm):
+    assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
+
+right_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1, lambda x: mapping(indicator(x)))
+rfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, right_facets)
+for facet,midpoint in zip(right_facets, rfm):
+    assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Right facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
+
+exit()
 
 # new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 # new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
