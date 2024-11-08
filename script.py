@@ -350,7 +350,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     send_ext_dm = np.empty_like(insert_pos_ext_top_dm, dtype=np.int64)
     send_ext_dm[insert_pos_ext_top_dm] = global_extended
     send_ext_gm = np.empty_like(insert_pos_ext_geom_dm, dtype=np.int64)
-    send_ext_gm =  geom_ext_dm[insert_pos_ext_geom_dm]
+    send_ext_gm[insert_pos_ext_geom_dm] =  geom_ext_dm
     send_ext_top_owners = np.empty_like(insert_pos_ext_top_dm, dtype=np.int32)
     send_ext_top_owners[insert_pos_ext_top_dm] = ext_top_dm_owners
 
@@ -358,8 +358,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     send_ext_gm_owners[insert_pos_ext_geom_dm] = geom_ext_owner
     send_ext_igi =np.empty_like(insert_pos_ext_geom_dm, dtype=np.int64)
     send_ext_igi[insert_pos_ext_geom_dm] = geom_ext_igi
-    send_ext_coords = geom_ext_coords[insert_pos_ext_geom_coord]
-
+    send_ext_coords = np.empty_like(insert_pos_ext_geom_coord)
+    send_ext_coords[insert_pos_ext_geom_coord] = geom_ext_coords
     # Create communicator
     ext_dest_ranks, num_ext_recv_cells = np.unique(mapped_midpoint_owner.dest_owners, return_counts=True)
     remove_to_owner_comm = mesh.comm.Create_dist_graph_adjacent(
@@ -421,19 +421,27 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     # Convert extended topology global dofmap into local dofmap
 
     new_ext_cells_dm = ext_recv_top_dm_msg[0].reshape(-1, num_vertices)[ext_cell_filter][ext_ghost_pos].reshape(-1)
+    new_ext_cells_ow =  ext_recv_top_dmo_msg[0].reshape(-1, num_vertices)[ext_cell_filter][ext_ghost_pos].reshape(-1)
     recv_ext_dm = tmp_vertex_map.global_to_local(new_ext_cells_dm)
 
     new_ext_vertices = np.flatnonzero(recv_ext_dm == -1)
     new_ext_ghosts, ext_gpos, ext_ginverse_map = np.unique(new_ext_cells_dm[new_ext_vertices], return_index=True, return_inverse=True)    
-    new_ext_owners = ext_recv_top_dmo_msg[0][new_ext_vertices][ext_gpos]
+    new_ext_owners = new_ext_cells_ow[new_ext_vertices][ext_gpos]
     new_vertex_pos = tmp_vertex_map.size_local + tmp_vertex_map.num_ghosts
     recv_ext_dm[new_ext_vertices] = (new_vertex_pos + np.arange(len(new_ext_ghosts),dtype=np.int32))[ext_ginverse_map]
     all_ghosts = np.hstack([tmp_vertex_map.ghosts, new_ext_ghosts]).astype(np.int64)
     all_owners = np.hstack([tmp_vertex_map.owners, new_ext_owners]).astype(np.int32)
-
+    assert len(np.intersect1d(tmp_vertex_map.ghosts, new_ext_ghosts)) == 0
     assert (all_owners != mesh.comm.rank).all(), "Ghosted vertices on owned process"
     new_vertex_map = dolfinx.common.IndexMap(mesh.comm, tmp_vertex_map.size_local, all_ghosts, all_owners)
 
+    ranges = MPI.COMM_WORLD.allgather(tmp_vertex_map.local_range)
+    # for ghost, owner in zip(all_ghosts, all_owners):
+    #     assert (ranges[owner][0] <= ghost) & (ghost < ranges[owner][1]), f"{MPI.COMM_WORLD.rank} Ghost {ghost} is not range {ranges[owner]}"
+    assert ((all_ghosts < tmp_vertex_map.local_range[0]) | (tmp_vertex_map.local_range[1]<=all_ghosts)).all(), "Ghost "
+    assert (new_vertex_map.ghosts<new_vertex_map.size_global).all(), "Ghosts larger than global size"
+
+    
 
     # Convert old vertex_to_dofmap to reduced set
     c_to_v = mesh.topology.connectivity(mesh.topology.dim, 0)
@@ -534,13 +542,9 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
 
 
-# mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 3, 1, cell_type=dolfinx.mesh.CellType.quadrilateral)#, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
-# Fails on 7 proc, missing ghost
-#mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 100, 100, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 100, 100, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
-# Fails on 2 proc, missing mid cell 
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 5, 5, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
 mesh.topology.create_connectivity(0,2)
 cell_marker = np.arange(mesh.topology.index_map(mesh.topology.dim).size_local, dtype=np.int32)#np.arange(*mesh.topology.index_map(mesh.topology.dim).local_range , dtype=np.int32)
