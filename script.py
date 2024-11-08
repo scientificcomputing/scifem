@@ -557,7 +557,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     return new_mesh
 
 
-N = 250
+N = 189
 M = 123
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet
                                        ,cell_type=dolfinx.mesh.CellType.quadrilateral)
@@ -582,6 +582,11 @@ def mapping(x):
     values[0] += 1
     return values
 
+
+mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
+old_num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(mesh.topology)), op=MPI.SUM)
+assert old_num_exterior_facets == 2*N + 2*M, "Number of exterior facets is not correct"
+
 import time
 
 start = time.perf_counter()
@@ -589,6 +594,10 @@ new_mesh = create_periodic_mesh(mesh, indicator, mapping)
 end = time.perf_counter()
 print(f"Create periodic mesh: {end-start:.3e}")
 
+
+new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
+num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(new_mesh.topology)), op=MPI.SUM)
+assert num_exterior_facets == 2*N, "Number of exterior facets is not correct"
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
     xdmf.write_mesh(new_mesh)
 
