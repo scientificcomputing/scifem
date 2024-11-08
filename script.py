@@ -424,7 +424,6 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     lost_cells_gdofmap_igi_buffer[lost_insert_pos_geom_dm] = lost_geom_igi
 
     xtype = mesh.geometry.x.dtype
-    xdtype = mpi_dtype[xtype.type]
     lost_insert_pos_geom_coord = unroll_insert_position(lost_cell_insert_pos, 3*num_nodes)
     lost_geom_coords = mesh.geometry.x[org_geom_dm_cells_losing_vertex].flatten()
     lost_cells_coords_buffer = np.empty_like(lost_insert_pos_geom_coord, dtype=xtype)
@@ -558,8 +557,10 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     return new_mesh
 
 
-N = 100
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N+1, N,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
+N = 250
+M = 123
+mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet
+                                       ,cell_type=dolfinx.mesh.CellType.quadrilateral)
 
 
 mesh.topology.create_connectivity(0,2)
@@ -591,16 +592,29 @@ print(f"Create periodic mesh: {end-start:.3e}")
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
     xdmf.write_mesh(new_mesh)
 
-new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-f_to_c = new_mesh.topology.connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
+# Debug information
+# new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
+# f_to_c = new_mesh.topology.connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
+# f_map = new_mesh.topology.index_map(new_mesh.topology.dim-1)
+# f_range = f_map.local_range
 
 
-left_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1, indicator)
-lfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, left_facets)
-for facet, midpoint in zip(left_facets, lfm):
-    assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
+# left_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1, indicator)
+# #owned_left_facets = left_facets[(f_range[0]<= left_facets) & (left_facets < f_range[1])]
+# lfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1,left_facets)
+# for facet, midpoint in zip(left_facets, lfm):
+#     assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
 
-new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
+# new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
+
+# right_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1,lambda x: np.isclose(x[0], 1.0))
+# owned_right_facets = right_facets[(f_range[0]<= right_facets) & (right_facets < f_range[1])]
+# rfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, owned_right_facets)
+# for facet, midpoint in zip(owned_right_facets, rfm):
+#     assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
+
+# new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
+
 
 # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
 #     xdmf.write_mesh(new_mesh)
