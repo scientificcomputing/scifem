@@ -558,7 +558,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     return new_mesh
 
 
-N = 25
+N = 100
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N+1, N,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
 
@@ -581,7 +581,13 @@ def mapping(x):
     values[0] += 1
     return values
 
+import time
+
+start = time.perf_counter()
 new_mesh = create_periodic_mesh(mesh, indicator, mapping)
+end = time.perf_counter()
+print(f"Create periodic mesh: {end-start:.3e}")
+
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
     xdmf.write_mesh(new_mesh)
 
