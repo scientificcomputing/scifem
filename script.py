@@ -14,6 +14,33 @@ mpi_dtype = {np.float64: MPI.DOUBLE, np.float32: MPI.FLOAT,
              np.complex128: MPI.DOUBLE_COMPLEX, np.complex64: MPI.COMPLEX}
 
 
+def transfer_meshtags_to_periodic_mesh(mesh: dolfinx.mesh.Mesh, periodic_mesh:dolfinx.mesh.Mesh, meshtags:dolfinx.mesh.MeshTags)->dolfinx.mesh.MeshTags:
+    """
+    Transfer a mesh tag from a mesh to the periodic mesh.
+
+    Note:
+        Facets on the periodic interface are given arbitrary values from either side,
+        and should be ignored
+
+    Args:
+        mesh: The original mesh
+        periodic_mesh: The periodic mesh
+        meshtags: The mesh tag to transfer
+    """
+    geom_indices = dolfinx.mesh.entities_to_geometry(mesh, dim, meshtags.indices)
+    igi_indices = mesh.geometry.input_global_indices[geom_indices]
+
+    local_entities, local_values = dolfinx.io.distribute_entity_data(
+        periodic_mesh, dim, igi_indices, tags_old.values
+    )
+    new_mesh.topology.create_connectivity(mesh.topology.dim, 0)
+    adj = dolfinx.graph.adjacencylist(local_entities)
+    new_mesh.topology.create_entities(dim)
+    return dolfinx.mesh.meshtags_from_entities(
+            periodic_mesh, dim, adj, local_values.astype(np.int32, copy=False)
+        )
+
+
 def all_to_allv(comm, send_data, num_send_data, recv_data, num_recv_data):
     dtype = mpi_dtype[send_data.dtype.type]
     assert recv_data.dtype == send_data.dtype, f"Data types do not match, {recv_data.dtype} != {send_data.dtype}"
@@ -90,11 +117,24 @@ def unroll_insert_position(
     return unrolled_ip
 
 
-def create_periodic_mesh(mesh, indicator, mapping_function):
+def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32]]:
     """
     Create a periodic mesh that takes all facets that satisfy the `indicator` function,
     and map the vertices of these facets to the vertices that satisfies the mapping function.
 
+    Note:
+        The cell ownership does not change, only additional ghosts are added to a given process
+
+    Note:
+        The vertex ownership does not change, only additional ghosts are added to a given process
+
+    Returns:
+        A tuple ``(new_mesh, replacement_map)`` where ``new_mesh`` is the new mesh with periodicity
+        and ``replacement_map`` is a map from the old vertices (local to process) to the new vertices (local to process).
+
+        Note:
+            This map does not contain additional ghost vertices added to the process that has taken over the facet or given away a facet.
+    
     Example:
 
         .. code-block:: python
@@ -333,21 +373,24 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     reverse_communicator.Neighbor_alltoallv(send_geom_msg, recv_geom_msg)
 
     # Send igi for potential new nodes
-    send_igi = mesh.geometry.input_global_indices[new_cell_geom_dm.reshape(-1)]
+    send_igi = mesh.geometry.input_global_indices[new_cell_geom_dm.reshape(-1)].astype(np.int64)
     recv_igi = np.empty(num_nodes*recv_num_cells.sum(), dtype=np.int64)
-    send_igi_msg = [send_igi, num_nodes*num_cells_per_proc, MPI.INT64_T]
-    recv_igi_msg = [recv_igi, num_nodes*recv_num_cells, MPI.INT64_T]
-    reverse_communicator.Neighbor_alltoallv(send_igi_msg, recv_igi_msg)
+    all_to_allv(reverse_communicator, send_igi,num_nodes*num_cells_per_proc, 
+                recv_igi,  num_nodes*recv_num_cells)
+
+
 
     # Compute new ghost nodes
     filtered_new_geometry_dm = add_geom_dm.reshape(-1, num_nodes)[cell_filter].flatten()
     filtered_new_geometry_owners = add_geom_own.reshape(-1, num_nodes)[cell_filter].flatten()
-    filtered_new_geometry_igi = recv_igi.reshape(-1, num_nodes)[cell_filter].flatten()
+    igi_from_new_owner_on_subset = recv_igi.reshape(-1, num_nodes)[cell_filter].flatten()
     assert len(filtered_new_geometry_dm)==len(filtered_new_geometry_owners)
     local_geometry_dm = geom_im.global_to_local(filtered_new_geometry_dm)
     new_local_nodes = np.flatnonzero(local_geometry_dm == -1)
     new_ghost_nodes, gpos, ginverse_map = np.unique(filtered_new_geometry_dm[new_local_nodes], 
                                                     return_index=True, return_inverse=True)    
+
+    new_igi = igi_from_new_owner_on_subset[new_local_nodes][gpos]
     new_ghost_owners = filtered_new_geometry_owners[new_local_nodes][gpos]
     num_local_nodes = geom_im.size_local
     new_node_pos = num_local_nodes + geom_im.num_ghosts
@@ -356,7 +399,6 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     # Communicate geometry coordinates (to process that has lost vertex)
     node_coordinates = mesh.geometry.x[new_cell_geom_dm.reshape(-1)].flatten()
     geom_coords = np.empty(num_nodes*3*recv_num_cells.sum(), dtype=mesh.geometry.x.dtype)
-    mpi_dtype = {np.float64: MPI.DOUBLE, np.float32: MPI.FLOAT}
     send_coord_msg = [node_coordinates, num_nodes*3*num_cells_per_proc, mpi_dtype[mesh.geometry.x.dtype.type]]
     recv_coord_msg = [geom_coords, num_nodes*3*recv_num_cells, mpi_dtype[mesh.geometry.x.dtype.type]]
     reverse_communicator.Neighbor_alltoallv(send_coord_msg, recv_coord_msg)
@@ -539,7 +581,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
     extended_coords = np.vstack([mesh.geometry.x, extra_node_coords,
    filtered_geometry_coords ]).astype(mesh.geometry.x.dtype)[:, :mesh.geometry.dim]
     new_node_im = dolfinx.common.IndexMap(mesh.comm, num_local_nodes, extended_geom_ghosts, extended_geom_owners)
-    extended_igi = np.hstack([mesh.geometry.input_global_indices,  filtered_new_geometry_igi[new_local_nodes][gpos],
+    extended_igi = np.hstack([mesh.geometry.input_global_indices,  new_igi,
     filtered_geometry_igi]).astype(np.int64)
    
    
@@ -554,22 +596,15 @@ def create_periodic_mesh(mesh, indicator, mapping_function):
 
     new_mesh = dolfinx.mesh.Mesh(cpp_mesh, domain = ufl.Mesh(mesh._ufl_domain.ufl_coordinate_element()))
 
-    return new_mesh
+    return new_mesh, replacement_map
 
 
-N = 189
-M = 123
+# N = 189
+# M = 123
+N = 15
+M = 10
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet
                                        ,cell_type=dolfinx.mesh.CellType.quadrilateral)
-
-
-mesh.topology.create_connectivity(0,2)
-cell_marker = np.arange(mesh.topology.index_map(mesh.topology.dim).size_local, dtype=np.int32)
-cell_ind = np.arange(len(cell_marker), dtype=np.int32)
-ct = dolfinx.mesh.meshtags(mesh, mesh.topology.dim, cell_ind, cell_marker)
-with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
-    xdmf.write_mesh(mesh)
-    xdmf.write_meshtags(ct, mesh.geometry)
 
 
 
@@ -590,16 +625,49 @@ assert old_num_exterior_facets == 2*N + 2*M, "Number of exterior facets is not c
 import time
 
 start = time.perf_counter()
-new_mesh = create_periodic_mesh(mesh, indicator, mapping)
+new_mesh, replacement_map = create_periodic_mesh(mesh, indicator, mapping)
 end = time.perf_counter()
 print(f"Create periodic mesh: {end-start:.3e}")
 
 
+def num_vertices_per_entity(cell_type: dolfinx.mesh.CellType, dim:int)-> int:
+    entity_vertices = dolfinx.cpp.mesh.get_entity_vertices(cell_type, dim)
+    num_entity_vertices = entity_vertices.offsets[1:] - entity_vertices.offsets[:-1]
+
+    assert np.unique(num_entity_vertices).size == 1, "Number of vertices per entity is not constant"
+    return num_entity_vertices[0]
+
+
+dim = 1
+def marker_thing(x):
+    return x[0]<=1.5 + 1e-14
+
+indices = dolfinx.mesh.locate_entities(mesh,  dim, marker_thing)
+num_indices_local = mesh.topology.index_map(dim).size_local
+local_indices = indices[indices < num_indices_local]
+marker = np.arange(len(local_indices), dtype=np.int32)
+tags_old = dolfinx.mesh.meshtags(mesh, dim, local_indices, marker)
+
+
+
+with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
+    xdmf.write_mesh(mesh)
+    xdmf.write_meshtags(tags_old, mesh.geometry)
+
+
+tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, tags_old)
+tags_periodic.name = "Periodic mesh tags"
+with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
+    xdmf.write_mesh(new_mesh)
+    new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)    
+    xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
+
 new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
 num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(new_mesh.topology)), op=MPI.SUM)
 assert num_exterior_facets == 2*N, "Number of exterior facets is not correct"
-with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
-    xdmf.write_mesh(new_mesh)
+
+
+
 
 # Debug information
 # new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
@@ -664,4 +732,4 @@ uh = problem.solve()
 with dolfinx.io.VTXWriter(new_mesh.comm, "u_periodic.bp", [uh]) as writer:
     writer.write(0.0)
 
-exit()
+
