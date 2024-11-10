@@ -204,7 +204,7 @@ class NewtonSolver:
                 self._post_solve_callback(self)
 
             # Compute norm of update
-            residual = self.dx.norm(0)
+            residual = self.dx.norm(PETSc.NormType.NORM_2)
             if i == 1:
                 self.residual_0 = residual
             relative_residual = residual / max(self.residual_0, atol)
