@@ -50,7 +50,7 @@ if __name__ == "__main__":
     w_n = dolfinx.fem.Function(W)
     u_n, _ = ufl.split(w_n)
     
-    dt = 1e-4
+    dt = 5e-4
     k = dolfinx.fem.Constant(new_mesh, dolfinx.default_scalar_type(dt))
     mu = dolfinx.fem.Constant(new_mesh, dolfinx.default_scalar_type(0.01))  # Dynamic viscosity
     rho = dolfinx.fem.Constant(new_mesh,dolfinx.default_scalar_type(1))     
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     F += k * ufl.div(v) * p * ufl.dx 
     F += ufl.div(u) * q * ufl.dx
     x = ufl.SpatialCoordinate(new_mesh)
-    source = dolfinx.fem.Constant(new_mesh, dolfinx.default_scalar_type(0.1))
+    source = dolfinx.fem.Constant(new_mesh, dolfinx.default_scalar_type(4))
     F -= ufl.inner(source, v[0])*ufl.dx
 
 
