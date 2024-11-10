@@ -67,6 +67,9 @@ def transfer_meshtags_to_periodic_mesh(mesh: dolfinx.mesh.Mesh, periodic_mesh:do
 def all_to_allv(comm, send_data, num_send_data, recv_data, num_recv_data):
     dtype = mpi_dtype[send_data.dtype.type]
     assert recv_data.dtype == send_data.dtype, f"Data types do not match, {recv_data.dtype} != {send_data.dtype}"
+    assert (d_size:=send_data.size) ==  (s_size:=num_send_data.sum()), f"Number of send data {d_size}  does not match data size {s_size}"
+    assert (d_size:=recv_data.size) ==  (r_size:=num_recv_data.sum()), f"Number of recv data {d_size}  does not match data size {r_size}"
+
     send_msg = [send_data, num_send_data, dtype]
     recv_msg = [recv_data, num_recv_data, dtype]
     comm.Neighbor_alltoallv(send_msg, recv_msg)
@@ -233,28 +236,23 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
     bb_tree = dolfinx.geometry.bb_tree(mesh,0, recv_vertices)
     mid_tree = dolfinx.geometry.create_midpoint_tree(mesh, 0, recv_vertices)
     closest_vertex = dolfinx.geometry.compute_closest_entity(bb_tree, mid_tree, mesh, recv_coords)
-
     # Map closest vertex to global index
     vertex_map = mesh.topology.index_map(0)
-    global_vertices = sub_map_without_ghosts.local_to_global(parent_to_sub[closest_vertex])
+    global_vertices = sub_map_without_ghosts.local_to_global(parent_to_sub[closest_vertex]).astype(np.int64)
 
     vertex_sources, recv_vertices_per_proc = np.unique(vertex_owner.src_owner, return_counts=True)
     vertex_destinations, send_vertices_per_proc,  = np.unique(vertex_owner.dest_owners, return_counts=True)
     reverse_communicator = mesh.comm.Create_dist_graph_adjacent(vertex_sources, vertex_destinations, reorder=False)
     
     recv_vertices = np.empty(recv_vertices_per_proc.sum(), dtype=np.int64)
-    send_msg = [global_vertices, send_vertices_per_proc, MPI.INT64_T]
-    recv_msg = [recv_vertices, recv_vertices_per_proc, MPI.INT64_T]
-    reverse_communicator.Neighbor_alltoallv(send_msg, recv_msg)
+    all_to_allv(reverse_communicator, global_vertices, send_vertices_per_proc, recv_vertices, recv_vertices_per_proc)
 
     # Send owner of said vertex to the process that will use it as a replacement
     recv_vertex_owner = np.empty(recv_vertices_per_proc.sum(), dtype=np.int32)
     owners = np.full(num_vertices_local, mesh.comm.rank, dtype=np.int32)
     owners[num_owned_vertices:] = vertex_map.owners
-    send_msg = [owners[closest_vertex].copy(), send_vertices_per_proc, MPI.INT32_T]
-    recv_msg = [recv_vertex_owner, recv_vertices_per_proc, MPI.INT32_T]
-    reverse_communicator.Neighbor_alltoallv(send_msg, recv_msg)
-
+    send_vertex_owner = owners[closest_vertex].copy()    
+    all_to_allv(reverse_communicator, send_vertex_owner, send_vertices_per_proc, recv_vertex_owner, recv_vertices_per_proc)
 
     insert_position = compute_insert_position(vertex_owner.src_owner, vertex_sources, recv_vertices_per_proc)
     proc_to_vertex = np.zeros(mapped_vertex_coords.shape[0], dtype=np.int64)
@@ -299,7 +297,9 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
 
     # Map to global indices
     gl_new_ghost_cells = cell_map.local_to_global(np.array(new_ghost_cells, dtype=np.int32))
-    gl_new_cell_topology_dm = sub_map_without_ghosts.local_to_global(parent_to_sub[new_cell_topology_dm.reshape(-1)])
+    replaced_subdofmap_local = parent_to_sub[new_cell_topology_dm.reshape(-1)]
+    gl_new_cell_topology_dm = sub_map_without_ghosts.local_to_global(replaced_subdofmap_local).astype(np.int64)
+    gl_new_cell_topology_owners = vertex_owners[replaced_subdofmap_local]
 
     # Send ghost cells to process that has taken over vertex
     recv_num_cells = np.zeros_like(recv_vertices_per_proc, dtype=np.int32)
@@ -319,26 +319,24 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
     cell_filter = np.flatnonzero(potential_ghosts_as_local == -1)
     unique_cells, ghost_pos = np.unique(new_cells_on_proc[cell_filter], return_index=True)    
 
-
-
     # Send dofmaps for topology
-    new_top_dm_on_proc = np.empty(num_vertices*recv_num_cells.sum(), dtype=np.int64)
-    send_top_msg = [gl_new_cell_topology_dm, num_vertices*num_cells_per_proc, MPI.INT64_T]
-    recv_top_msg = [new_top_dm_on_proc, num_vertices*recv_num_cells, MPI.INT64_T]
-    reverse_communicator.Neighbor_alltoallv(send_top_msg, recv_top_msg)
+    new_top_dm_on_proc = np.empty((recv_num_cells.sum(), num_vertices), dtype=np.int64)
+    all_to_allv(reverse_communicator, gl_new_cell_topology_dm, num_vertices*num_cells_per_proc,
+                new_top_dm_on_proc, num_vertices*recv_num_cells)
+
 
     # Send ownership of vertices
-    top_dm_ownership = np.empty(num_vertices*recv_num_cells.sum(), dtype=np.int32)
-    send_top_omsg = [vertex_owners[parent_to_sub[new_cell_topology_dm.reshape(-1)]], num_vertices*num_cells_per_proc, MPI.INT32_T]
-    recv_top_omsg = [top_dm_ownership, num_vertices*recv_num_cells, MPI.INT32_T]
-    reverse_communicator.Neighbor_alltoallv(send_top_omsg, recv_top_omsg)
+    top_dm_ownership = np.empty_like(new_top_dm_on_proc, dtype=np.int32)
+    all_to_allv(reverse_communicator,gl_new_cell_topology_owners, num_vertices*num_cells_per_proc,
+                 top_dm_ownership, num_vertices*recv_num_cells)
 
     # Compute the vertex ghosts
-    local_dm = sub_map_without_ghosts.global_to_local(new_top_dm_on_proc)
+    filtered_top_dm = new_top_dm_on_proc[cell_filter]
+    local_dm = sub_map_without_ghosts.global_to_local(filtered_top_dm.reshape(-1))
     new_vertex_indicator = local_dm == -1
-    shared_facet_vertices = new_top_dm_on_proc[new_vertex_indicator]
+    shared_facet_vertices = filtered_top_dm.reshape(-1)[new_vertex_indicator]
     new_ghost_vertices, pos, inverse_map = np.unique(shared_facet_vertices, return_index=True, return_inverse=True)    
-    new_ghost_owners = top_dm_ownership[new_vertex_indicator][pos]
+    new_ghost_owners = top_dm_ownership[cell_filter].reshape(-1)[new_vertex_indicator][pos]
     new_local_size = int(sub_map_without_ghosts.size_local)
     new_ghost_pos = new_local_size + sub_map_without_ghosts.num_ghosts
     local_ghost_indexing = new_ghost_pos + np.arange(len(new_ghost_vertices))
@@ -364,7 +362,6 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
     # For new ghosts, add the to replacement map
     is_new_replacement = np.invert(is_local_indicator)
     replacement_ghosts = global_replacement_vertex[is_new_replacement]
-
     assert np.isin(replacement_ghosts, new_ghosts).all(), "Replacement ghost not in new ghost list"
     if len(replacement_ghosts) > 0:
         local_replacement_position = (new_ghosts==replacement_ghosts[:, None]).argmax(1)
@@ -625,26 +622,28 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
 
 # N = 189
 # M = 123
-N = 15
-M = 10
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet
-                                       ,cell_type=dolfinx.mesh.CellType.quadrilateral)
+# N = 15
+# M = 10
+# mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet
+#                                        ,cell_type=dolfinx.mesh.CellType.quadrilateral)
+mesh, ct, ft =  dolfinx.io.gmshio.read_from_msh("mesh.msh", MPI.COMM_WORLD,  0, 2)
 
-
+L_min = MPI.COMM_WORLD.allreduce(np.min(mesh.geometry.x[:,0]), op=MPI.MIN)
+L_max = MPI.COMM_WORLD.allreduce(np.max(mesh.geometry.x[:,0]), op=MPI.MAX)
 
 
 def indicator(x):
-    return np.isclose(x[0], 0.0)
+    return np.isclose(x[0], L_min)
 
 def mapping(x):
     values = x.copy()
-    values[0] += 1
+    values[0] += L_max-L_min
     return values
 
 
-mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
-old_num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(mesh.topology)), op=MPI.SUM)
-assert old_num_exterior_facets == 2*N + 2*M, "Number of exterior facets is not correct"
+# mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
+# old_num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(mesh.topology)), op=MPI.SUM)
+# assert old_num_exterior_facets == 2*N + 2*M, "Number of exterior facets is not correct"
 
 import time
 
@@ -664,7 +663,7 @@ def num_vertices_per_entity(cell_type: dolfinx.mesh.CellType, dim:int)-> int:
 
 dim = 1
 def marker_thing(x):
-    return x[0]<=1.5 + 1e-14
+    return x[0]<= 1 + 1e-14
 
 indices = dolfinx.mesh.locate_entities(mesh,  dim, marker_thing)
 num_indices_local = mesh.topology.index_map(dim).size_local
@@ -679,16 +678,24 @@ with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
     xdmf.write_meshtags(tags_old, mesh.geometry)
 
 
-tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, tags_old)
+tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, ft)
 tags_periodic.name = "Periodic mesh tags"
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
     xdmf.write_mesh(new_mesh)
     new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)    
     xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
 
-new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(new_mesh.topology)), op=MPI.SUM)
-assert num_exterior_facets == 2*N, "Number of exterior facets is not correct"
+
+# tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, tags_old)
+# tags_periodic.name = "Periodic mesh tags"
+# with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
+#     xdmf.write_mesh(new_mesh)
+#     new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)    
+#     xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
+
+# new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
+# num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(new_mesh.topology)), op=MPI.SUM)
+#assert num_exterior_facets == 2*N, "Number of exterior facets is not correct"
 
 
 
@@ -724,7 +731,7 @@ assert num_exterior_facets == 2*N, "Number of exterior facets is not correct"
 
 x = ufl.SpatialCoordinate(new_mesh)
 u_ex = ufl.sin(2*np.pi*x[0])
-h = 2 * 1/N #ufl.Circumradius(new_mesh)
+h = 2 * ufl.Circumradius(new_mesh)
 h_avg = ufl.avg(h)
 gamma = dolfinx.fem.Constant(new_mesh, 100.)
 alpha = dolfinx.fem.Constant(new_mesh, 100.)
