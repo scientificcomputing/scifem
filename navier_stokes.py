@@ -74,16 +74,30 @@ if __name__ == "__main__":
 
     problem = dolfinx.fem.petsc.NonlinearProblem(F, w, bcs)
     solver = dolfinx.nls.petsc.NewtonSolver(new_mesh.comm, problem)
+
+    W1, sub1_to_mixed = W.sub(1).collapse()
+    ns_vec = dolfinx.fem.Function(W)
+    ns_vec.x.array[sub1_to_mixed] = 1
+    dolfinx.la.orthonormalize([ns_vec.x])
+    nullspace = PETSc.NullSpace().create(vectors=[ns_vec.x.petsc_vec])
+
+
     # Set Newton solver options
     solver.atol = 1e-10
     solver.rtol = 1e-10
     solver.convergence_criterion = "residual"
-
+    solver.error_on_nonconvergence = True
     ksp = solver.krylov_solver
-    ksp.setType("preonly")
-    ksp.getPC().setType("lu")
-    ksp.getPC().setFactorSolverType("mumps")
-
+    opts = PETSc.Options()  # type: ignore
+    prefix = ""
+    ksp.setOptionsPrefix(prefix)
+    opts[f"{prefix}ksp_type"] = "preonly"
+    opts[f"{prefix}pc_type"] = "lu"
+    opts[f"{prefix}pc_factor_mat_solver_type"] = "mumps"
+    opts[f"{prefix}ksp_error_if_not_converged"] = True
+    opts[f"{prefix}ksp_monitor"] = None
+    ksp.setFromOptions()
+    solver.A.setNullSpace(nullspace)
     t = 0
     T = 2000*dt
     num_steps = int(T/dt)
