@@ -36,7 +36,6 @@ def transfer_meshtags_to_periodic_mesh(mesh: dolfinx.mesh.Mesh, periodic_mesh:do
         e_to_v = mesh.topology.connectivity(meshtags.dim, 0)
         e_to_v_new = e_to_v.array.copy()
         replacement_indicator = np.isin(e_to_v_new, replaced_vertices)
-        e_map = mesh.topology.index_map(meshtags.dim)
         e_to_v_new[replacement_indicator] = -1
         new_adj = dolfinx.graph.adjacencylist(e_to_v_new, e_to_v.offsets)
         indices = []
@@ -50,17 +49,17 @@ def transfer_meshtags_to_periodic_mesh(mesh: dolfinx.mesh.Mesh, periodic_mesh:do
     else:
         indices = meshtags.indices
         values = tags_old.values
-    geom_indices = dolfinx.mesh.entities_to_geometry(mesh, dim, indices)
+    geom_indices = dolfinx.mesh.entities_to_geometry(mesh, meshtags.dim, indices)
     igi_indices = mesh.geometry.input_global_indices[geom_indices]
 
     local_entities, local_values = dolfinx.io.distribute_entity_data(
-        periodic_mesh, dim, igi_indices, values
+        periodic_mesh, meshtags.dim, igi_indices, values
     )
-    new_mesh.topology.create_connectivity(mesh.topology.dim, 0)
+    periodic_mesh.topology.create_connectivity(mesh.topology.dim, 0)
     adj = dolfinx.graph.adjacencylist(local_entities)
-    new_mesh.topology.create_entities(dim)
+    periodic_mesh.topology.create_entities(meshtags.dim)
     return dolfinx.mesh.meshtags_from_entities(
-            periodic_mesh, dim, adj, local_values.astype(np.int32, copy=False)
+            periodic_mesh, meshtags.dim, adj, local_values.astype(np.int32, copy=False)
         )
 
 
@@ -623,165 +622,167 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
   
 
     new_mesh = dolfinx.mesh.Mesh(cpp_mesh, domain = ufl.Mesh(mesh._ufl_domain.ufl_coordinate_element()))
-
+    new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim)
     return new_mesh, indicator_vertices, replacement_map
 
 
-# N = 189
-# M = 123
-# N = 15
-# M = 10
-# mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet
-#                                        ,cell_type=dolfinx.mesh.CellType.quadrilateral)
-partitioner = dolfinx.cpp.mesh.create_cell_partitioner(dolfinx.mesh.GhostMode.shared_facet)
-mesh, ct, ft =  dolfinx.io.gmshio.read_from_msh("mesh.msh", MPI.COMM_WORLD,  0, 2, partitioner=partitioner)
 
-dim = 1
-num_indices_local = mesh.topology.index_map(dim).size_local
-marker = np.arange(num_indices_local, dtype=np.int32)
-tags_old = dolfinx.mesh.meshtags(mesh, dim, marker, np.full_like(marker, MPI.COMM_WORLD.rank))
+if __name__ == "__main__":
+    # N = 189
+    # M = 123
+    # N = 15
+    # M = 10
+    # mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet
+    #                                        ,cell_type=dolfinx.mesh.CellType.quadrilateral)
+    partitioner = dolfinx.cpp.mesh.create_cell_partitioner(dolfinx.mesh.GhostMode.shared_facet)
+    mesh, ct, ft =  dolfinx.io.gmshio.read_from_msh("mesh.msh", MPI.COMM_WORLD,  0, 2, partitioner=partitioner)
 
-
-
-with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
-    xdmf.write_mesh(mesh)
-    xdmf.write_meshtags(tags_old, mesh.geometry)
+    dim = 1
+    num_indices_local = mesh.topology.index_map(dim).size_local
+    marker = np.arange(num_indices_local, dtype=np.int32)
+    tags_old = dolfinx.mesh.meshtags(mesh, dim, marker, np.full_like(marker, MPI.COMM_WORLD.rank))
 
 
 
-L_min = MPI.COMM_WORLD.allreduce(np.min(mesh.geometry.x[:,0]), op=MPI.MIN)
-L_max = MPI.COMM_WORLD.allreduce(np.max(mesh.geometry.x[:,0]), op=MPI.MAX)
-
-
-def indicator(x):
-    return np.isclose(x[0], L_min)
-
-def mapping(x):
-    values = x.copy()
-    values[0] += L_max-L_min
-    return values
-
-
-# mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
-# old_num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(mesh.topology)), op=MPI.SUM)
-# assert old_num_exterior_facets == 2*N + 2*M, "Number of exterior facets is not correct"
-
-import time
-
-start = time.perf_counter()
-new_mesh, replaced_vertices, replacement_map = create_periodic_mesh(mesh, indicator, mapping)
-end = time.perf_counter()
-print(f"Create periodic mesh: {end-start:.3e}")
-
-
-def num_vertices_per_entity(cell_type: dolfinx.mesh.CellType, dim:int)-> int:
-    entity_vertices = dolfinx.cpp.mesh.get_entity_vertices(cell_type, dim)
-    num_entity_vertices = entity_vertices.offsets[1:] - entity_vertices.offsets[:-1]
-
-    assert np.unique(num_entity_vertices).size == 1, "Number of vertices per entity is not constant"
-    return num_entity_vertices[0]
-
-
-# dim = 1
-# def marker_thing(x):
-#     return x[0]<= 1 + 1e-14
-
-# indices = dolfinx.mesh.locate_entities(mesh,  dim, marker_thing)
-# num_indices_local = mesh.topology.index_map(dim).size_local
-# local_indices = indices[indices < num_indices_local]
-# marker = np.arange(len(local_indices), dtype=np.int32)
-# tags_old = dolfinx.mesh.meshtags(mesh, dim, local_indices, marker)
+    with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
+        xdmf.write_mesh(mesh)
+        xdmf.write_meshtags(tags_old, mesh.geometry)
 
 
 
-# with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
-#     xdmf.write_mesh(mesh)
-#     xdmf.write_meshtags(tags_old, mesh.geometry)
+    L_min = MPI.COMM_WORLD.allreduce(np.min(mesh.geometry.x[:,0]), op=MPI.MIN)
+    L_max = MPI.COMM_WORLD.allreduce(np.max(mesh.geometry.x[:,0]), op=MPI.MAX)
 
 
-tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, ft)
-tags_periodic.name = "Periodic mesh tags"
-with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
-    xdmf.write_mesh(new_mesh)
-    new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)    
-    xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
+    def indicator(x):
+        return np.isclose(x[0], L_min)
+
+    def mapping(x):
+        values = x.copy()
+        values[0] += L_max-L_min
+        return values
 
 
-# tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, tags_old)
-# tags_periodic.name = "Periodic mesh tags"
-# with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
-#     xdmf.write_mesh(new_mesh)
-#     new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)    
-#     xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
+    # mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
+    # old_num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(mesh.topology)), op=MPI.SUM)
+    # assert old_num_exterior_facets == 2*N + 2*M, "Number of exterior facets is not correct"
 
-# new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-# num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(new_mesh.topology)), op=MPI.SUM)
-#assert num_exterior_facets == 2*N, "Number of exterior facets is not correct"
+    import time
 
-
+    start = time.perf_counter()
+    new_mesh, replaced_vertices, replacement_map = create_periodic_mesh(mesh, indicator, mapping)
+    end = time.perf_counter()
+    print(f"Create periodic mesh: {end-start:.3e}")
 
 
-# Debug information
-# new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-# f_to_c = new_mesh.topology.connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-# f_map = new_mesh.topology.index_map(new_mesh.topology.dim-1)
-# f_range = f_map.local_range
+    def num_vertices_per_entity(cell_type: dolfinx.mesh.CellType, dim:int)-> int:
+        entity_vertices = dolfinx.cpp.mesh.get_entity_vertices(cell_type, dim)
+        num_entity_vertices = entity_vertices.offsets[1:] - entity_vertices.offsets[:-1]
+
+        assert np.unique(num_entity_vertices).size == 1, "Number of vertices per entity is not constant"
+        return num_entity_vertices[0]
 
 
-# left_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1, indicator)
-# #owned_left_facets = left_facets[(f_range[0]<= left_facets) & (left_facets < f_range[1])]
-# lfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1,left_facets)
-# for facet, midpoint in zip(left_facets, lfm):
-#     assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
+    # dim = 1
+    # def marker_thing(x):
+    #     return x[0]<= 1 + 1e-14
 
-# new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
-
-# right_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1,lambda x: np.isclose(x[0], 1.0))
-# owned_right_facets = right_facets[(f_range[0]<= right_facets) & (right_facets < f_range[1])]
-# rfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, owned_right_facets)
-# for facet, midpoint in zip(owned_right_facets, rfm):
-#     assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
-
-# new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
-
-
-# with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
-#     xdmf.write_mesh(new_mesh)
+    # indices = dolfinx.mesh.locate_entities(mesh,  dim, marker_thing)
+    # num_indices_local = mesh.topology.index_map(dim).size_local
+    # local_indices = indices[indices < num_indices_local]
+    # marker = np.arange(len(local_indices), dtype=np.int32)
+    # tags_old = dolfinx.mesh.meshtags(mesh, dim, local_indices, marker)
 
 
 
-x = ufl.SpatialCoordinate(new_mesh)
-u_ex = ufl.sin(2*np.pi*x[0])
-h = 2 * ufl.Circumradius(new_mesh)
-h_avg = ufl.avg(h)
-gamma = dolfinx.fem.Constant(new_mesh, 100.)
-alpha = dolfinx.fem.Constant(new_mesh, 100.)
-
-V = dolfinx.fem.functionspace(new_mesh, ("DG", 2))
-u = ufl.TrialFunction(V)
-v = ufl.TestFunction(V)
-n = ufl.FacetNormal(new_mesh)
-F = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx
-F += -ufl.inner(ufl.jump(v, n), ufl.avg(ufl.grad(u))) * ufl.dS
-F += -ufl.inner(ufl.avg(ufl.grad(v)), ufl.jump(u, n)) * ufl.dS
-F += +gamma / h_avg * ufl.inner(ufl.jump(v, n), ufl.jump(u, n)) * ufl.dS
-
-F += -ufl.inner(n, ufl.grad(u)) * v * ufl.ds
-
-F += -ufl.inner(n, ufl.grad(v)) * u * ufl.ds + alpha / h * ufl.inner(u, v) * ufl.ds
-F -= -ufl.inner(n, ufl.grad(v)) * u_ex * ufl.ds + alpha / h * ufl.inner(u_ex, v) * ufl.ds
+    # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
+    #     xdmf.write_mesh(mesh)
+    #     xdmf.write_meshtags(tags_old, mesh.geometry)
 
 
-x = ufl.SpatialCoordinate(new_mesh)
-f = 100**x[0]*ufl.sin(0.5*np.pi * x[1])
-F-= ufl.inner(f, v) * ufl.dx
-a, L = ufl.system(F)
-import dolfinx.fem.petsc
-problem = dolfinx.fem.petsc.LinearProblem(a, L, bcs=[], petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"})
-uh = problem.solve()
+    tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, ft)
+    tags_periodic.name = "Periodic mesh tags"
+    with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
+        xdmf.write_mesh(new_mesh)
+        new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)    
+        xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
 
 
-with dolfinx.io.VTXWriter(new_mesh.comm, "u_periodic.bp", [uh]) as writer:
-    writer.write(0.0)
+    # tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, tags_old)
+    # tags_periodic.name = "Periodic mesh tags"
+    # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
+    #     xdmf.write_mesh(new_mesh)
+    #     new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)    
+    #     xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
+
+    # new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
+    # num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(new_mesh.topology)), op=MPI.SUM)
+    #assert num_exterior_facets == 2*N, "Number of exterior facets is not correct"
+
+
+
+
+    # Debug information
+    # new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
+    # f_to_c = new_mesh.topology.connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
+    # f_map = new_mesh.topology.index_map(new_mesh.topology.dim-1)
+    # f_range = f_map.local_range
+
+
+    # left_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1, indicator)
+    # #owned_left_facets = left_facets[(f_range[0]<= left_facets) & (left_facets < f_range[1])]
+    # lfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1,left_facets)
+    # for facet, midpoint in zip(left_facets, lfm):
+    #     assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
+
+    # new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
+
+    # right_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1,lambda x: np.isclose(x[0], 1.0))
+    # owned_right_facets = right_facets[(f_range[0]<= right_facets) & (right_facets < f_range[1])]
+    # rfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, owned_right_facets)
+    # for facet, midpoint in zip(owned_right_facets, rfm):
+    #     assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
+
+    # new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
+
+
+    # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
+    #     xdmf.write_mesh(new_mesh)
+
+
+
+    x = ufl.SpatialCoordinate(new_mesh)
+    u_ex = ufl.sin(2*np.pi*x[0])
+    h = 2 * ufl.Circumradius(new_mesh)
+    h_avg = ufl.avg(h)
+    gamma = dolfinx.fem.Constant(new_mesh, 100.)
+    alpha = dolfinx.fem.Constant(new_mesh, 100.)
+
+    V = dolfinx.fem.functionspace(new_mesh, ("DG", 2))
+    u = ufl.TrialFunction(V)
+    v = ufl.TestFunction(V)
+    n = ufl.FacetNormal(new_mesh)
+    F = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx
+    F += -ufl.inner(ufl.jump(v, n), ufl.avg(ufl.grad(u))) * ufl.dS
+    F += -ufl.inner(ufl.avg(ufl.grad(v)), ufl.jump(u, n)) * ufl.dS
+    F += +gamma / h_avg * ufl.inner(ufl.jump(v, n), ufl.jump(u, n)) * ufl.dS
+
+    F += -ufl.inner(n, ufl.grad(u)) * v * ufl.ds
+
+    F += -ufl.inner(n, ufl.grad(v)) * u * ufl.ds + alpha / h * ufl.inner(u, v) * ufl.ds
+    F -= -ufl.inner(n, ufl.grad(v)) * u_ex * ufl.ds + alpha / h * ufl.inner(u_ex, v) * ufl.ds
+
+
+    x = ufl.SpatialCoordinate(new_mesh)
+    f = 100**x[0]*ufl.sin(0.5*np.pi * x[1])
+    F-= ufl.inner(f, v) * ufl.dx
+    a, L = ufl.system(F)
+    import dolfinx.fem.petsc
+    problem = dolfinx.fem.petsc.LinearProblem(a, L, bcs=[], petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"})
+    uh = problem.solve()
+
+
+    with dolfinx.io.VTXWriter(new_mesh.comm, "u_periodic.bp", [uh]) as writer:
+        writer.write(0.0)
 
 

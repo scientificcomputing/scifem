@@ -27,6 +27,7 @@ parser.add_argument("--inlet_marker", type=int, default=2, help="Marker for the 
 parser.add_argument(
     "--outlet_marker", type=int, default=3, help="Marker for the outlet"
 )
+parser.add_argument("--quadrilateral", action="store_true", help="Use quadrilaterals")
 if __name__ == "__main__":
     args = parser.parse_args()
 
@@ -56,7 +57,7 @@ if __name__ == "__main__":
         dim=0,
     )
 
-    gmsh.model.mesh.setSize(box_nodes, 0.2 * args.res)
+    gmsh.model.mesh.setSize(box_nodes, 0.1 * args.res)
     gmsh.model.mesh.setSize(inlet_nodes, args.res)
 
     # Mark each boundary
@@ -85,7 +86,13 @@ if __name__ == "__main__":
     gmsh.model.addPhysicalGroup(1, inlet_periodic, args.inlet_marker)
     gmsh.model.addPhysicalGroup(1, outlet_periodic, args.outlet_marker)
     gmsh.model.addPhysicalGroup(2, fluid_, 1)
-    gmsh.option.setNumber("Mesh.Algorithm", args.algorithm)
+    if args.quadrilateral:
+        gmsh.option.setNumber("Mesh.Algorithm", 8)
+        gmsh.option.setNumber("Mesh.RecombinationAlgorithm", 2)
+        gmsh.option.setNumber("Mesh.RecombineAll", 1)
+        gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
+    else:
+        gmsh.option.setNumber("Mesh.Algorithm", args.algorithm)
     gmsh.model.mesh.generate(2)
     if args.optimize:
         gmsh.model.mesh.optimize("Netgen")
