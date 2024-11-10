@@ -102,6 +102,8 @@ if __name__ == "__main__":
     interpolation_matrix_p.mult(w.x.petsc_vec, p_out.x.petsc_vec)
     p_out.x.scatter_forward()
     bp_p.write(0.0)
+    stationary_counter = 0
+    max_stationary = 10
     for i in range(num_steps):
         t += dt
 
@@ -122,6 +124,12 @@ if __name__ == "__main__":
 
         bp_p.write(t)
         print(f"Step {i+1}/{num_steps}, {t=:.2e}, {num_its=}, {converged=}, {converged_reason=}")
-
+        if num_its == 0:
+            stationary_counter += 1
+            if stationary_counter >= max_stationary:
+                print("Reached max stationary counter")
+                break
+        else:
+            stationary_counter = 0
     bp.close()
     bp_p.close()
