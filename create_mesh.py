@@ -46,6 +46,7 @@ if __name__ == "__main__":
     inlet_nodes = gmsh.model.getEntitiesInBoundingBox(
         0 - tol, 0, 0, tol, 1 + tol, tol, dim=0
     )
+    
     gmsh.model.mesh.setSize(gmsh.model.getEntities(0), 0.1)
     box_nodes = gmsh.model.getEntitiesInBoundingBox(
         args.box_pos[0] - tol,
@@ -57,8 +58,6 @@ if __name__ == "__main__":
         dim=0,
     )
 
-    gmsh.model.mesh.setSize(box_nodes, 0.1 * args.res)
-    gmsh.model.mesh.setSize(inlet_nodes, args.res)
 
     # Mark each boundary
     bndry = gmsh.model.getBoundary(new_fluid, oriented=False)
@@ -80,6 +79,20 @@ if __name__ == "__main__":
         translation = [1, 0, 0, args.L, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
         gmsh.model.mesh.setPeriodic(1, outlet_periodic, inlet_periodic, translation)
         gmsh.model.occ.synchronize()
+
+    wall_dist = gmsh.model.mesh.field.add("Distance")
+    gmsh.model.mesh.field.setNumbers(wall_dist, "EdgesList", walls)
+    wall_threshold = gmsh.model.mesh.field.add("Threshold")
+    gmsh.model.mesh.field.setNumber(wall_threshold, "IField", wall_dist)
+    gmsh.model.mesh.field.setNumber(wall_threshold, "LcMin", args.res)
+    gmsh.model.mesh.field.setNumber(wall_threshold, "LcMax", 2*args.res)
+    gmsh.model.mesh.field.setNumber(wall_threshold, "DistMin", 0.1*args.box_size[1])
+    gmsh.model.mesh.field.setNumber(wall_threshold, "DistMax", args.box_size[1])
+    minimum = gmsh.model.mesh.field.add("Min")
+    gmsh.model.mesh.field.setNumbers(minimum, "FieldsList", [wall_threshold])
+    gmsh.model.mesh.field.setAsBackgroundMesh(minimum)
+    gmsh.model.occ.synchronize()
+
     surfaces = gmsh.model.getEntities(2)
     fluid_ = [surface[1] for surface in surfaces]
     gmsh.model.addPhysicalGroup(1, walls, args.wall_marker)
@@ -93,6 +106,10 @@ if __name__ == "__main__":
         gmsh.option.setNumber("Mesh.SubdivisionAlgorithm", 1)
     else:
         gmsh.option.setNumber("Mesh.Algorithm", args.algorithm)
+
+    # We combine these fields by using the minimum field
+
+
     gmsh.model.mesh.generate(2)
     if args.optimize:
         gmsh.model.mesh.optimize("Netgen")

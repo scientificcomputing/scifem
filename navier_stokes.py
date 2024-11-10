@@ -33,9 +33,11 @@ if __name__ == "__main__":
     facet_tags = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, ft)
 
 
-    assert new_mesh.topology.cell_type == dolfinx.mesh.CellType.quadrilateral
     el_u = basix.ufl.element("Lagrange", new_mesh.basix_cell(), 2, shape=(new_mesh.geometry.dim, ))
-    el_p = basix.ufl.element("DPC", new_mesh.basix_cell(), 1, shape=())
+    if mesh.topology.cell_type == dolfinx.cpp.mesh.CellType.triangle:
+        el_p = basix.ufl.element("DG", new_mesh.basix_cell(), 0, shape=())
+    else:
+        el_p = basix.ufl.element("DPC", new_mesh.basix_cell(), 1, shape=())
 
     mixed_el = basix.ufl.mixed_element([el_u, el_p])
 
@@ -59,7 +61,7 @@ if __name__ == "__main__":
     F += k * ufl.div(v) * p * ufl.dx 
     F += ufl.div(u) * q * ufl.dx
     x = ufl.SpatialCoordinate(new_mesh)
-    source = 12*x[0]**2
+    source = dolfinx.fem.Constant(new_mesh, dolfinx.default_scalar_type(0.1))
     F -= ufl.inner(source, v[0])*ufl.dx
 
 
