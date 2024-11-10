@@ -14,24 +14,47 @@ mpi_dtype = {np.float64: MPI.DOUBLE, np.float32: MPI.FLOAT,
              np.complex128: MPI.DOUBLE_COMPLEX, np.complex64: MPI.COMPLEX}
 
 
-def transfer_meshtags_to_periodic_mesh(mesh: dolfinx.mesh.Mesh, periodic_mesh:dolfinx.mesh.Mesh, meshtags:dolfinx.mesh.MeshTags)->dolfinx.mesh.MeshTags:
+def transfer_meshtags_to_periodic_mesh(mesh: dolfinx.mesh.Mesh, periodic_mesh:dolfinx.mesh.Mesh,
+                                       replaced_vertices: npt.NDArray[np.int32],
+                                        meshtags:dolfinx.mesh.MeshTags)->dolfinx.mesh.MeshTags:
     """
     Transfer a mesh tag from a mesh to the periodic mesh.
 
     Note:
-        Facets on the periodic interface are given arbitrary values from either side,
-        and should be ignored
+        Entities that have been replaced (vertices, edges, faces) are removed from the mesh tag
 
     Args:
         mesh: The original mesh
         periodic_mesh: The periodic mesh
+        replaced_vertices: The vertices that have been replaced (local to process)
         meshtags: The mesh tag to transfer
     """
-    geom_indices = dolfinx.mesh.entities_to_geometry(mesh, dim, meshtags.indices)
+
+    # Remove entities that have been replaced (vertices, edges, faces)
+    if meshtags.dim != mesh.topology.dim:
+        mesh.topology.create_connectivity(meshtags.dim, 0)
+        e_to_v = mesh.topology.connectivity(meshtags.dim, 0)
+        e_to_v_new = e_to_v.array.copy()
+        replacement_indicator = np.isin(e_to_v_new, replaced_vertices)
+        e_map = mesh.topology.index_map(meshtags.dim)
+        e_to_v_new[replacement_indicator] = -1
+        new_adj = dolfinx.graph.adjacencylist(e_to_v_new, e_to_v.offsets)
+        indices = []
+        values = []
+        for entity, value in zip(meshtags.indices, meshtags.values):
+            if not np.allclose(new_adj.links(entity), -1):
+                indices.append(entity)
+                values.append(value)
+        indices = np.array(indices, dtype=np.int32)
+        values = np.array(values, dtype=meshtags.values.dtype)
+    else:
+        indices = meshtags.indices
+        values = tags_old.values
+    geom_indices = dolfinx.mesh.entities_to_geometry(mesh, dim, indices)
     igi_indices = mesh.geometry.input_global_indices[geom_indices]
 
     local_entities, local_values = dolfinx.io.distribute_entity_data(
-        periodic_mesh, dim, igi_indices, tags_old.values
+        periodic_mesh, dim, igi_indices, values
     )
     new_mesh.topology.create_connectivity(mesh.topology.dim, 0)
     adj = dolfinx.graph.adjacencylist(local_entities)
@@ -116,8 +139,8 @@ def unroll_insert_position(
     unrolled_ip += np.tile(np.arange(block_size), len(insert_position))
     return unrolled_ip
 
-
-def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32]]:
+def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32],
+                                                                    npt.NDArray[np.int32]]:
     """
     Create a periodic mesh that takes all facets that satisfy the `indicator` function,
     and map the vertices of these facets to the vertices that satisfies the mapping function.
@@ -129,8 +152,9 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
         The vertex ownership does not change, only additional ghosts are added to a given process
 
     Returns:
-        A tuple ``(new_mesh, replacement_map)`` where ``new_mesh`` is the new mesh with periodicity
-        and ``replacement_map`` is a map from the old vertices (local to process) to the new vertices (local to process).
+        A tuple ``(new_mesh, replaced_vertices, replacement_map)`` where ``new_mesh`` is the new mesh with periodicity,
+        ``replaced_vertices`` is a list of vertices of the input mesh that has been replaced (local to process).
+        ``replacement_map`` is a map from the old vertices (local to process) to the new vertices (local to process).
 
         Note:
             This map does not contain additional ghost vertices added to the process that has taken over the facet or given away a facet.
@@ -596,7 +620,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
 
     new_mesh = dolfinx.mesh.Mesh(cpp_mesh, domain = ufl.Mesh(mesh._ufl_domain.ufl_coordinate_element()))
 
-    return new_mesh, replacement_map
+    return new_mesh, indicator_vertices, replacement_map
 
 
 # N = 189
@@ -625,7 +649,7 @@ assert old_num_exterior_facets == 2*N + 2*M, "Number of exterior facets is not c
 import time
 
 start = time.perf_counter()
-new_mesh, replacement_map = create_periodic_mesh(mesh, indicator, mapping)
+new_mesh, replaced_vertices, replacement_map = create_periodic_mesh(mesh, indicator, mapping)
 end = time.perf_counter()
 print(f"Create periodic mesh: {end-start:.3e}")
 
@@ -655,7 +679,7 @@ with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
     xdmf.write_meshtags(tags_old, mesh.geometry)
 
 
-tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, tags_old)
+tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, tags_old)
 tags_periodic.name = "Periodic mesh tags"
 with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
     xdmf.write_mesh(new_mesh)
