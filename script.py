@@ -325,6 +325,11 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
     send_ghost_cell_owners = cell_owners[send_ghost_cells_from_new_owner].copy()
     all_to_allv(new_owner_to_old_comm, send_ghost_cell_owners, num_cells_per_proc, recv_potential_cell_owners, recv_num_cells)
 
+    # Send oci
+    recv_potential_cell_oci = np.empty(recv_num_cells.sum(), dtype=np.int64)
+    send_cell_oci = mesh.topology.original_cell_index[send_ghost_cells_from_new_owner].copy().astype(np.int64)
+    all_to_allv(new_owner_to_old_comm, send_cell_oci, num_cells_per_proc, recv_potential_cell_oci, recv_num_cells)
+
     # Check if received cells are already in cell map
     potential_ghosts_as_local = cell_map.global_to_local(recv_potential_ghost_cells)
     cell_filter = np.flatnonzero(potential_ghosts_as_local == -1)
@@ -476,6 +481,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
     lost_cells_send_buffer[lost_cell_insert_pos] = cells_losing_vertex_gl
     lost_owners_send_buffer = np.empty_like(lost_cells_send_buffer, dtype=np.int32)
     lost_owners_send_buffer[lost_cell_insert_pos] = cell_owners[cells_losing_vertex]
+    lost_oci_send_buffer = np.empty_like(lost_cells_send_buffer, dtype=np.int64)
+    lost_oci_send_buffer[lost_cell_insert_pos] = mesh.topology.original_cell_index[cells_losing_vertex]
 
     # Pack topology data
     lost_insert_pos_top_dm = unroll_insert_position(lost_cell_insert_pos, num_vertices)
@@ -516,6 +523,10 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
     lost_cells_owners_recv_buffer = np.empty_like(lost_cells_recv_buffer, dtype=np.int32)
     all_to_allv(lost_cells_to_gainer_comm, lost_owners_send_buffer, num_send_lost_cells, lost_cells_owners_recv_buffer, num_recv_lost_cells)
 
+    # Communicate oci of potential new ghost cells
+    lost_cells_oci_recv_buffer = np.empty_like(lost_cells_recv_buffer, dtype=np.int64)
+    all_to_allv(lost_cells_to_gainer_comm, lost_oci_send_buffer, num_send_lost_cells, lost_cells_oci_recv_buffer, num_recv_lost_cells)
+
     # Communicate dofmap and ownership info
     lost_cells_dm_recv_buffer = np.empty((total_recv_lost_cells,num_vertices), dtype=np.int64)
     all_to_allv(lost_cells_to_gainer_comm, lost_cells_dofmap_send_buffer, num_send_lost_cells*num_vertices, lost_cells_dm_recv_buffer, num_recv_lost_cells*num_vertices)
@@ -538,7 +549,7 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
     new_lost_cells_indicator = np.flatnonzero(cell_map.global_to_local(lost_cells_recv_buffer) == -1)
     unique_lost_cells, unique_lost_cells_position = np.unique(lost_cells_recv_buffer[new_lost_cells_indicator], return_index=True) 
     unique_lost_cells_owners = lost_cells_owners_recv_buffer[new_lost_cells_indicator][unique_lost_cells_position]
-   
+    unique_lost_cells_oci = lost_cells_oci_recv_buffer[new_lost_cells_indicator][unique_lost_cells_position]
     # Get dofmap in local indices
     unique_lost_cells_dm = lost_cells_dm_recv_buffer[new_lost_cells_indicator][unique_lost_cells_position].reshape(-1)
     unique_lost_cells_dm_owners =  lost_cells_dm_owner_recv_buffer[new_lost_cells_indicator][unique_lost_cells_position].reshape(-1)
@@ -571,6 +582,8 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
     all_cell_owners = np.hstack([cell_map.owners, recv_potential_cell_owners[cell_filter][vertex_owner_cell_position],  unique_lost_cells_owners]).astype(np.int32)
     assert (all_cell_owners != mesh.comm.rank).all(), "Ghosted cells on owned process"
 
+    all_cell_oci = np.hstack([mesh.topology.original_cell_index, recv_potential_cell_oci[cell_filter][vertex_owner_cell_position], unique_lost_cells_oci]).astype(np.int64)
+
     all_ghosts = np.hstack([tmp_vertex_map.ghosts, lost_cells_unique_new_ghosts]).astype(np.int64)
     all_owners = np.hstack([tmp_vertex_map.owners, lost_cells_ghost_owners]).astype(np.int32)
 
@@ -589,6 +602,10 @@ def create_periodic_mesh(mesh, indicator, mapping_function)-> tuple[dolfinx.mesh
     topology.set_index_map(mesh.topology.dim, new_cell_map)
     topology.set_connectivity(new_v_to_v, 0,0)
     topology.set_connectivity(new_c_to_v, mesh.topology.dim, 0)
+    try:
+        topology.original_cell_index = all_cell_oci
+    except AttributeError:
+        print("Could not set original cell index (not supported in this version of DOLFIN-X)")
 
     c_el = dolfinx.fem.coordinate_element(mesh._ufl_domain.ufl_coordinate_element().basix_element)
 
@@ -644,6 +661,7 @@ if __name__ == "__main__":
 
 
 
+
     with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
         xdmf.write_mesh(mesh)
         xdmf.write_meshtags(tags_old, mesh.geometry)
@@ -674,6 +692,8 @@ if __name__ == "__main__":
     end = time.perf_counter()
     print(f"Create periodic mesh: {end-start:.3e}")
 
+    if new_mesh.comm.size == 1:
+        np.testing.assert_allclose(new_mesh.topology.original_cell_index, mesh.topology.original_cell_index)
 
     def num_vertices_per_entity(cell_type: dolfinx.mesh.CellType, dim:int)-> int:
         entity_vertices = dolfinx.cpp.mesh.get_entity_vertices(cell_type, dim)
