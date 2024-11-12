@@ -41,10 +41,6 @@ def test_XDMFFile_2D(cell_type, degree, value_shape, backend, use_ctx_manager, t
     u.name = "u"
     v.name = "v"
 
-    from pathlib import Path
-
-    folder = Path(".")
-
     if use_ctx_manager:
         with scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend) as xdmf:
             u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
@@ -57,8 +53,6 @@ def test_XDMFFile_2D(cell_type, degree, value_shape, backend, use_ctx_manager, t
             xdmf.write(t.value)
     else:
         xdmf = scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend)
-
-        # breakpoint()
         u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
         v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
         xdmf.write(t.value)
