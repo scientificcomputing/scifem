@@ -6,12 +6,36 @@ import xml.etree.ElementTree as ET
 import contextlib
 from pathlib import Path
 import os
+import functools
 import warnings
 
 from mpi4py import MPI
 import numpy as np
 import numpy.typing as npt
 import dolfinx
+
+
+def deprecated(func):
+    """This is a decorator which can be used to mark functions
+    as deprecated. It will result in a warning being emitted
+    when the function is used."""
+
+    @functools.wraps(func)
+    def new_func(*args, **kwargs):
+        warnings.simplefilter("always", DeprecationWarning)  # turn off filter
+        msg = (
+            "Call to deprecated function {}.".format(func.__name__),
+            "Please use the class scifem.xdmf.XDMFFile instead.",
+        )
+        warnings.warn(
+            msg,
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+        warnings.simplefilter("default", DeprecationWarning)  # reset filter
+        return func(*args, **kwargs)
+
+    return new_func
 
 
 class XDMFData(typing.Protocol):
@@ -25,6 +49,7 @@ class XDMFData(typing.Protocol):
     def num_dofs_global(self) -> int: ...
 
 
+@deprecated
 def write_xdmf(
     functions: typing.Sequence[dolfinx.fem.Function],
     filename: os.PathLike,
@@ -133,6 +158,7 @@ def h5pyfile(h5name, filemode="r", force_serial: bool = False, comm=None):
     h5file.close()
 
 
+@deprecated
 def write_hdf5_h5py(
     functions: typing.Sequence[dolfinx.fem.Function],
     h5name: Path,
@@ -179,6 +205,7 @@ def write_hdf5_h5py(
             dset[data.local_range[0] : data.local_range[1], :] = array
 
 
+@deprecated
 def write_hdf5_adios(
     functions: typing.Sequence[dolfinx.fem.Function],
     h5name: Path,
@@ -303,6 +330,7 @@ def check_function_space(
     return create_function_space_data(u.function_space)
 
 
+@deprecated
 def create_pointcloud(
     filename: os.PathLike, functions: typing.Sequence[dolfinx.fem.Function]
 ) -> None:
