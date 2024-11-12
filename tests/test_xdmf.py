@@ -68,6 +68,65 @@ def test_XDMFFile_2D(cell_type, degree, value_shape, backend, use_ctx_manager, t
     assert (folder / "data.h5").is_file()
 
 
+@pytest.mark.parametrize("use_ctx_manager", [True, False])
+@pytest.mark.parametrize("backend", ["h5py", "adios2"])
+@pytest.mark.parametrize("degree", [1, 2, 3])
+@pytest.mark.parametrize(
+    "cell_type", [dolfinx.mesh.CellType.tetrahedron, dolfinx.mesh.CellType.hexahedron]
+)
+@pytest.mark.parametrize("value_shape", [(), (3,)])
+def test_XDMFFile_3D(cell_type, degree, value_shape, backend, use_ctx_manager, tmp_path):
+    folder = MPI.COMM_WORLD.bcast(tmp_path, root=0)
+
+    mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 2, 3, 5, cell_type, dtype=np.float64)
+
+    el = basix.ufl.quadrature_element(
+        scheme="default", degree=degree, cell=mesh.ufl_cell().cellname(), value_shape=value_shape
+    )
+    V = dolfinx.fem.functionspace(mesh, el)
+    u = dolfinx.fem.Function(V)
+    v = dolfinx.fem.Function(V)
+    t = dolfinx.fem.Constant(mesh, 0.0)
+
+    X = ufl.SpatialCoordinate(mesh)
+    if value_shape == ():
+        u_expr = ufl.sin(ufl.pi * X[0]) * ufl.sin(ufl.pi * X[1]) * ufl.cos(ufl.pi * t)
+        v_expr = ufl.cos(ufl.pi * X[0]) * ufl.cos(ufl.pi * X[1]) * ufl.cos(ufl.pi * t)
+
+    else:
+        u_expr = X * ufl.cos(ufl.pi * t)
+        v_expr = X * ufl.sin(X[0]) * ufl.cos(ufl.pi * t)
+
+    u.name = "u"
+    v.name = "v"
+
+    if use_ctx_manager:
+        with scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend) as xdmf:
+            u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
+            v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+            xdmf.write(t.value)
+
+            t.value = 0.3
+            u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
+            v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+            xdmf.write(t.value)
+    else:
+        xdmf = scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend)
+        u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
+        v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+        xdmf.write(t.value)
+
+        t.value = 0.3
+        u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
+        v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+        xdmf.write(t.value)
+
+        xdmf.close()
+
+    assert (folder / "data.xdmf").is_file()
+    assert (folder / "data.h5").is_file()
+
+
 @pytest.mark.parametrize("degree", [1, 2, 3])
 @pytest.mark.parametrize(
     "cell_type", [dolfinx.mesh.CellType.triangle, dolfinx.mesh.CellType.quadrilateral]
