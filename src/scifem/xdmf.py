@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import typing
+from dataclasses import dataclass
 import xml.etree.ElementTree as ET
 import contextlib
 from pathlib import Path
@@ -338,3 +339,223 @@ def create_pointcloud(
     except (ImportError, TypeError, ValueError):
         warnings.warn("ADIOS2 not available, using h5py")
         write_hdf5_h5py(functions=functions, h5name=h5name, data=data)
+
+
+@dataclass
+class XDMFFile:
+    filename: os.PathLike
+    functions: typing.Sequence[dolfinx.fem.Function]
+    filemode: typing.Literal["r", "a", "w"] = "w"
+    backend: typing.Literal["h5py", "adios2"] = "adios2"
+
+    def __post_init__(self) -> None:
+        self.h5name = Path(self.filename).with_suffix(".h5")
+        self.xdmfname = Path(self.filename).with_suffix(".xdmf")
+
+        if self.filemode == "r":
+            if not self.h5name.exists():
+                raise FileNotFoundError(f"{self.h5name} does not exist")
+            if not self.xdmfname.exists():
+                raise FileNotFoundError(f"{self.xdmfname} does not exist")
+        elif self.filemode == "w":
+            # Overwrite existing files so make sure they don't exist
+            self.h5name.unlink(missing_ok=True)
+            self.xdmfname.unlink(missing_ok=True)
+
+        if len(self.functions) == 0:
+            raise ValueError("No functions to write to point cloud")
+        for f in self.functions:
+            if not isinstance(f, dolfinx.fem.Function):
+                raise ValueError("All functions must be of type dolfinx.fem.Function")
+
+        data = check_function_space(self.functions)
+        if data is None:
+            raise ValueError("All functions must be in the same function space")
+        self._data = data
+        self._time_values: list[float] = []
+        self._comm = self.functions[0].function_space.mesh.comm
+
+        assert self.backend in [
+            "h5py",
+            "adios2",
+        ], f"Unknown backend {self.backend}, must be 'h5py' or 'adios2'"
+        if self.backend == "adios2":
+            try:
+                self._init_adios()
+            except (ImportError, TypeError, ValueError):
+                warnings.warn("ADIOS2 not available, using h5py")
+                self.backend = "h5py"
+        if self.backend == "h5py":
+            self._init_h5py()
+
+    def _init_h5py(self) -> None:
+        self._outfile = h5pyfile(
+            h5name=self.h5name, filemode=self.filemode, comm=self._data.comm
+        ).__enter__()
+        self._step = self._outfile.create_group(np.bytes_("Step0"))
+        points = self._step.create_dataset(
+            "Points",
+            (self._data.num_dofs_global, self._data.points.shape[1]),
+            dtype=self._data.points.dtype,
+        )
+        points[self._data.local_range[0] : self._data.local_range[1], :] = self._data.points_out
+        cells = self._step.create_dataset("Cells", (self._data.num_dofs_global,), dtype=np.int64)
+        cells[self._data.local_range[0] : self._data.local_range[1]] = np.arange(
+            self._data.local_range[0], self._data.local_range[1], dtype=np.int64
+        )
+
+    def _write_h5py(self) -> None:
+        for u in self.functions:
+            # Pad array to 3D if vector space with 2 components
+            array = np.zeros(
+                (self._data.num_dofs_local, self._data.bs if self._data.bs != 2 else 3),
+                dtype=u.x.array.dtype,
+            )
+            array[:, : self._data.bs] = u.x.array[
+                : self._data.num_dofs_local * self._data.bs
+            ].reshape(-1, self._data.bs)
+            dset = self._step.create_dataset(
+                f"Values_{u.name}_{len(self._time_values)}",
+                (self._data.num_dofs_global, array.shape[1]),
+                dtype=array.dtype,
+            )
+            dset[self._data.local_range[0] : self._data.local_range[1], :] = array
+
+    def _close_h5py(self) -> None:
+        self._outfile.close()
+
+    def _init_adios(self) -> None:
+        import adios2
+
+        def resolve_adios_scope(adios2):
+            return adios2 if not hasattr(adios2, "bindings") else adios2.bindings
+
+        adios2 = resolve_adios_scope(adios2)
+
+        # Create ADIOS2 reader
+        self._adios = adios2.ADIOS(self._data.comm)
+        self._io = self._adios.DeclareIO("Point cloud writer")
+        self._io.SetEngine("HDF5")
+        self._outfile = self._io.Open(self.h5name.as_posix(), adios2.Mode.Write)
+        pointvar = self._io.DefineVariable(
+            "Points",
+            self._data.points_out,
+            shape=[self._data.num_dofs_global, self._data.points.shape[1]],
+            start=[self._data.local_range[0], 0],
+            count=[self._data.num_dofs_local, self._data.points.shape[1]],
+        )
+        self._outfile.Put(pointvar, self._data.points_out)
+        cells = np.arange(self._data.local_range[0], self._data.local_range[1], dtype=np.int64)
+        cellvar = self._io.DefineVariable(
+            "Cells",
+            cells,
+            shape=[self._data.num_dofs_global],
+            start=[self._data.local_range[0]],
+            count=[self._data.num_dofs_local],
+        )
+        self._outfile.Put(cellvar, cells)
+
+    def _write_adios(self) -> None:
+        for u in self.functions:
+            array = np.zeros(
+                (self._data.num_dofs_local, self._data.bs if self._data.bs != 2 else 3),
+                dtype=u.x.array.dtype,
+            )
+            array[:, : self._data.bs] = u.x.array[
+                : self._data.num_dofs_local * self._data.bs
+            ].reshape(-1, self._data.bs)
+
+            valuevar = self._io.DefineVariable(
+                f"Values_{u.name}_{len(self._time_values)}",
+                array,
+                shape=[self._data.num_dofs_global, array.shape[1]],
+                start=[self._data.local_range[0], 0],
+                count=[self._data.num_dofs_local, array.shape[1]],
+            )
+            self._outfile.Put(valuevar, array)
+        self._outfile.PerformPuts()
+
+    def _close_adios(self) -> None:
+        self._outfile.Close()
+        assert self._adios.RemoveIO("Point cloud writer")
+
+    def close(self) -> None:
+        if self.backend == "adios2":
+            self._close_adios()
+        elif self.backend == "h5py":
+            self._close_h5py()
+
+    def write_xdmf(self) -> None:
+        xdmf = ET.Element("Xdmf")
+        xdmf.attrib["Version"] = "3.0"
+        xdmf.attrib["xmlns:xi"] = "http://www.w3.org/2001/XInclude"
+        domain = ET.SubElement(xdmf, "Domain")
+        grid = ET.SubElement(domain, "Grid")
+        grid.attrib["GridType"] = "Uniform"
+        grid.attrib["Name"] = "Point Cloud"
+        topology = ET.SubElement(grid, "Topology")
+        topology.attrib["NumberOfElements"] = str(self._data.num_dofs_global)
+        topology.attrib["TopologyType"] = "PolyVertex"
+        topology.attrib["NodesPerElement"] = "1"
+        top_data = ET.SubElement(topology, "DataItem")
+        top_data.attrib["Dimensions"] = f"{self._data.num_dofs_global} {1}"
+        top_data.attrib["Format"] = "HDF"
+        top_data.text = f"{self.h5name.name}:/Step0/Cells"
+        geometry = ET.SubElement(grid, "Geometry")
+        geometry.attrib["GeometryType"] = "XYZ"
+        it0 = ET.SubElement(geometry, "DataItem")
+        it0.attrib["Dimensions"] = f"{self._data.num_dofs_global} {self._data.points.shape[1]}"
+        it0.attrib["Format"] = "HDF"
+        it0.text = f"{self.h5name.name}:/Step0/Points"
+        for u in self.functions:
+            ugrid_collection = ET.SubElement(domain, "Grid")
+            ugrid_collection.attrib["GridType"] = "Collection"
+            ugrid_collection.attrib["CollectionType"] = "Temporal"
+            ugrid_collection.attrib["Name"] = u.name
+
+            for step, time_value in enumerate(self._time_values):
+                ugrid = ET.SubElement(ugrid_collection, "Grid")
+                ugrid.attrib["GridType"] = "Uniform"
+                ugrid.attrib["Name"] = u.name
+                xp = ET.SubElement(ugrid, "xi:include")
+                xp.attrib["xpointer"] = (
+                    "xpointer(/Xdmf/Domain/Grid[@GridType='Uniform'][1]/*[self::Topology or self::Geometry])"  # noqa: E501
+                )
+                time = ET.SubElement(ugrid, "Time")
+                time.attrib["Value"] = str(step)
+                attrib = ET.SubElement(ugrid, "Attribute")
+                attrib.attrib["Name"] = u.name
+                out_bs = self._data.bs
+                if out_bs == 1:
+                    attrib.attrib["AttributeType"] = "Scalar"
+                else:
+                    if out_bs == 2:
+                        # Pad to 3D
+                        out_bs = 3
+                    attrib.attrib["AttributeType"] = "Vector"
+                attrib.attrib["Center"] = "Node"
+                it1 = ET.SubElement(attrib, "DataItem")
+                it1.attrib["Dimensions"] = f"{self._data.num_dofs_global} {out_bs}"
+                it1.attrib["Format"] = "HDF"
+                it1.text = f"{self.h5name.name}:/Step0/Values_{u.name}_{step+1}"
+
+        ET.indent(xdmf)
+        text = [
+            '<?xml version="1.0"?>\n<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>\n',
+            ET.tostring(xdmf, encoding="unicode"),
+        ]
+        self.xdmfname.write_text("".join(text))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def write(self, time: float) -> None:
+        self._time_values.append(time)
+        self.write_xdmf()
+        if self.backend == "adios2":
+            self._write_adios()
+        elif self.backend == "h5py":
+            self._write_h5py()
