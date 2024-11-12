@@ -508,12 +508,13 @@ class XDMFFile:
         assert self._adios.RemoveIO("Point cloud writer")
 
     def close(self) -> None:
+        """Close the XDMF file."""
         if self.backend == "adios2":
             self._close_adios()
         elif self.backend == "h5py":
             self._close_h5py()
 
-    def write_xdmf(self) -> None:
+    def _write_xdmf(self) -> None:
         xdmf = ET.Element("Xdmf")
         xdmf.attrib["Version"] = "3.0"
         xdmf.attrib["xmlns:xi"] = "http://www.w3.org/2001/XInclude"
@@ -581,8 +582,14 @@ class XDMFFile:
         self.close()
 
     def write(self, time: float) -> None:
+        """Write the point cloud at a given time.
+
+        Args:
+            time: The time value.
+
+        """
         self._time_values.append(time)
-        self.write_xdmf()
+        self._write_xdmf()
         if self.backend == "adios2":
             self._write_adios()
         elif self.backend == "h5py":
