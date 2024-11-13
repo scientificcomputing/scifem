@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import typing
 from dataclasses import dataclass
 import xml.etree.ElementTree as ET
@@ -14,6 +15,8 @@ import numpy as np
 import numpy.typing as npt
 import dolfinx
 
+logger = logging.getLogger(__name__)
+
 
 def deprecated(func):
     """This is a decorator which can be used to mark functions
@@ -27,6 +30,7 @@ def deprecated(func):
             "Call to deprecated function {}.".format(func.__name__),
             "Please use the class scifem.xdmf.XDMFFile instead.",
         )
+        logger.warning(msg)
         warnings.warn(
             msg,
             category=DeprecationWarning,
@@ -365,7 +369,7 @@ def create_pointcloud(
     try:
         write_hdf5_adios(functions=functions, h5name=h5name, data=data)
     except (ImportError, TypeError, ValueError):
-        warnings.warn("ADIOS2 not available, using h5py")
+        warnings.warn("ADIOS2 not available, using h5py", stacklevel=2)
         write_hdf5_h5py(functions=functions, h5name=h5name, data=data)
 
 
@@ -400,7 +404,7 @@ class XDMFFile:
         if data is None:
             raise ValueError("All functions must be in the same function space")
         self._data = data
-        self._time_values: list[float] = []
+        self._time_values: dict[float, int] = {}
         self._comm = self.functions[0].function_space.mesh.comm
 
         assert self.backend in [
@@ -411,12 +415,15 @@ class XDMFFile:
             try:
                 self._init_adios()
             except (ImportError, TypeError, ValueError):
-                warnings.warn("ADIOS2 not available, using h5py")
+                msg = "ADIOS2 not available, using h5py"
+                warnings.warn(msg)
+                logging.warning(msg)
                 self.backend = "h5py"
         if self.backend == "h5py":
             self._init_h5py()
 
     def _init_h5py(self) -> None:
+        logger.debug("Initializing h5py")
         self._outfile = h5pyfile(
             h5name=self.h5name, filemode=self.filemode, comm=self._data.comm
         ).__enter__()
@@ -432,7 +439,8 @@ class XDMFFile:
             self._data.local_range[0], self._data.local_range[1], dtype=np.int64
         )
 
-    def _write_h5py(self) -> None:
+    def _write_h5py(self, index: int) -> None:
+        logger.debug(f"Writing h5py at time {index}")
         for u in self.functions:
             # Pad array to 3D if vector space with 2 components
             array = np.zeros(
@@ -443,16 +451,18 @@ class XDMFFile:
                 : self._data.num_dofs_local * self._data.bs
             ].reshape(-1, self._data.bs)
             dset = self._step.create_dataset(
-                f"Values_{u.name}_{len(self._time_values)}",
+                f"Values_{u.name}_{index}",
                 (self._data.num_dofs_global, array.shape[1]),
                 dtype=array.dtype,
             )
             dset[self._data.local_range[0] : self._data.local_range[1], :] = array
 
     def _close_h5py(self) -> None:
+        logger.debug("Closing HDF5 file")
         self._outfile.close()
 
     def _init_adios(self) -> None:
+        logger.debug("Initializing ADIOS2")
         import adios2
 
         def resolve_adios_scope(adios2):
@@ -483,7 +493,8 @@ class XDMFFile:
         )
         self._outfile.Put(cellvar, cells)
 
-    def _write_adios(self) -> None:
+    def _write_adios(self, index: int) -> None:
+        logger.debug(f"Writing adios at time {index}")
         for u in self.functions:
             array = np.zeros(
                 (self._data.num_dofs_local, self._data.bs if self._data.bs != 2 else 3),
@@ -494,7 +505,7 @@ class XDMFFile:
             ].reshape(-1, self._data.bs)
 
             valuevar = self._io.DefineVariable(
-                f"Values_{u.name}_{len(self._time_values)}",
+                f"Values_{u.name}_{index}",
                 array,
                 shape=[self._data.num_dofs_global, array.shape[1]],
                 start=[self._data.local_range[0], 0],
@@ -504,17 +515,20 @@ class XDMFFile:
         self._outfile.PerformPuts()
 
     def _close_adios(self) -> None:
+        logger.debug("Closing ADIOS2 file")
         self._outfile.Close()
         assert self._adios.RemoveIO("Point cloud writer")
 
     def close(self) -> None:
         """Close the XDMF file."""
+        logger.debug("Closing XDMF file")
         if self.backend == "adios2":
             self._close_adios()
         elif self.backend == "h5py":
             self._close_h5py()
 
     def _write_xdmf(self) -> None:
+        logger.debug("Writing XDMF file")
         xdmf = ET.Element("Xdmf")
         xdmf.attrib["Version"] = "3.0"
         xdmf.attrib["xmlns:xi"] = "http://www.w3.org/2001/XInclude"
@@ -542,7 +556,7 @@ class XDMFFile:
             ugrid_collection.attrib["CollectionType"] = "Temporal"
             ugrid_collection.attrib["Name"] = u.name
 
-            for step, time_value in enumerate(self._time_values):
+            for step, time_value in enumerate(sorted(self._time_values)):
                 ugrid = ET.SubElement(ugrid_collection, "Grid")
                 ugrid.attrib["GridType"] = "Uniform"
                 ugrid.attrib["Name"] = u.name
@@ -551,7 +565,7 @@ class XDMFFile:
                     "xpointer(/Xdmf/Domain/Grid[@GridType='Uniform'][1]/*[self::Topology or self::Geometry])"  # noqa: E501
                 )
                 time = ET.SubElement(ugrid, "Time")
-                time.attrib["Value"] = str(step)
+                time.attrib["Value"] = str(time_value)
                 attrib = ET.SubElement(ugrid, "Attribute")
                 attrib.attrib["Name"] = u.name
                 out_bs = self._data.bs
@@ -566,7 +580,7 @@ class XDMFFile:
                 it1 = ET.SubElement(attrib, "DataItem")
                 it1.attrib["Dimensions"] = f"{self._data.num_dofs_global} {out_bs}"
                 it1.attrib["Format"] = "HDF"
-                it1.text = f"{self.h5name.name}:/Step0/Values_{u.name}_{step+1}"
+                it1.text = f"{self.h5name.name}:/Step0/Values_{u.name}_{step}"
 
         ET.indent(xdmf)
         text = [
@@ -588,9 +602,18 @@ class XDMFFile:
             time: The time value.
 
         """
-        self._time_values.append(time)
+        logger.debug(f"Writing time {time}")
+        time = float(time)
+        if time in self._time_values:
+            msg = f"Time {time} already written to file. Skipping."
+            logger.warning(msg)
+            return
+
+        index = len(self._time_values)
+        self._time_values[time] = index
+
         self._write_xdmf()
         if self.backend == "adios2":
-            self._write_adios()
+            self._write_adios(index)
         elif self.backend == "h5py":
-            self._write_h5py()
+            self._write_h5py(index)
