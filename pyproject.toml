@@ -21,7 +21,7 @@ repository = "https://github.com/scientificcomputing/scifem.git"
 [project.optional-dependencies]
 h5py = ["h5py"]
 adios2 = ["adios2"]
-docs = ["jupyter-book", "jupytext", "pyvista[all]", "sphinxcontrib-bibtex"]
+docs = ["jupyter-book", "jupytext", "pyvista[jupyter]", "sphinxcontrib-bibtex"]
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
 test = ["pytest", "petsc4py", "h5py"]
 all = ["scifem[docs,dev,test,audio2,h5py]"]
