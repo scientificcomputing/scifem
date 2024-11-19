@@ -283,11 +283,11 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         super().__init__(u[0].function_space.mesh.comm)
 
         # Set PETSc options for Krylov solver
+        prefix = self.krylov_solver.getOptionsPrefix()
+        if prefix is None:
+            prefix = ""
         if petsc_options is not None:
             # Set PETSc options
-            prefix = self.krylov_solver.getOptionsPrefix()
-            if prefix is None:
-                prefix = ""
             opts = PETSc.Options()
             opts.prefixPush(prefix)
             for k, v in petsc_options.items():
