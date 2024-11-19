@@ -3,6 +3,7 @@
 
 #include <basix/finite-element.h>
 #include <dolfinx/common/IndexMap.h>
+#include <dolfinx/common/version.h>
 #include <dolfinx/fem/DofMap.h>
 #include <dolfinx/fem/ElementDofLayout.h>
 #include <dolfinx/fem/FiniteElement.h>
@@ -92,11 +93,18 @@ create_real_functionspace(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
       = std::make_shared<const dolfinx::fem::DofMap>(dof_layout, imap,
                                                      index_map_bs, dofmap, bs);
 
+#if DOLFINX_VERSION_MINOR > 9
+  std::shared_ptr<const dolfinx::fem::FiniteElement<T>> d_el
+      = std::make_shared<const dolfinx::fem::FiniteElement<T>>(e_v, value_shape,
+                                                               false);
+  return dolfinx::fem::FunctionSpace<T>(mesh, d_el, real_dofmap);
+
+#else
   std::shared_ptr<const dolfinx::fem::FiniteElement<T>> d_el
       = std::make_shared<const dolfinx::fem::FiniteElement<T>>(e_v, value_size,
                                                                false);
-
   return dolfinx::fem::FunctionSpace<T>(mesh, d_el, real_dofmap, value_shape);
+#endif
 }
 
 std::vector<std::int32_t>
