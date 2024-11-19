@@ -93,10 +93,10 @@ create_real_functionspace(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
                                                      index_map_bs, dofmap, bs);
 
   std::shared_ptr<const dolfinx::fem::FiniteElement<T>> d_el
-      = std::make_shared<const dolfinx::fem::FiniteElement<T>>(e_v, value_size,
+      = std::make_shared<const dolfinx::fem::FiniteElement<T>>(e_v, value_shape,
                                                                false);
 
-  return dolfinx::fem::FunctionSpace<T>(mesh, d_el, real_dofmap, value_shape);
+  return dolfinx::fem::FunctionSpace<T>(mesh, d_el, real_dofmap);
 }
 
 std::vector<std::int32_t>
