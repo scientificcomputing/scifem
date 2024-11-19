@@ -365,7 +365,7 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
 
     def _pre_newton_iteration(self, x: PETSc.Vec) -> None:
         """Function called before the residual or Jacobian is
-        computed. It
+        computed.
         Args:
            x: The vector containing the latest solution
         """
