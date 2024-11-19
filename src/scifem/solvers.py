@@ -283,15 +283,17 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         super().__init__(u[0].function_space.mesh.comm)
 
         # Set PETSc options for Krylov solver
-        if petsc_options is None:
+        prefix = self.krylov_solver.getOptionsPrefix()
+        if prefix is None:
+            prefix = ""
+        if petsc_options is not None:
             # Set PETSc options
-            prefix = self.krylov_solver.getOptionsPrefix()
             opts = PETSc.Options()
-            if petsc_options is not None:
-                for k, v in petsc_options.items():
-                    opts[k] = f"{prefix}{v}"
+            opts.prefixPush(prefix)
+            for k, v in petsc_options.items():
+                opts[k] = v
+            opts.prefixPop()
             self.krylov_solver.setFromOptions()
-
         self._F = dolfinx.fem.form(
             F,
             form_compiler_options=form_compiler_options,
@@ -325,6 +327,8 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         self._J = dolfinx.fem.petsc.create_matrix_block(self._a)
         self._dx = dolfinx.fem.petsc.create_vector_block(self._F)
         self._x = dolfinx.fem.petsc.create_vector_block(self._F)
+        self._J.setOptionsPrefix(prefix)
+        self._J.setFromOptions()
 
         self.setJ(self._assemble_jacobian, self._J)
         self.setF(self._assemble_residual, self._b)
