@@ -257,7 +257,7 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         petsc_options: dict | None = None,
         entity_maps: dict | None = None,
     ):
-        """Initialize solver for solving a non-linear problem using Newton's method`.
+        """Initialize solver for solving a non-linear problem using Newton's method.
         Args:
             F: List of PDE residuals [F_0(u, v_0), F_1(u, v_1), ...]
             u: List of unknown functions u=[u_0, u_1, ...]
