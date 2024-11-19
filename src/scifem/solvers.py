@@ -308,7 +308,8 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         if J is None:
             if _v(dolfinx.__version__) < _v("0.9"):
                 raise RuntimeError(
-                    "Automatic computation of Jacobian for blocked problem is only supprted in DOLFINx 0.9 and later"
+                    "Automatic computation of Jacobian for blocked problem is only"
+                    + "supported in DOLFINx 0.9 and later"
                 )
             du = ufl.TrialFunctions(ufl.MixedFunctionSpace(*[ui.function_space for ui in u]))
             J = ufl.extract_blocks(sum(ufl.derivative(sum(F), u[i], du[i]) for i in range(len(u))))
@@ -321,8 +322,8 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
 
         self._bcs = bcs
         self._u = u
-        self._pre_solve_callback = None
-        self._post_solve_callback = None
+        self._pre_solve_callback: Callable[["BlockedNewtonSolver"], None] | None = None
+        self._post_solve_callback: Callable[["BlockedNewtonSolver"], None] | None = None
 
         # Create structures for holding arrays and matrix
         self._b = dolfinx.fem.petsc.create_vector_block(self._F)
