@@ -8,7 +8,7 @@ from . import _scifem  # type: ignore
 from .point_source import PointSource
 from .assembly import assemble_scalar
 from . import xdmf
-from .solvers import BlockedNewtonSolver,NewtonSolver
+from .solvers import BlockedNewtonSolver, NewtonSolver
 from .mesh import create_entity_markers
 
 __all__ = [

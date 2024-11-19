@@ -307,7 +307,9 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         # Create the Jacobian matrix, dF/du
         if J is None:
             if _v(dolfinx.__version__) < _v("0.9"):
-                raise RuntimeError("Automatic computation of Jacobian for blocked problem is only supprted in DOLFINx 0.9 and later")
+                raise RuntimeError(
+                    "Automatic computation of Jacobian for blocked problem is only supprted in DOLFINx 0.9 and later"
+                )
             du = ufl.TrialFunctions(ufl.MixedFunctionSpace(*[ui.function_space for ui in u]))
             J = ufl.extract_blocks(sum(ufl.derivative(sum(F), u[i], du[i]) for i in range(len(u))))
         self._a = dolfinx.fem.form(
