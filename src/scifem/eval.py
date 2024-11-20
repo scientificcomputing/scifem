@@ -34,7 +34,7 @@ def evaluate_function(
 
     bb_tree = dolfinx.geometry.bb_tree(mesh, mesh.topology.dim)
     # Find cells whose bounding-box collide with the the points
-    potential_colliding_cells = dolfinx.geometry.compute_collisaions_points(bb_tree, points)
+    potential_colliding_cells = dolfinx.geometry.compute_collisions_points(bb_tree, points)
     # Choose one of the cells that contains the point
     colliding_cells = dolfinx.geometry.compute_colliding_cells(
         mesh, potential_colliding_cells, points
