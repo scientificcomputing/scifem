@@ -6,7 +6,12 @@ import ufl
 import numpy as np
 import scifem
 import pytest
+from petsc4py import PETSc
 from unittest.mock import patch
+
+
+stype = PETSc.ScalarType
+rtype = PETSc.RealType
 
 
 @pytest.mark.parametrize("use_ctx_manager", [True, False])
@@ -25,9 +30,9 @@ def test_XDMFFile_2D(cell_type, degree, value_shape, backend, use_ctx_manager, t
         scheme="default", degree=degree, cell=mesh.ufl_cell().cellname(), value_shape=value_shape
     )
     V = dolfinx.fem.functionspace(mesh, el)
-    u = dolfinx.fem.Function(V)
-    v = dolfinx.fem.Function(V)
-    t = dolfinx.fem.Constant(mesh, 0.0)
+    u = dolfinx.fem.Function(V, dtype=stype)
+    v = dolfinx.fem.Function(V, dtype=stype)
+    t = dolfinx.fem.Constant(mesh, stype(0.0))
 
     X = ufl.SpatialCoordinate(mesh)
     if value_shape == ():
@@ -45,22 +50,22 @@ def test_XDMFFile_2D(cell_type, degree, value_shape, backend, use_ctx_manager, t
         with scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend) as xdmf:
             u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
             v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
-            xdmf.write(t.value)
+            xdmf.write(rtype(t.value))
 
             t.value = 0.3
             u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
             v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
-            xdmf.write(t.value)
+            xdmf.write(rtype(t.value))
     else:
         xdmf = scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend)
         u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
         v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
-        xdmf.write(t.value)
+        xdmf.write(rtype(t.value))
 
         t.value = 0.3
         u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
         v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
-        xdmf.write(t.value)
+        xdmf.write(rtype(t.value))
 
         xdmf.close()
 
@@ -84,9 +89,9 @@ def test_XDMFFile_3D(cell_type, degree, value_shape, backend, use_ctx_manager, t
         scheme="default", degree=degree, cell=mesh.ufl_cell().cellname(), value_shape=value_shape
     )
     V = dolfinx.fem.functionspace(mesh, el)
-    u = dolfinx.fem.Function(V)
-    v = dolfinx.fem.Function(V)
-    t = dolfinx.fem.Constant(mesh, 0.0)
+    u = dolfinx.fem.Function(V, dtype=stype)
+    v = dolfinx.fem.Function(V, dtype=stype)
+    t = dolfinx.fem.Constant(mesh, stype(0.0))
 
     X = ufl.SpatialCoordinate(mesh)
     if value_shape == ():
@@ -104,22 +109,22 @@ def test_XDMFFile_3D(cell_type, degree, value_shape, backend, use_ctx_manager, t
         with scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend) as xdmf:
             u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
             v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
-            xdmf.write(t.value)
+            xdmf.write(rtype(t.value))
 
             t.value = 0.3
             u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
             v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
-            xdmf.write(t.value)
+            xdmf.write(rtype(t.value))
     else:
         xdmf = scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend)
         u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
         v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
-        xdmf.write(t.value)
+        xdmf.write(rtype(t.value))
 
         t.value = 0.3
         u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
         v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
-        xdmf.write(t.value)
+        xdmf.write(rtype(t.value))
 
         xdmf.close()
 
