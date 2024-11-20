@@ -8,9 +8,22 @@ import scifem
 import pytest
 from unittest.mock import patch
 
+try:
+    import h5py  # noqa: F401
+
+    hash5py = True
+except ImportError:
+    hash5py = False
+
 
 @pytest.mark.parametrize("use_ctx_manager", [True, False])
-@pytest.mark.parametrize("backend", ["h5py", "adios2"])
+@pytest.mark.parametrize(
+    "backend",
+    [
+        pytest.param("h5py", marks=pytest.mark.skipif(not hash5py, reason="h5py is not installed")),
+        "adios2",
+    ],
+)
 @pytest.mark.parametrize("degree", [1, 2, 3])
 @pytest.mark.parametrize(
     "cell_type", [dolfinx.mesh.CellType.triangle, dolfinx.mesh.CellType.quadrilateral]
@@ -69,7 +82,13 @@ def test_XDMFFile_2D(cell_type, degree, value_shape, backend, use_ctx_manager, t
 
 
 @pytest.mark.parametrize("use_ctx_manager", [True, False])
-@pytest.mark.parametrize("backend", ["h5py", "adios2"])
+@pytest.mark.parametrize(
+    "backend",
+    [
+        pytest.param("h5py", marks=pytest.mark.skipif(not hash5py, reason="h5py is not installed")),
+        "adios2",
+    ],
+)
 @pytest.mark.parametrize("degree", [1, 2, 3])
 @pytest.mark.parametrize(
     "cell_type", [dolfinx.mesh.CellType.tetrahedron, dolfinx.mesh.CellType.hexahedron]
@@ -209,6 +228,7 @@ def test_different_function_spaces_raises_ValueError(tmp_path):
     "cell_type", [dolfinx.mesh.CellType.tetrahedron, dolfinx.mesh.CellType.hexahedron]
 )
 @pytest.mark.parametrize("value_shape", [(), (3,)])
+@pytest.mark.skipif(not hash5py, reason="h5py not installed")
 def test_h5py_fallback_3D(cell_type, degree, value_shape, tmp_path):
     folder = MPI.COMM_WORLD.bcast(tmp_path, root=0)
 
