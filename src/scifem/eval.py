@@ -5,7 +5,7 @@ import numpy.typing as npt
 
 
 def evaluate_function(
-    u: dolfinx.fem.Function, points: npt.NDArray[np.float64], broadcast=True
+    u: dolfinx.fem.Function, points: npt.ArrayLike, broadcast=True
 ) -> npt.NDArray[np.float64]:
     """Evaluate a function at a set of points.
 
