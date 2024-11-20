@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from . import _scifem  
+from . import _scifem
 import dolfinx
 import typing
 import numpy as np
@@ -68,9 +68,12 @@ def create_entity_markers(
     return dolfinx.mesh.meshtags(domain, dim, facets, markers[facets])
 
 
-def transfer_meshtags_to_submesh(entity_tag: dolfinx.mesh.MeshTags,
-                                 submesh: dolfinx.mesh.Mesh, vertex_to_parent: npt.NDArray[np.int32],
-                                 cell_to_parent: npt.NDArray[np.int32]) -> tuple[dolfinx.mesh.MeshTags, npt.NDArray[np.int32]]:
+def transfer_meshtags_to_submesh(
+    entity_tag: dolfinx.mesh.MeshTags,
+    submesh: dolfinx.mesh.Mesh,
+    vertex_to_parent: npt.NDArray[np.int32],
+    cell_to_parent: npt.NDArray[np.int32],
+) -> tuple[dolfinx.mesh.MeshTags, npt.NDArray[np.int32]]:
     """
     Transfer a ``entity_tag`` from a parent mesh to a ``submesh``.
 
@@ -86,12 +89,16 @@ def transfer_meshtags_to_submesh(entity_tag: dolfinx.mesh.MeshTags,
     dim = entity_tag.dim
     sub_tdim = submesh.topology.dim
     if dim > sub_tdim:
-        raise RuntimeError(f"Cannot transfer meshtags of dimension {dim} to submesh with topological dimension")
+        raise RuntimeError(
+            f"Cannot transfer meshtags of dimension {dim} to submesh with topological dimension"
+        )
 
     submesh.topology.create_connectivity(sub_tdim, sub_tdim)
     submesh.topology.create_connectivity(entity_tag.dim, 0)
     submesh.topology.create_connectivity(sub_tdim, entity_tag.dim)
     entity_tag.topology.create_connectivity(dim, 0)
     entity_tag.topology.create_connectivity(dim, sub_tdim)
-    cpp_tag, sub_to_parent_entity_map =_scifem.transfer_meshtags_to_submesh_int32(entity_tag._cpp_object, submesh.topology._cpp_object, vertex_to_parent, cell_to_parent)
+    cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
+        entity_tag._cpp_object, submesh.topology._cpp_object, vertex_to_parent, cell_to_parent
+    )
     return dolfinx.mesh.MeshTags(cpp_tag), sub_to_parent_entity_map

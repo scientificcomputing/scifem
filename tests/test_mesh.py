@@ -109,13 +109,19 @@ def test_create_celltags_empty(entities_list):
     assert set(cell_tag.values) == set()
 
 
-
 import pytest
-@pytest.mark.parametrize("edim", [0,1,2,3])
+
+
+@pytest.mark.parametrize("edim", [0, 1, 2, 3])
 def test_submesh_meshtags(edim):
-    
-    mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 3,4,7, cell_type=dolfinx.cpp.mesh.CellType.tetrahedron,
-                                         ghost_mode=dolfinx.cpp.mesh.GhostMode.shared_facet)
+    mesh = dolfinx.mesh.create_unit_cube(
+        MPI.COMM_WORLD,
+        3,
+        4,
+        7,
+        cell_type=dolfinx.cpp.mesh.CellType.tetrahedron,
+        ghost_mode=dolfinx.cpp.mesh.GhostMode.shared_facet,
+    )
 
     mesh.topology.create_entities(edim)
     emap = mesh.topology.index_map(edim)
@@ -125,23 +131,32 @@ def test_submesh_meshtags(edim):
     subset_cells_local = np.arange(num_cells_local, dtype=np.int32)[::2]
     cell_communicator = dolfinx.la.vector(emap, 1)
     cell_communicator.array[subset_cells_local] = 1
-    cell_communicator.scatter_reverse(dolfinx.la.InsertMode.add) 
+    cell_communicator.scatter_reverse(dolfinx.la.InsertMode.add)
     cell_communicator.scatter_forward()
     subset_cells = np.flatnonzero(cell_communicator.array).astype(np.int32)
-    submesh, entity_to_parent, vertex_to_parent, _ = dolfinx.mesh.create_submesh(mesh, edim, subset_cells)
+    submesh, entity_to_parent, vertex_to_parent, _ = dolfinx.mesh.create_submesh(
+        mesh, edim, subset_cells
+    )
 
     # Create meshtags on the parent mesh
-    for i in range(edim+1):
+    for i in range(edim + 1):
         mesh.topology.create_entities(i)
         parent_e_map = mesh.topology.index_map(i)
-        num_parent_entities = parent_e_map.size_local + parent_e_map.num_ghosts 
+        num_parent_entities = parent_e_map.size_local + parent_e_map.num_ghosts
         values = parent_e_map.local_range[0] + np.arange(num_parent_entities, dtype=np.int32)
         entity_communicator = dolfinx.la.vector(parent_e_map, 1)
         entity_communicator.array[:] = values
         entity_communicator.scatter_forward()
-        parent_tag = dolfinx.mesh.meshtags(mesh, i, np.arange(num_parent_entities, dtype=np.int32), entity_communicator.array.astype(np.int32))
+        parent_tag = dolfinx.mesh.meshtags(
+            mesh,
+            i,
+            np.arange(num_parent_entities, dtype=np.int32),
+            entity_communicator.array.astype(np.int32),
+        )
 
-        sub_tag, sub_entity_to_parent = scifem.mesh.transfer_meshtags_to_submesh(parent_tag, submesh, vertex_to_parent, entity_to_parent)
+        sub_tag, sub_entity_to_parent = scifem.mesh.transfer_meshtags_to_submesh(
+            parent_tag, submesh, vertex_to_parent, entity_to_parent
+        )
         submesh.topology.create_connectivity(i, edim)
 
         midpoints = dolfinx.mesh.compute_midpoints(submesh, i, sub_tag.indices)

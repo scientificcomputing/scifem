@@ -24,7 +24,7 @@ __all__ = [
     "create_entity_markers",
     "NewtonSolver",
     "BlockedNewtonSolver",
-    "transfer_meshtags_to_submesh"
+    "transfer_meshtags_to_submesh",
 ]
 
 
