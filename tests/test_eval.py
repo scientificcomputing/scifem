@@ -112,6 +112,5 @@ def test_evaluate_vector_function_3D(cell_type):
     points = np.array([[0.0, 0.0, 0.0], [0.2, 0.2, 0.3], [0.5, 0.5, 0.2], [0.7, 0.2, 0.5]])
     u_values = evaluate_function(u, points)
     exact = np.array(f(points.T)).T
-    print(u_values, "\n", exact, "\n\n")
 
     assert np.allclose(u_values, exact)
