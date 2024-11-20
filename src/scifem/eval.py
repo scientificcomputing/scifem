@@ -7,6 +7,17 @@ import numpy.typing as npt
 def evaluate_function(
     u: dolfinx.fem.Function, points: npt.NDArray[np.float64], broadcast=True
 ) -> npt.NDArray[np.float64]:
+    """Evaluate a function at a set of points.
+
+    Args:
+        u: The function to evaluate.
+        points: The points to evaluate the function at.
+        broadcast: If True, the values will be broadcasted to all processes.
+
+    Returns:
+        The values of the function evaluated at the points.
+
+    """
     mesh = u.function_space.mesh
     u.x.scatter_forward()
     comm = mesh.comm
