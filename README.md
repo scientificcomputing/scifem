@@ -20,18 +20,34 @@ The package is still in its early stages and many functionalities are still miss
 
 ## Installation
 
-The package is partly written in C++ and relies on `dolfinx`. User are encouraged to install `scifem` in an environment where `dolfinx` is already installed.
-The package can be installed using `pip`:
+The package is partly written in C++ and relies on `dolfinx`. User are encouraged to install `scifem` with `pip` in an environment where `dolfinx` is already installed or with `conda`.
+
+### `pip`
+To install the package with `pip` run
 
 ```bash
 python3 -m pip install scifem --no-build-isolation
 ```
 
-or from `git` with
+To install the development version you can run
 
 ```bash
 python3 -m pip install --no-build-isolation git+https://github.com/scientificcomputing/scifem.git
 ```
+
+Note that you should pass the flag `--no-build-isolation` to `pip` to avoid issues with the build environment, such as incompatible versions of `nanobind`.
+
+### `conda`
+
+To install the package with `conda` run
+
+```bash
+conda install -c conda-forge scifem
+```
+
+
+
+
 
 ## Having issues or want to contribute?
 
