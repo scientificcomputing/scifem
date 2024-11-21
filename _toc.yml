@@ -11,6 +11,7 @@ parts:
     - file: "examples/xdmf_point_cloud.py"
     - file: "examples/mark_entities.py"
     - file: "examples/blocked_solver.py"
+    - file: "examples/evaluate_function.py"
   - caption: Reference
     chapters:
     - file: "docs/api.rst"

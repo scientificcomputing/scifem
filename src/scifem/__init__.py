@@ -10,6 +10,7 @@ from .assembly import assemble_scalar
 from . import xdmf
 from .solvers import BlockedNewtonSolver, NewtonSolver
 from .mesh import create_entity_markers
+from .eval import evaluate_function
 
 __all__ = [
     "PointSource",
@@ -24,6 +25,7 @@ __all__ = [
     "create_entity_markers",
     "NewtonSolver",
     "BlockedNewtonSolver",
+    "evaluate_function",
 ]
 
 
