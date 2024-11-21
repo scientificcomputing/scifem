@@ -14,7 +14,7 @@ def evaluate_function(
         points: The points to evaluate the function at.
         broadcast: If True, the values will be broadcasted to all processes.
              Note:
-                 Uses a global MPI call to broadcast values, thus this has to be called on all active processes synchronously. 
+                 Uses a global MPI call to broadcast values, thus this has to be called on all active processes synchronously.
 
     Returns:
         The values of the function evaluated at the points.
