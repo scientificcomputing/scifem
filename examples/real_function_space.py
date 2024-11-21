@@ -51,6 +51,7 @@
 # u_{exact}(x, y) = 0.3y^2 + \sin(2\pi x).
 # \end{align}
 
+from packaging.version import Version
 from mpi4py import MPI
 from petsc4py import PETSc
 from dolfinx.cpp.la.petsc import scatter_local_vectors, get_local_vectors
@@ -88,7 +89,7 @@ if dolfinx.__version__ == "0.8.0":
     lmbda = ufl.TrialFunction(R)
     du = ufl.TestFunction(V)
     dl = ufl.TestFunction(R)
-elif dolfinx.__version__ == "0.9.0.0":
+elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
     W = ufl.MixedFunctionSpace(V, R)
     u, lmbda = ufl.TrialFunctions(W)
     du, dl = ufl.TestFunctions(W)
@@ -123,7 +124,7 @@ b = dolfinx.fem.petsc.assemble_vector_block(L, a, bcs=[])
 
 if dolfinx.__version__ == "0.8.0":
     maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
-elif dolfinx.__version__ == "0.9.0.0":
+elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
     maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
 
 b_local = get_local_vectors(b, maps)

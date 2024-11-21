@@ -14,7 +14,7 @@ jobs:
 
   build:
     runs-on: ubuntu-24.04
-    container: ghcr.io/fenics/dolfinx/lab:v0.8.0
+    container: ghcr.io/fenics/dolfinx/lab:v0.9.0
     env:
       PUBLISH_DIR: ./_build/html
       DISPLAY: ":99.0"
@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install dependencies for pyvista
-        run: apt-get update && apt-get install -y libgl1-mesa-glx libxrender1 xvfb
+        run: apt-get update && apt-get install -y libgl1-mesa-dev xvfb
 
       - name: Install dependencies
         run: python3 -m pip install --no-build-isolation ".[docs]"

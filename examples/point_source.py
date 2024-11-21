@@ -95,9 +95,9 @@ point_source.apply_to_vector(b)
 # We can continue to solve our variational problem as usual
 
 a_compiled = dolfinx.fem.form(a)
-dolfinx.fem.petsc.apply_lifting(b.vector, [a_compiled], [[bc]])
+dolfinx.fem.petsc.apply_lifting(b.x.petsc_vec, [a_compiled], [[bc]])
 b.x.scatter_reverse(dolfinx.la.InsertMode.add)
-dolfinx.fem.petsc.set_bc(b.vector, [bc])
+dolfinx.fem.petsc.set_bc(b.x.petsc_vec, [bc])
 b.x.scatter_forward()
 
 A = dolfinx.fem.petsc.assemble_matrix(a_compiled, bcs=[bc])
@@ -113,7 +113,7 @@ ksp.getPC().setFactorSolverType("mumps")
 
 
 uh = dolfinx.fem.Function(V)
-ksp.solve(b.vector, uh.vector)
+ksp.solve(b.x.petsc_vec, uh.x.petsc_vec)
 uh.x.scatter_forward()
 
 # We can now plot the solution
