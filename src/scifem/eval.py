@@ -14,10 +14,16 @@ def evaluate_function(
         points: The points to evaluate the function at.
         broadcast: If True, the values will be broadcasted to all processes.
              Note:
-                 Uses a global MPI call to broadcast values, thus this has to be called on all active processes synchronously.
+                Uses a global MPI call to broadcast values, thus this has to
+                be called on all active processes synchronously.
+            Note:
+                If the function is discontinuous, different processes may return
+                different values for the same point.
+                In this case, the value returned is the maximum value across all processes.
 
     Returns:
         The values of the function evaluated at the points.
+
 
     """
     mesh = u.function_space.mesh
@@ -38,20 +44,10 @@ def evaluate_function(
     # Find cells whose bounding-box collide with the the points
     potential_colliding_cells = dolfinx.geometry.compute_collisions_points(bb_tree, points)
     # Choose one of the cells that contains the point
-    colliding_cells = dolfinx.geometry.compute_colliding_cells(
-        mesh, potential_colliding_cells, points
-    )
-    points_on_proc = []
-    cells = []
-    indices = []
-    for i, point in enumerate(points):
-        if len(colliding_cells.links(i)) > 0:
-            points_on_proc.append(point)
-            cells.append(colliding_cells.links(i)[0])
-            indices.append(i)
-    indices = np.array(indices, dtype=np.int32)
-    points_on_proc = np.array(points_on_proc, dtype=np.float64).reshape(-1, 3)
-    cells = np.array(cells, dtype=np.int32)
+    adj = dolfinx.geometry.compute_colliding_cells(mesh, potential_colliding_cells, points)
+    indices = np.flatnonzero(adj.offsets[1:] - adj.offsets[:-1])
+    cells = adj.array[adj.offsets[indices]]
+    points_on_proc = points[indices]
 
     values = u.eval(points_on_proc, cells)
     if broadcast:
