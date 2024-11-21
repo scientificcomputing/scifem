@@ -13,7 +13,7 @@ def evaluate_function(
         u: The function to evaluate.
         points: The points to evaluate the function at.
         broadcast: If True, the values will be broadcasted to all processes.
-             Note:
+            Note:
                 Uses a global MPI call to broadcast values, thus this has to
                 be called on all active processes synchronously.
             Note:
