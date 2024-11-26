@@ -861,7 +861,7 @@ def create_periodic_mesh(
     filtered_geometry_o = lost_cells_gdofmap_owner_recv_buffer[
         new_lost_cells_indicator
     ][unique_lost_cells_position].flatten()
-    ext_ghost_owners = filtered_geometry_o[extg_pos]
+    ext_ghost_owners = filtered_geometry_o[new_ext_nodes][extg_pos]
     ext_node_pos = num_local_nodes + geom_im.num_ghosts + len(new_ghost_nodes)
     ext_geometry_dm[new_ext_nodes] = (
         ext_node_pos + np.arange(len(ext_gm_ghosts), dtype=np.int32)
@@ -869,10 +869,10 @@ def create_periodic_mesh(
     ext_geometry_dm = ext_geometry_dm.reshape(-1, num_nodes)
     filtered_geometry_coords = lost_cells_node_coords_recv_buffer[
         new_lost_cells_indicator
-    ][unique_lost_cells_position].reshape(-1, 3)[extg_pos]
+    ][unique_lost_cells_position].reshape(-1, 3)[new_ext_nodes][extg_pos]
     filtered_geometry_igi = lost_cells_igi_recv_buffer[new_lost_cells_indicator][
         unique_lost_cells_position
-    ].flatten()[extg_pos]
+    ].flatten()[new_ext_nodes][extg_pos]
 
     # --- 4 --- Convert extended topology global dofmap into local dofmap
     assert (
