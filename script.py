@@ -521,9 +521,7 @@ def create_periodic_mesh(
     # Convert old vertex_to_dofmap to reduced set
     c_to_v = mesh.topology.connectivity(mesh.topology.dim, 0)
     new_c = replacement_map[c_to_v.array].reshape(-1, num_vertices)
-    extra_dm = local_dm.reshape(-1, num_vertices)[cell_filter][
-        vertex_owner_cell_position
-    ]
+    extra_dm = local_dm.reshape(-1, num_vertices)[vertex_owner_cell_position]
 
     # --- 2 --- Update geometry with new (ghosted) cells
 
