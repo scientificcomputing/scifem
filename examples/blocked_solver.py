@@ -56,7 +56,7 @@
 # \end{align}
 # $$
 #
-# where $V$ is the displacement space and $Q$ is the pressure space. For this we select $Q_2/P_1$ elements i.e second order Lagrange elements for $\mathbf{u}$ and [first order discontinuous polynomial cubical elements](https://defelement.com/elements/examples/quadrilateral-dpc-1.html) for $p$, which is a stable element for incompressible elasticity {cite}`auricchio2013approximation`.
+# where $V$ is the displacement space and $Q$ is the pressure space. For this we select $Q_2/P_1$ elements i.e second order Lagrange elements for $\mathbf{u}$ and [first order discontinuous polynomial cubical elements](https://defelement.org/elements/examples/quadrilateral-dpc-1.html) for $p$, which is a stable element for incompressible elasticity {cite}`auricchio2013approximation`.
 # Note also that the Euler-Lagrange equations can be derived automatically using `ufl`.
 #
 #
