@@ -83,8 +83,9 @@ def transfer_meshtags_to_submesh(
         vertex_to_parent: Mapping from submesh vertices to parent mesh vertices
         cell_to_parent: Mapping from submesh cells to parent entities
     Returns:
-        A tuple (submesh_tag, sub_to_parent_entity_map) where: ``submesh_tag`` is the tag on the submesh and ``sub_to_parent_entity_map``
-        is a mapping from submesh entities in the tag to the corresponding entities in the parent.
+        A tuple (submesh_tag, sub_to_parent_entity_map) where: ``submesh_tag`` is the tag on the
+        submesh and ``sub_to_parent_entity_map`` is a mapping from submesh entities in the tag to
+        the corresponding entities in the parent.
     """
     dim = entity_tag.dim
     sub_tdim = submesh.topology.dim

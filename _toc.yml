@@ -6,14 +6,15 @@ root: README
 parts:
   - caption: Features
     chapters:
-    - file: "examples/real_function_space.py"
-    - file: "examples/point_source.py"
-    - file: "examples/xdmf_point_cloud.py"
-    - file: "examples/mark_entities.py"
-    - file: "examples/blocked_solver.py"
-    - file: "examples/evaluate_function.py"
+      - file: "examples/real_function_space.py"
+      - file: "examples/point_source.py"
+      - file: "examples/xdmf_point_cloud.py"
+      - file: "examples/mark_entities.py"
+      - file: "examples/blocked_solver.py"
+      - file: "examples/evaluate_function.py"
+      - file: "examples/transfer_tags_to_submesh"
   - caption: Reference
     chapters:
-    - file: "docs/api.rst"
-    - file: CONTRIBUTING
-    - file: CODE_OF_CONDUCT
+      - file: "docs/api.rst"
+      - file: CONTRIBUTING
+      - file: CODE_OF_CONDUCT
