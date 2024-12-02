@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from . import _scifem
+from . import _scifem  # type: ignore
 import dolfinx
 import typing
 import numpy as np
