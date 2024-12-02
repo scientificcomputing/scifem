@@ -9,6 +9,7 @@
 #include <dolfinx/fem/FiniteElement.h>
 #include <dolfinx/fem/FunctionSpace.h>
 #include <dolfinx/mesh/Mesh.h>
+#include <dolfinx/mesh/MeshTags.h>
 #include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
@@ -147,6 +148,119 @@ create_vertex_to_dofmap(std::shared_ptr<const dolfinx::mesh::Topology> topology,
   return vertex_to_dofmap;
 }
 
+template <typename T>
+std::tuple<dolfinx::mesh::MeshTags<T>, std::vector<std::int32_t>>
+transfer_meshtags_to_submesh(
+    const dolfinx::mesh::MeshTags<T>& tags,
+    std::shared_ptr<const dolfinx::mesh::Topology> submesh_topology,
+    std::span<const std::int32_t> vertex_map,
+    std::span<const std::int32_t> cell_map)
+{
+  int tag_dim = tags.dim();
+  int submesh_tdim = submesh_topology->dim();
+  auto topology = tags.topology();
+  if (tag_dim > submesh_tdim)
+  {
+    throw std::runtime_error("Tag dimension must be less than or equal to "
+                             "submesh dimension");
+  }
+
+  std::shared_ptr<const dolfinx::common::IndexMap> parent_sub_entity_map
+      = topology->index_map(submesh_tdim);
+  if (!parent_sub_entity_map)
+  {
+    throw std::runtime_error("Parent entities of dimension "
+                             + std::to_string(submesh_tdim)
+                             + " not found in topology");
+  }
+
+  // Invert submap cell to parent entity map
+  std::int32_t parent_num_sub_entities = parent_sub_entity_map->size_local()
+                                         + parent_sub_entity_map->num_ghosts();
+  std::vector<std::int32_t> parent_entity_to_sub_cell(parent_num_sub_entities,
+                                                      -1);
+  for (std::int32_t i = 0; i < cell_map.size(); ++i)
+  {
+    parent_entity_to_sub_cell[cell_map[i]] = i;
+  }
+
+  // Access various connectivity maps
+  auto sub_e_to_v = submesh_topology->connectivity(tag_dim, 0);
+  auto sub_c_to_e = submesh_topology->connectivity(submesh_tdim, tag_dim);
+  auto e_to_v = topology->connectivity(tag_dim, 0);
+  auto e_to_sub_cell = topology->connectivity(tag_dim, submesh_tdim);
+  if (!e_to_v)
+  {
+    throw std::runtime_error("Missing connectivity between "
+                             + std::to_string(tag_dim) + " and 0");
+  }
+  if (!e_to_sub_cell)
+  {
+    throw std::runtime_error("Missing connectivity between "
+                             + std::to_string(tag_dim) + " and "
+                             + std::to_string(submesh_tdim));
+  }
+
+  auto sub_entity_map = submesh_topology->index_map(tag_dim);
+
+  // Prepare sub entity to parent map
+  std::size_t num_sum_entities
+      = sub_entity_map->size_local() + sub_entity_map->num_ghosts();
+  std::vector<std::int32_t> sub_entity_to_parent(num_sum_entities, -1);
+  std::vector<std::int32_t> submesh_values(num_sum_entities, -1);
+  std::vector<std::int32_t> submesh_indices(num_sum_entities);
+  std::iota(submesh_indices.begin(), submesh_indices.end(), 0);
+
+  std::span<const std::int32_t> org_indices = tags.indices();
+  std::span<const T> org_values = tags.values();
+  // For each entity in the tag, find all cells of the submesh connected to this
+  // entity
+  for (std::size_t i = 0; i < org_indices.size(); ++i)
+  {
+    auto entity_vertices = e_to_v->links(org_indices[i]);
+    bool entity_found = false;
+    for (auto parent_cell : e_to_sub_cell->links(org_indices[i]))
+    {
+      if (entity_found)
+        break;
+      std::int32_t sub_cell = parent_entity_to_sub_cell[parent_cell];
+      if (sub_cell != -1)
+      {
+        // For a cell in the sub mesh find all attached entities, and
+        // define them by their vertices in the sub mesh
+        for (auto sub_entity : sub_c_to_e->links(sub_cell))
+        {
+          if (entity_found)
+            break;
+          auto sub_vertices = sub_e_to_v->links(sub_entity);
+          bool entity_matches = true;
+          for (auto sub_vertex : sub_vertices)
+          {
+            if (std::find(entity_vertices.begin(), entity_vertices.end(),
+                          vertex_map[sub_vertex])
+                == entity_vertices.end())
+            {
+              entity_matches = false;
+              break;
+            }
+          }
+          if (entity_matches)
+          {
+            // Found entity in submesh with the same vertices as in the parent
+            // mesh
+            submesh_values[sub_entity] = org_values[i];
+            entity_found = true;
+            sub_entity_to_parent[sub_entity] = org_indices[i];
+          }
+        }
+      }
+    }
+  }
+  dolfinx::mesh::MeshTags<T> new_meshtag(submesh_topology, tag_dim,
+                                         submesh_indices, submesh_values);
+  return std::make_tuple(new_meshtag, sub_entity_to_parent);
+}
+
 } // namespace scifem
 
 namespace scifem_wrapper
@@ -173,10 +287,38 @@ void declare_real_function_space(nanobind::module_& m, std::string type)
       "Create a vertex to dofmap.");
 }
 
+template <typename T>
+void declare_meshtag_operators(nanobind::module_& m, std::string type)
+{
+  std::string pyfunc_name = "transfer_meshtags_to_submesh_" + type;
+  m.def(
+      pyfunc_name.c_str(),
+      [](const dolfinx::mesh::MeshTags<T>& tags,
+         std::shared_ptr<const dolfinx::mesh::Topology> submesh_topology,
+         nanobind::ndarray<const std::int32_t, nanobind::ndim<1>,
+                           nanobind::c_contig>
+             vertex_map,
+         nanobind::ndarray<const std::int32_t, nanobind::ndim<1>,
+                           nanobind::c_contig>
+             cell_map)
+      {
+        std::tuple<dolfinx::mesh::MeshTags<T>, std::vector<std::int32_t>>
+            sub_data = scifem::transfer_meshtags_to_submesh<std::int32_t>(
+                tags, submesh_topology,
+                std::span(vertex_map.data(), vertex_map.size()),
+                std::span(cell_map.data(), cell_map.size()));
+        auto _e_map = as_nbarray(std::move(std::get<1>(sub_data)));
+        return std::tuple(std::move(std::get<0>(sub_data)), _e_map);
+      },
+      nanobind::arg("tags"), nanobind::arg("submesh_topology"),
+      nanobind::arg("vertex_map"), nanobind::arg("cell_map"));
+}
+
 } // namespace scifem_wrapper
 
 NB_MODULE(_scifem, m)
 {
   scifem_wrapper::declare_real_function_space<double>(m, "float64");
   scifem_wrapper::declare_real_function_space<float>(m, "float32");
+  scifem_wrapper::declare_meshtag_operators<std::int32_t>(m, "int32");
 }
