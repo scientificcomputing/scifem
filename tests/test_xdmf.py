@@ -6,6 +6,7 @@ import ufl
 import numpy as np
 import scifem
 import pytest
+from packaging.version import Version
 from petsc4py import PETSc
 from unittest.mock import patch
 
@@ -19,6 +20,7 @@ except ImportError:
 
 stype = PETSc.ScalarType
 rtype = PETSc.RealType
+_dolfinx_version = Version(dolfinx.__version__)
 
 
 @pytest.mark.parametrize("use_ctx_manager", [True, False])
@@ -59,25 +61,30 @@ def test_XDMFFile_2D(cell_type, degree, value_shape, backend, use_ctx_manager, t
     u.name = "u"
     v.name = "v"
 
+    if _dolfinx_version >= Version("0.10"):
+        points = V.element.interpolation_points
+    else:
+        points = V.element.interpolation_points()
+
     if use_ctx_manager:
         with scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend) as xdmf:
-            u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
-            v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+            u.interpolate(dolfinx.fem.Expression(u_expr, points))
+            v.interpolate(dolfinx.fem.Expression(v_expr, points))
             xdmf.write(rtype(t.value))
 
             t.value = 0.3
-            u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
-            v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+            u.interpolate(dolfinx.fem.Expression(u_expr, points))
+            v.interpolate(dolfinx.fem.Expression(v_expr, points))
             xdmf.write(rtype(t.value))
     else:
         xdmf = scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend)
-        u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
-        v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+        u.interpolate(dolfinx.fem.Expression(u_expr, points))
+        v.interpolate(dolfinx.fem.Expression(v_expr, points))
         xdmf.write(rtype(t.value))
 
         t.value = 0.3
-        u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
-        v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+        u.interpolate(dolfinx.fem.Expression(u_expr, points))
+        v.interpolate(dolfinx.fem.Expression(v_expr, points))
         xdmf.write(rtype(t.value))
 
         xdmf.close()
@@ -124,25 +131,30 @@ def test_XDMFFile_3D(cell_type, degree, value_shape, backend, use_ctx_manager, t
     u.name = "u"
     v.name = "v"
 
+    if _dolfinx_version >= Version("0.10"):
+        points = V.element.interpolation_points
+    else:
+        points = V.element.interpolation_points()
+
     if use_ctx_manager:
         with scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend) as xdmf:
-            u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
-            v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+            u.interpolate(dolfinx.fem.Expression(u_expr, points))
+            v.interpolate(dolfinx.fem.Expression(v_expr, points))
             xdmf.write(rtype(t.value))
 
             t.value = 0.3
-            u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
-            v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+            u.interpolate(dolfinx.fem.Expression(u_expr, points))
+            v.interpolate(dolfinx.fem.Expression(v_expr, points))
             xdmf.write(rtype(t.value))
     else:
         xdmf = scifem.xdmf.XDMFFile(folder / "data.xdmf", [u, v], backend=backend)
-        u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
-        v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+        u.interpolate(dolfinx.fem.Expression(u_expr, points))
+        v.interpolate(dolfinx.fem.Expression(v_expr, points))
         xdmf.write(rtype(t.value))
 
         t.value = 0.3
-        u.interpolate(dolfinx.fem.Expression(u_expr, V.element.interpolation_points()))
-        v.interpolate(dolfinx.fem.Expression(v_expr, V.element.interpolation_points()))
+        u.interpolate(dolfinx.fem.Expression(u_expr, points))
+        v.interpolate(dolfinx.fem.Expression(v_expr, points))
         xdmf.write(rtype(t.value))
 
         xdmf.close()
