@@ -56,7 +56,7 @@ def transfer_meshtags_to_periodic_mesh(
         values = np.array(values, dtype=meshtags.values.dtype)
     else:
         indices = meshtags.indices
-        values = tags_old.values
+        values = meshtags.values
     geom_indices = dolfinx.mesh.entities_to_geometry(mesh, meshtags.dim, indices)
     igi_indices = mesh.geometry.input_global_indices[geom_indices]
 
@@ -242,11 +242,12 @@ def create_periodic_mesh(
         ).reshape(-1)
     owned_vertex_coords = mesh.geometry.x[geom_coord]
 
+    eps = 10000 * np.finfo(mesh.geometry.x.dtype).eps
+
     # Map vertices to new coordinates
     mapped_vertex_coords = mapping_function(owned_vertex_coords.T).T
 
     # Get vertices on process that has a cell colliding with point
-    eps = 100 * np.finfo(mesh.geometry.x.dtype).eps
 
     # For each vertex that will be replaced, find which process should take it over
     vertex_ownership_data = dolfinx.cpp.geometry.determine_point_ownership(
@@ -259,12 +260,17 @@ def create_periodic_mesh(
     potential_closest_vertex = dolfinx.mesh.compute_incident_entities(
         mesh.topology, vertex_ownership_data.dest_cells, mesh.topology.dim, 0
     )
-    closest_vertex_bb_tree = dolfinx.geometry.bb_tree(mesh, 0, potential_closest_vertex)
+    closest_vertex_bb_tree = dolfinx.geometry.bb_tree(
+        mesh, 0, potential_closest_vertex, padding=eps
+    )
     closest_vertex_mid_tree = dolfinx.geometry.create_midpoint_tree(
         mesh, 0, potential_closest_vertex
     )
     closest_vertex = dolfinx.geometry.compute_closest_entity(
-        closest_vertex_bb_tree, closest_vertex_mid_tree, mesh, acquired_vertex_coords
+        closest_vertex_bb_tree,
+        closest_vertex_mid_tree,
+        mesh,
+        acquired_vertex_coords,
     )
 
     # Map the closest vertex to its global index in the reduced submap
