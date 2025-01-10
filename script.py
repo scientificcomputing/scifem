@@ -73,15 +73,15 @@ def transfer_meshtags_to_periodic_mesh(
 
 def all_to_allv(comm, send_data, num_send_data, recv_data, num_recv_data):
     dtype = mpi_dtype[send_data.dtype.type]
-    assert (
-        recv_data.dtype == send_data.dtype
-    ), f"Data types do not match, {recv_data.dtype} != {send_data.dtype}"
-    assert (d_size := send_data.size) == (
-        s_size := num_send_data.sum()
-    ), f"Number of send data {d_size}  does not match data size {s_size}"
-    assert (d_size := recv_data.size) == (
-        r_size := num_recv_data.sum()
-    ), f"Number of recv data {d_size}  does not match data size {r_size}"
+    assert recv_data.dtype == send_data.dtype, (
+        f"Data types do not match, {recv_data.dtype} != {send_data.dtype}"
+    )
+    assert (d_size := send_data.size) == (s_size := num_send_data.sum()), (
+        f"Number of send data {d_size}  does not match data size {s_size}"
+    )
+    assert (d_size := recv_data.size) == (r_size := num_recv_data.sum()), (
+        f"Number of recv data {d_size}  does not match data size {r_size}"
+    )
 
     send_msg = [send_data, num_send_data, dtype]
     recv_msg = [recv_data, num_recv_data, dtype]
@@ -504,9 +504,9 @@ def create_periodic_mesh(
     # For new ghosts, add the to replacement map
     is_new_replacement = np.invert(is_local_indicator)
     replacement_ghosts = global_replacement_vertex[is_new_replacement]
-    assert np.isin(
-        replacement_ghosts, new_ghosts
-    ).all(), "Replacement ghost not in new ghost list"
+    assert np.isin(replacement_ghosts, new_ghosts).all(), (
+        "Replacement ghost not in new ghost list"
+    )
     if len(replacement_ghosts) > 0:
         local_replacement_position = (new_ghosts == replacement_ghosts[:, None]).argmax(
             1
@@ -931,7 +931,7 @@ def create_periodic_mesh(
         new_vertex_map = dolfinx.common.IndexMap(
             mesh.comm, tmp_vertex_map.size_local, all_ghosts, all_owners, tag=1104
         )
-    
+
     new_c_to_v = dolfinx.graph.adjacencylist(
         np.vstack([new_c, extra_dm, lost_cells_dofs_as_local.reshape(-1, num_vertices)])
     )
@@ -949,9 +949,23 @@ def create_periodic_mesh(
         topology.set_connectivity(new_v_to_v, 0, 0)
         topology.set_connectivity(new_c_to_v, mesh.topology.dim, 0)
     except TypeError:
-        topology = dolfinx.cpp.mesh.Topology(MPI.COMM_WORLD, mesh.topology.cell_type,
-                                             new_vertex_map, new_cell_map, new_c_to_v, all_cell_oci)
-
+        try:
+            topology = dolfinx.cpp.mesh.Topology(
+                MPI.COMM_WORLD,
+                mesh.topology.cell_type,
+                new_vertex_map,
+                new_cell_map,
+                new_c_to_v,
+                all_cell_oci,
+            )
+        except TypeError:
+            topology = dolfinx.cpp.mesh.Topology(
+                mesh.topology.cell_type,
+                new_vertex_map,
+                new_cell_map,
+                new_c_to_v._cpp_object,
+                all_cell_oci,
+            )
     c_el = dolfinx.fem.coordinate_element(
         mesh._ufl_domain.ufl_coordinate_element().basix_element
     )
@@ -963,9 +977,9 @@ def create_periodic_mesh(
         (all_ghosts < tmp_vertex_map.local_range[0])
         | (tmp_vertex_map.local_range[1] <= all_ghosts)
     ).all(), "Ghost "
-    assert (
-        new_vertex_map.ghosts < new_vertex_map.size_global
-    ).all(), "Ghosts larger than global size"
+    assert (new_vertex_map.ghosts < new_vertex_map.size_global).all(), (
+        "Ghosts larger than global size"
+    )
 
     # Create combined geometry
     extended_geom_ghosts = np.hstack(
@@ -990,8 +1004,12 @@ def create_periodic_mesh(
         )
     except TypeError:
         new_node_im = dolfinx.common.IndexMap(
-            mesh.comm, num_local_nodes, extended_geom_ghosts, extended_geom_owners, tag=1105
-    )
+            mesh.comm,
+            num_local_nodes,
+            extended_geom_ghosts,
+            extended_geom_owners,
+            tag=1105,
+        )
 
     extended_igi = np.hstack(
         [mesh.geometry.input_global_indices, new_igi, filtered_geometry_igi]
@@ -1065,8 +1083,7 @@ if __name__ == "__main__":
         mesh, indicator, mapping
     )
     end = time.perf_counter()
-    print(f"Create periodic mesh: {end-start:.3e}")
-
+    print(f"Create periodic mesh: {end - start:.3e}")
     if new_mesh.comm.size == 1:
         np.testing.assert_allclose(
             new_mesh.topology.original_cell_index, mesh.topology.original_cell_index
@@ -1076,9 +1093,9 @@ if __name__ == "__main__":
         entity_vertices = dolfinx.cpp.mesh.get_entity_vertices(cell_type, dim)
         num_entity_vertices = entity_vertices.offsets[1:] - entity_vertices.offsets[:-1]
 
-        assert (
-            np.unique(num_entity_vertices).size == 1
-        ), "Number of vertices per entity is not constant"
+        assert np.unique(num_entity_vertices).size == 1, (
+            "Number of vertices per entity is not constant"
+        )
         return num_entity_vertices[0]
 
     # dim = 1
