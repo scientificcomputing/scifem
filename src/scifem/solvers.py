@@ -234,7 +234,7 @@ class NewtonSolver:
         The Jacobian blocks represented as lists of lists where each entry
         is a ``dolfinx.fem.Form``.
         """
-        return self
+        return self._J
 
     def __del__(self):
         """Clean up the solver by destroying PETSc objects."""
