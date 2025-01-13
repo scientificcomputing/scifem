@@ -32,9 +32,9 @@ def evaluate_function(
     u.x.scatter_forward()
     comm = mesh.comm
     points = np.array(points, dtype=np.float64)
-    assert (
-        len(points.shape) == 2
-    ), f"Expected points to have shape (num_points, dim), got {points.shape}"
+    assert len(points.shape) == 2, (
+        f"Expected points to have shape (num_points, dim), got {points.shape}"
+    )
     num_points = points.shape[0]
     extra_dim = 3 - mesh.geometry.dim
 
