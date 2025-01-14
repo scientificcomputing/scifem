@@ -46,8 +46,7 @@ class PointSource:
         self._function_space = V
         if V.dofmap.bs > 1 and dolfinx.__version__ == "0.8.0":
             raise NotImplementedError(
-                "Block function spaces are not supported in dolfinx 0.8.0. "
-                "Please upgrade dolfinx"
+                "Block function spaces are not supported in dolfinx 0.8.0. Please upgrade dolfinx"
             )
         self._input_points = points
         self._magnitude = magnitude
