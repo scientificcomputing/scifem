@@ -434,7 +434,6 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
     def solve(self):
         """Solve non-linear problem into function. Returns the number
         of iterations and if the solver converged."""
-        dolfinx.log.set_log_level(dolfinx.log.LogLevel.INFO)
         n, converged = super().solve(self._x)
         self._x.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
         return n, converged
