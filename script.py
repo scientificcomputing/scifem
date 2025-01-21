@@ -235,25 +235,24 @@ def create_periodic_mesh(
     parent_to_sub[sub_to_parent] = np.arange(sub_to_parent.size, dtype=np.int32)
 
     if len(indicator_vertices) == 0:
-        geom_coord = np.zeros((0, 3), dtype=np.int32)
+        geom_index = np.zeros(0, dtype=np.int32)
     else:
-        geom_coord = dolfinx.mesh.entities_to_geometry(
+        geom_index = dolfinx.mesh.entities_to_geometry(
             mesh, 0, indicator_vertices
         ).reshape(-1)
-    owned_vertex_coords = mesh.geometry.x[geom_coord]
+    owned_vertex_coords = mesh.geometry.x[geom_index]
 
     eps = 10000 * np.finfo(mesh.geometry.x.dtype).eps
 
     # Map vertices to new coordinates
     mapped_vertex_coords = mapping_function(owned_vertex_coords.T).T
-
+    owned_index = np.flatnonzero(np.isclose(mapped_vertex_coords[:, 2], 0.403946))
     # Get vertices on process that has a cell colliding with point
 
     # For each vertex that will be replaced, find which process should take it over
     vertex_ownership_data = dolfinx.cpp.geometry.determine_point_ownership(
         mesh._cpp_object, mapped_vertex_coords, eps
     )
-
     # On process that has taken over a vertex, find the closest vertex (local to proc) that
     # will be its replacement
     acquired_vertex_coords = vertex_ownership_data.dest_points
@@ -277,6 +276,21 @@ def create_periodic_mesh(
     global_vertices = sub_map_without_ghosts.local_to_global(
         parent_to_sub[closest_vertex]
     ).astype(np.int64)
+    # Replacing: 362 on mesh with 377 (278 in reduced mesh)
+    # Global vertices[closest_vertex[owned_index]] = 278
+    # closest_vertex[owned_index] = 377
+    # paren_to_sub[closest_vertex][owned_index] = 278
+    _num_v = mesh.topology.index_map(0).size_local
+    parent_vertex_to_geom = dolfinx.mesh.entities_to_geometry(
+        mesh, 0, np.arange(_num_v, dtype=np.int32)
+    ).reshape(-1)
+    _num_nodes = mesh.geometry.index_map().size_local
+    inverse_map = np.full(_num_nodes, -1, dtype=np.int32)
+    inverse_map[parent_vertex_to_geom] = np.arange(_num_v, dtype=np.int32)
+    replaced_vertex = inverse_map[geom_index[owned_index]]
+    print(
+        "Vertex to replace", replaced_vertex, mesh.geometry.x[geom_index[owned_index]]
+    )
     original_mesh_vertex_owner = np.full(
         num_vertices_local, mesh.comm.rank, dtype=np.int32
     )
@@ -325,7 +339,6 @@ def create_periodic_mesh(
             send_ghost_cells_from_new_owner.append(cell)
             num_cells_per_proc[i] += 1
             new_cell_topology_dm.extend(c_to_v.links(cell))
-
     new_cell_topology_dm = np.asarray(new_cell_topology_dm, dtype=np.int32)
 
     # Create new owner to old owner communicator
@@ -449,6 +462,9 @@ def create_periodic_mesh(
     )
 
     # Send ownership of vertices
+    print(mesh.comm.rank, gl_new_cell_topology_dm)
+    assert (gl_new_cell_topology_dm > -1).all()
+    exit()
     top_dm_ownership = np.empty_like(new_top_dm_on_proc, dtype=np.int32)
     all_to_allv(
         new_owner_to_old_comm,
@@ -463,8 +479,15 @@ def create_periodic_mesh(
     local_dm = sub_map_without_ghosts.global_to_local(filtered_top_dm.reshape(-1))
     new_vertex_indicator = local_dm == -1
     shared_facet_vertices = filtered_top_dm.reshape(-1)[new_vertex_indicator]
+    print(shared_facet_vertices)
     new_ghost_vertices, pos, inverse_map = np.unique(
         shared_facet_vertices, return_index=True, return_inverse=True
+    )
+    print(
+        "!!!!",
+        new_ghost_vertices,
+        # filtered_top_dm.reshape(-1)[new_vertex_indicator][pos],
+        # mesh.topology.index_map(0).local_range,
     )
     new_ghost_owners = top_dm_ownership[cell_filter].reshape(-1)[new_vertex_indicator][
         pos
@@ -479,6 +502,9 @@ def create_periodic_mesh(
     new_owners = np.hstack([sub_map_without_ghosts.owners, new_ghost_owners]).astype(
         np.int32
     )
+    if not (new_owners != mesh.comm.rank).all():
+        print(sub_map_without_ghosts.owners, new_ghost_owners, mesh.comm.rank)
+    exit()
     assert (new_owners != mesh.comm.rank).all()
 
     # Check if index is already in (reduced) vertex map
