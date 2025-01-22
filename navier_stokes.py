@@ -1,4 +1,5 @@
 from mpi4py import MPI
+from petsc4py import PETSc
 import dolfinx
 import numpy as np
 from script import create_periodic_mesh, transfer_meshtags_to_periodic_mesh

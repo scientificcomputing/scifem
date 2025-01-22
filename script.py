@@ -110,6 +110,8 @@ def find_position(data, values):
             data = np.array([1, 2, 3, 4, 5, 2, 1], dtype=np.int32)
             b = find_position(data, values) # [2,4,3,0,1,4 2]
     """
+    if len(data) == 0:
+        return np.zeros(0, dtype=np.int32)
     return (values == data[:, None]).argmax(1)
 
 
