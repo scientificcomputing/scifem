@@ -20,9 +20,9 @@ start_time = MPI.Wtime()
 
 
 # inpurt parameters
-Lx = 0.25
+Lx = 0.3
 Ly = 0.15
-Lz = 0.5
+Lz = 1
 wl = 0.3
 theta = 30 * np.pi / 180
 TE = True
@@ -43,7 +43,7 @@ gmsh.initialize()
 
 if comm.rank == 0:
     gmsh.model.add("geometry")
-    gmsh.option.setNumber("Mesh.MeshSizeMax", 0.04)
+    gmsh.option.setNumber("Mesh.MeshSizeMax", 0.03)
     gmsh.model.occ.addBox(-Lx / 2, 0, 0, Lx, Ly, Lz)
     gmsh.model.occ.synchronize()
     gmsh.model.addPhysicalGroup(3, [1], tag=1, name="air")
@@ -139,14 +139,23 @@ if comm.rank == 0:
     gmsh.write("mesh.msh")
 
 model = comm.bcast(model, root=0)
+import packaging.version
+import dolfinx
+
 partitioner = dolfinx.cpp.mesh.create_cell_partitioner(
     dolfinx.mesh.GhostMode.shared_facet
 )
-model = model_to_mesh(gmsh.model, comm, 0, gdim=3, partitioner=partitioner)
+
+if packaging.version.Version(dolfinx.__version__) > packaging.version.Version("0.9.0"):
+    model = model_to_mesh(gmsh.model, comm, 0, gdim=3, partitioner=partitioner)
+    domain1 = model.mesh
+    cell_tags1 = model.cell_tags
+    facet_tags1 = model.facet_tags
+else:
+    domain1, cell_tags, facet_tags = model_to_mesh(gmsh.model, comm, 0, gdim=3)
 gmsh.finalize()
-domain1 = model.mesh
-cell_tags1 = model.cell_tags
-facet_tags1 = model.facet_tags
+
+
 # Convert mesh to periodic mesh
 L_min = comm.allreduce(np.min(domain1.geometry.x[:, 0]), op=MPI.MIN)
 L_max = comm.allreduce(np.max(domain1.geometry.x[:, 0]), op=MPI.MAX)
@@ -184,30 +193,6 @@ cell_tags2 = transfer_meshtags_to_periodic_mesh(
     domain1, domain2, replaced_vertices, cell_tags1
 )
 domain2.topology.create_connectivity(domain2.topology.dim - 1, domain2.topology.dim)
-
-
-# def indicator(x):
-#     return np.isclose(x[1], Ly_min)
-
-
-# def mapping(x):
-#     values = x.copy()
-#     values[1] += Ly_max - Ly_min
-#     return values
-
-
-# print(MPI.COMM_WORLD.rank, f"map y from {Ly_min} to {Ly_max}")
-# domain, replaced_vertices, replacement_map = create_periodic_mesh(
-#     domain2, indicator, mapping
-# )
-# exit()
-
-# facet_tags = transfer_meshtags_to_periodic_mesh(
-#     domain2, domain, replaced_vertices, facet_tags2
-# )
-# cell_tags = transfer_meshtags_to_periodic_mesh(
-#     domain2, domain, replaced_vertices, cell_tags2
-# )
 
 cell_tags = cell_tags2
 domain = domain2
@@ -307,7 +292,11 @@ U = problem.solve()
 # save solution
 W = fem.functionspace(domain, ("Discontinuous Lagrange", 2, (3,)))
 E_dg = fem.Function(W)
-E_dg.interpolate(fem.Expression(U * ufl.exp(jkx * x), W.element.interpolation_points))
+if packaging.version.Version(dolfinx.__version__) > packaging.version.Version("0.9.0"):
+    i_p = W.element.interpolation_points
+else:
+    i_p = W.element.interpolation_points()
+E_dg.interpolate(fem.Expression(U * ufl.exp(jkx * x), i_p))
 
 with VTXWriter(domain.comm, "E3d.bp", E_dg) as f:
     f.write(0.0)
