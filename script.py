@@ -97,6 +97,22 @@ def get_ownership(imap) -> npt.NDArray[np.int32]:
     return owners
 
 
+def find_position(data, values):
+    """
+    Find the position in values of each entry in data
+
+    Example:
+
+        .. highlight:: python
+        .. code-block:: python
+
+            values = np.array([4, 5, 1, 3, 2], dtype=np.int32)
+            data = np.array([1, 2, 3, 4, 5, 2, 1], dtype=np.int32)
+            b = find_position(data, values) # [2,4,3,0,1,4 2]
+    """
+    return (values == data[:, None]).argmax(1)
+
+
 def compute_insert_position(
     data_owner: npt.NDArray[np.int32],
     destination_ranks: npt.NDArray[np.int32],
@@ -246,8 +262,6 @@ def create_periodic_mesh(
 
     # Map vertices to new coordinates
     mapped_vertex_coords = mapping_function(owned_vertex_coords.T).T
-    owned_index = np.flatnonzero(np.isclose(mapped_vertex_coords[:, 2], 0.403946))
-    # Get vertices on process that has a cell colliding with point
 
     # For each vertex that will be replaced, find which process should take it over
     vertex_ownership_data = dolfinx.cpp.geometry.determine_point_ownership(
@@ -272,30 +286,16 @@ def create_periodic_mesh(
         acquired_vertex_coords,
     )
 
+    # Map all vertices that exist on the process to its global index
+    assert (parent_to_sub[closest_vertex] != -1).all(), "Closest vertex not in submap"
+
     # Map the closest vertex to its global index in the reduced submap
     global_vertices = sub_map_without_ghosts.local_to_global(
         parent_to_sub[closest_vertex]
     ).astype(np.int64)
-    # Replacing: 362 on mesh with 377 (278 in reduced mesh)
-    # Global vertices[closest_vertex[owned_index]] = 278
-    # closest_vertex[owned_index] = 377
-    # paren_to_sub[closest_vertex][owned_index] = 278
-    _num_v = mesh.topology.index_map(0).size_local
-    parent_vertex_to_geom = dolfinx.mesh.entities_to_geometry(
-        mesh, 0, np.arange(_num_v, dtype=np.int32)
-    ).reshape(-1)
-    _num_nodes = mesh.geometry.index_map().size_local
-    inverse_map = np.full(_num_nodes, -1, dtype=np.int32)
-    inverse_map[parent_vertex_to_geom] = np.arange(_num_v, dtype=np.int32)
-    replaced_vertex = inverse_map[geom_index[owned_index]]
-    print(
-        "Vertex to replace", replaced_vertex, mesh.geometry.x[geom_index[owned_index]]
-    )
-    original_mesh_vertex_owner = np.full(
-        num_vertices_local, mesh.comm.rank, dtype=np.int32
-    )
-    original_mesh_vertex_owner[num_owned_vertices:] = vertex_map.owners
-    send_vertex_owner = original_mesh_vertex_owner[parent_to_sub[closest_vertex]].copy()
+
+    replacement_vertex_owner = get_ownership(sub_map_without_ghosts)
+    send_vertex_owner = replacement_vertex_owner[parent_to_sub[closest_vertex]].copy()
 
     # For each vertex that is replaced, find the cells that are incident to the facet
     org_mesh_ext_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
@@ -339,7 +339,7 @@ def create_periodic_mesh(
             send_ghost_cells_from_new_owner.append(cell)
             num_cells_per_proc[i] += 1
             new_cell_topology_dm.extend(c_to_v.links(cell))
-    new_cell_topology_dm = np.asarray(new_cell_topology_dm, dtype=np.int32)
+    new_cell_topology_dm = np.asarray(new_cell_topology_dm, dtype=np.int32).reshape(-1)
 
     # Create new owner to old owner communicator
     vertex_sources, recv_vertices_per_proc = np.unique(
@@ -381,29 +381,57 @@ def create_periodic_mesh(
     )
 
     # Global replacement index
-    global_replacement_vertex = np.zeros(mapped_vertex_coords.shape[0], dtype=np.int64)
+    global_replacement_vertex = np.full(
+        mapped_vertex_coords.shape[0], -1, dtype=np.int64
+    )
     global_replacement_vertex[dest_ranks_to_current] = recv_replacement_vertices
-    global_replacement_owner = np.zeros(mapped_vertex_coords.shape[0], dtype=np.int64)
+    global_replacement_owner = np.full(
+        mapped_vertex_coords.shape[0], -1, dtype=np.int64
+    )
     global_replacement_owner[dest_ranks_to_current] = recv_replacement_owner
-
+    assert (global_replacement_vertex != -1).all()
+    assert (global_replacement_owner != -1).all()
+    # print(MPI.COMM_WORLD.rank, global_replacement_vertex, global_replacement_owner)
     # Set up ownership structure of cells, nodes and vertices on the process
     cell_map = mesh.topology.index_map(mesh.topology.dim)
     cell_owners = get_ownership(cell_map)
-    vertex_owners = get_ownership(sub_map_without_ghosts)
-
-    # Map to global indices
     global_ghost_cells_from_new_owner = cell_map.local_to_global(
         np.array(send_ghost_cells_from_new_owner, dtype=np.int32)
     ).astype(np.int64)
-    subdofmap_for_new_owner_ghost_cells_local = parent_to_sub[
-        new_cell_topology_dm.reshape(-1)
+
+    # Map to global indices
+
+    vertex_owners = get_ownership(sub_map_without_ghosts)
+    subdofmap_for_new_owner_ghost_cells_local = parent_to_sub[new_cell_topology_dm]
+    replacement_positions = subdofmap_for_new_owner_ghost_cells_local == -1
+    unmodified_positions = np.invert(replacement_positions)
+    gl_new_cell_topology_dm = np.full_like(
+        subdofmap_for_new_owner_ghost_cells_local, -1, dtype=np.int64
+    )
+    gl_new_cell_topology_dm[unmodified_positions] = (
+        sub_map_without_ghosts.local_to_global(
+            subdofmap_for_new_owner_ghost_cells_local[unmodified_positions]
+        ).astype(np.int64)
+    )
+    gl_new_cell_topology_owners = np.full_like(
+        gl_new_cell_topology_dm, -1, dtype=np.int32
+    )
+    gl_new_cell_topology_owners[unmodified_positions] = vertex_owners[
+        subdofmap_for_new_owner_ghost_cells_local[unmodified_positions]
     ]
-    gl_new_cell_topology_dm = sub_map_without_ghosts.local_to_global(
-        subdofmap_for_new_owner_ghost_cells_local
-    ).astype(np.int64)
-    gl_new_cell_topology_owners = vertex_owners[
-        subdofmap_for_new_owner_ghost_cells_local
+
+    # Replace vertices that has been removed by their new global index
+    relative_replacement_pos = find_position(
+        new_cell_topology_dm[replacement_positions], indicator_vertices
+    )
+    gl_new_cell_topology_dm[replacement_positions] = global_replacement_vertex[
+        relative_replacement_pos
     ]
+    gl_new_cell_topology_owners[replacement_positions] = global_replacement_owner[
+        relative_replacement_pos
+    ]
+    assert (gl_new_cell_topology_owners != -1).all()
+    assert (gl_new_cell_topology_dm != -1).all()
 
     # Compute number of cells to send and receive
     recv_num_cells = np.zeros_like(recv_vertices_per_proc, dtype=np.int32)
@@ -447,10 +475,10 @@ def create_periodic_mesh(
     # Check if received cells are already in cell map
     potential_ghosts_as_local = cell_map.global_to_local(recv_potential_ghost_cells)
     cell_filter = np.flatnonzero(potential_ghosts_as_local == -1)
+
     new_cells_from_new_vertex_owner, vertex_owner_cell_position = np.unique(
         recv_potential_ghost_cells[cell_filter], return_index=True
     )
-
     # Send dofmaps for topology
     new_top_dm_on_proc = np.empty((recv_num_cells.sum(), num_vertices), dtype=np.int64)
     all_to_allv(
@@ -462,9 +490,6 @@ def create_periodic_mesh(
     )
 
     # Send ownership of vertices
-    print(mesh.comm.rank, gl_new_cell_topology_dm)
-    assert (gl_new_cell_topology_dm > -1).all()
-    exit()
     top_dm_ownership = np.empty_like(new_top_dm_on_proc, dtype=np.int32)
     all_to_allv(
         new_owner_to_old_comm,
@@ -476,22 +501,18 @@ def create_periodic_mesh(
 
     # Compute the vertex ghosts
     filtered_top_dm = new_top_dm_on_proc[cell_filter]
+
     local_dm = sub_map_without_ghosts.global_to_local(filtered_top_dm.reshape(-1))
     new_vertex_indicator = local_dm == -1
     shared_facet_vertices = filtered_top_dm.reshape(-1)[new_vertex_indicator]
-    print(shared_facet_vertices)
     new_ghost_vertices, pos, inverse_map = np.unique(
         shared_facet_vertices, return_index=True, return_inverse=True
     )
-    print(
-        "!!!!",
-        new_ghost_vertices,
-        # filtered_top_dm.reshape(-1)[new_vertex_indicator][pos],
-        # mesh.topology.index_map(0).local_range,
-    )
+
     new_ghost_owners = top_dm_ownership[cell_filter].reshape(-1)[new_vertex_indicator][
         pos
     ]
+
     new_local_size = int(sub_map_without_ghosts.size_local)
     new_ghost_pos = new_local_size + sub_map_without_ghosts.num_ghosts
     local_ghost_indexing = new_ghost_pos + np.arange(len(new_ghost_vertices))
@@ -502,9 +523,6 @@ def create_periodic_mesh(
     new_owners = np.hstack([sub_map_without_ghosts.owners, new_ghost_owners]).astype(
         np.int32
     )
-    if not (new_owners != mesh.comm.rank).all():
-        print(sub_map_without_ghosts.owners, new_ghost_owners, mesh.comm.rank)
-    exit()
     assert (new_owners != mesh.comm.rank).all()
 
     # Check if index is already in (reduced) vertex map
@@ -540,9 +558,8 @@ def create_periodic_mesh(
         "Replacement ghost not in new ghost list"
     )
     if len(replacement_ghosts) > 0:
-        local_replacement_position = (new_ghosts == replacement_ghosts[:, None]).argmax(
-            1
-        )
+        local_replacement_position = find_position(replacement_ghosts, new_ghosts)
+
         replacement_map[indicator_vertices[is_new_replacement]] = (
             new_local_size + local_replacement_position
         )
@@ -837,12 +854,19 @@ def create_periodic_mesh(
     )
 
     # Only add cells that are new on the process and only add them once
-    new_lost_cells_indicator = np.flatnonzero(
+    lost_cell_indicator = np.flatnonzero(
         cell_map.global_to_local(lost_cells_recv_buffer) == -1
     )
+    duplicate_indicator = np.isin(
+        lost_cells_recv_buffer, new_cells_from_new_vertex_owner, invert=True
+    )
+    other_indicator = np.flatnonzero(duplicate_indicator)
+    new_lost_cells_indicator = np.intersect1d(lost_cell_indicator, other_indicator)
+
     unique_lost_cells, unique_lost_cells_position = np.unique(
         lost_cells_recv_buffer[new_lost_cells_indicator], return_index=True
     )
+
     unique_lost_cells_owners = lost_cells_owners_recv_buffer[new_lost_cells_indicator][
         unique_lost_cells_position
     ]
