@@ -1,4 +1,4 @@
-from script import create_periodic_mesh
+from script import create_periodic_mesh, transfer_meshtags_to_periodic_mesh
 from mpi4py import MPI
 import dolfinx.fem.petsc
 import dolfinx.nls.petsc
@@ -8,19 +8,19 @@ import ufl
 from petsc4py import PETSc
 
 
-mesh = dolfinx.mesh.create_rectangle(
+_mesh = dolfinx.mesh.create_rectangle(
     MPI.COMM_WORLD,
-    [[0, 0], [2, 1]],
-    [50, 7],
+    [[0, 0.1], [2, 1]],
+    [50, 25],
     dolfinx.cpp.mesh.CellType.quadrilateral,
 )
 
 # Convert mesh to periodic mesh
 L_min = [
-    mesh.comm.allreduce(np.min(mesh.geometry.x[:, i]), op=MPI.MIN) for i in range(2)
+    _mesh.comm.allreduce(np.min(_mesh.geometry.x[:, i]), op=MPI.MIN) for i in range(2)
 ]
 L_max = [
-    mesh.comm.allreduce(np.max(mesh.geometry.x[:, i]), op=MPI.MAX) for i in range(2)
+    _mesh.comm.allreduce(np.max(_mesh.geometry.x[:, i]), op=MPI.MAX) for i in range(2)
 ]
 
 print(L_min, L_max)
@@ -37,30 +37,47 @@ def indicator(x):
 def mapping(x):
     values = x.copy()
     values[0] = L_min[0] + i_x(x) * (L_max[0] - L_min[0])
-    values[1] = L_max[1] - (L_max[1] - L_min[1]) * x[1]
-    print(values[0], values[1])
+    # Comment out for normal periodic version
+    values[1] = (L_max[1] - L_min[1]) / (L_min[1] - L_max[1]) * x[1] + (
+        L_min[1] ** 2 - L_max[1] ** 2
+    ) / (L_min[1] - L_max[1])
     return values
 
 
-mesh.topology.create_entities(mesh.topology.dim - 1)
+_mesh.topology.create_entities(_mesh.topology.dim - 1)
 
 print(MPI.COMM_WORLD.rank, f"map x from {L_min} to {L_max}")
-mesh.topology.create_entities(mesh.topology.dim - 1)
-print(mesh.topology.index_map(mesh.topology.dim - 1).size_local)
+_mesh.topology.create_entities(_mesh.topology.dim - 1)
+print(_mesh.topology.index_map(_mesh.topology.dim - 1).size_local)
 
-mesh, replaced_vertices, replacement_map = create_periodic_mesh(
-    mesh, indicator, mapping
+num_facets = (
+    _mesh.topology.index_map(_mesh.topology.dim - 1).size_local
+    + _mesh.topology.index_map(_mesh.topology.dim - 1).num_ghosts
 )
+marker = np.full(num_facets, 3, dtype=np.int32)
+_mesh.topology.create_connectivity(_mesh.topology.dim - 1, _mesh.topology.dim)
+marker[dolfinx.mesh.exterior_facet_indices(_mesh.topology)] = 1
+_ft = dolfinx.mesh.meshtags(
+    _mesh, _mesh.topology.dim - 1, np.arange(num_facets, dtype=np.int32), marker
+)
+mesh, replaced_vertices, replacement_map = create_periodic_mesh(
+    _mesh, indicator, mapping
+)
+ft = transfer_meshtags_to_periodic_mesh(_mesh, mesh, replaced_vertices, _ft)
+
+# with dolfinx.io.XDMFFile(mesh.comm, "facets.xdmf", "w") as xdmf:
+#     xdmf.write_mesh(mesh)
+#     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+#     xdmf.write_meshtags(ft, mesh.geometry)
 
 mesh.topology.create_entities(mesh.topology.dim - 1)
 print(mesh.topology.index_map(mesh.topology.dim - 1).size_local)
 import basix.ufl
 
-el_0 = basix.ufl.element("DG", mesh.topology.cell_name(), 2)
-el_1 = basix.ufl.element("RT", mesh.topology.cell_name(), 3)
+el_0 = basix.ufl.element("DG", mesh.topology.cell_name(), 1)
+el_1 = basix.ufl.element("RT", mesh.topology.cell_name(), 2)
 trial_el = basix.ufl.mixed_element([el_0, el_1])
 V = dolfinx.fem.functionspace(mesh, trial_el)
-
 w = dolfinx.fem.Function(V)
 u, psi = ufl.split(w)
 
@@ -82,9 +99,9 @@ u0, psi0 = ufl.split(w0)
 F = ufl.inner(ufl.div(psi), v) * dx
 F -= ufl.inner(ufl.div(psi0), v) * dx
 F += alpha * ufl.inner(f, v) * dx
+F += ufl.inner(u, ufl.div(tau)) * dx
 
 non_lin_term = 1 / (ufl.sqrt(1 + ufl.dot(psi, psi)))
-F += ufl.inner(u, ufl.div(tau)) * dx
 F += phi * non_lin_term * ufl.dot(psi, tau) * dx
 
 
@@ -110,7 +127,7 @@ opts[f"{option_prefix}pc_factor_mat_solver_type"] = "mumps"
 ksp.setFromOptions()
 
 dolfinx.log.set_log_level(dolfinx.log.LogLevel.INFO)
-V_out = dolfinx.fem.functionspace(mesh, ("DG", mesh.geometry.cmap.degree))
+V_out = dolfinx.fem.functionspace(mesh, ("DG", 2))
 u_out = dolfinx.fem.Function(V_out)
 u_out.name = "u"
 bp_u = dolfinx.io.VTXWriter(mesh.comm, "u_rt.bp", [u_out])
@@ -177,3 +194,4 @@ print(
     f"Num LVPP iterations {i}, Total number of newton iterations {sum(newton_iterations)}"
 )
 print(f"{min(newton_iterations)=} and {max(newton_iterations)=}")
+print(f"NUM DOFS: {V.dofmap.index_map.size_global * V.dofmap.bs}")
