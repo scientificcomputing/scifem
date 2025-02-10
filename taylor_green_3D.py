@@ -41,7 +41,7 @@ class U:
         self, x: npt.NDArray[np.float64]
     ) -> npt.NDArray[dolfinx.default_scalar_type]:
         return (
-            -2
+            -1
             * np.cos(np.pi * x[2])
             * np.sin(np.pi * x[0])
             * np.sin(np.pi * x[1])
@@ -115,14 +115,29 @@ num_steps = int((T_end - T_start) // dt)
 
 assert inputs.u_deg > inputs.p_deg
 el_u = ("Lagrange", inputs.u_deg)
-el_p = ("DPC", inputs.p_deg)
+el_p = ("Lagrange", inputs.u_deg - 1)
+import basix.ufl
+
+# el_p = el_p = basix.ufl.element("P", basix.cell.CellType.hexahedron, 1, discontinuous=True)
 f = None
-options = {"low_memory_version": inputs.lm, "gamma":1000}
+options = {"low_memory_version": inputs.lm, "gamma": 10}
 
 solver_options = {
-    "tentative": {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"},
-    "pressure": {"ksp_type": "preonly", "pc_type": "lu","pc_factor_mat_solver_type": "mumps"},
-    "scalar": {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"},
+    "tentative": {
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    },
+    "pressure": {
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    },
+    "scalar": {
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    },
 }
 
 N = inputs.N
@@ -180,7 +195,7 @@ mesh.topology.create_entities(mesh.topology.dim - 1)
 print(f"NUm vertices post refinement {mesh.topology.index_map(0).size_global}")
 print(f"NUm facets post refinement {mesh.topology.index_map(2).size_global}")
 print(f"NUm cells post refinement {mesh.topology.index_map(3).size_global}")
-with dolfinx.io.XDMFFile(mesh.comm, "Periodic_mesh.xdmf", "w") as xdmf: 
+with dolfinx.io.XDMFFile(mesh.comm, "Periodic_mesh.xdmf", "w") as xdmf:
     xdmf.write_mesh(mesh)
 
 dim = mesh.topology.dim - 1
@@ -198,25 +213,9 @@ u_time = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(T_start))
 p_time = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(T_start - dt / 2.0))
 u_ex = U(t=u_time, nu=nu)
 logger.info("Setting up boundary conditions.")
-# bcs_u = [
-#     [
-#         oasisx.DirichletBC(
-#             u_ex.eval_x, oasisx.LocatorMethod.TOPOLOGICAL, (facet_tags, 3)
-#         )
-#     ],
-#     [
-#         oasisx.DirichletBC(
-#             u_ex.eval_y, oasisx.LocatorMethod.TOPOLOGICAL, (facet_tags, 3)
-#         )
-#     ],
-#     [
-#         oasisx.DirichletBC(
-#             u_ex.eval_z, oasisx.LocatorMethod.TOPOLOGICAL, (facet_tags, 3)
-#         )
-#     ],
-# ]
-bcs_u: List[List[oasisx.DirichletBC]] = None
-bcs_p: List[oasisx.PressureBC] = None
+
+bcs_u: List[List[oasisx.DirichletBC]] = [[] for _ in range(mesh.geometry.dim)]
+bcs_p: List[oasisx.PressureBC] = []
 
 # Initialize the fractional step solver with the AB-CN scheme.
 solver = oasisx.FractionalStep_AB_CN(
@@ -254,18 +253,19 @@ man_p = (
     )
     * ufl.exp(-6 * ufl.pi**2 * nu * p_time)
 )
-p_expr = dolfinx.fem.Expression(man_p, solver._Q.element.interpolation_points)
+p_expr = dolfinx.fem.Expression(man_p, solver._Q.element.interpolation_points())
 solver._p.interpolate(p_expr)
 logger.info("Initial conditions set.")
 
 
-V_out = dolfinx.fem.functionspace(mesh, ("DG", inputs.u_deg, (mesh.geometry.dim, )))
+V_out = dolfinx.fem.functionspace(mesh, ("DG", inputs.u_deg, (mesh.geometry.dim,)))
 v_out = dolfinx.fem.Function(V_out)
 vtxu = dolfinx.io.VTXWriter(mesh.comm, "u.bp", [v_out], engine="BP5")
 
 
 Q_out = dolfinx.fem.functionspace(mesh, ("DG", inputs.u_deg))
 q_out = dolfinx.fem.Function(Q_out)
+q_out.name = "phi"
 vtxp = dolfinx.io.VTXWriter(mesh.comm, "p.bp", [q_out], engine="BP5")
 for i in range(num_steps):
     u_time.value += dt
@@ -275,7 +275,7 @@ for i in range(num_steps):
     solver.solve(dt, nu, max_iter=1)
     v_out.interpolate(solver.u)
     vtxu.write(u_time.value)
-    q_out.interpolate(solver._p)
+    q_out.interpolate(solver._dp)
     vtxp.write(p_time.value)
 
 vtxu.close()
