@@ -85,6 +85,7 @@ parser.add_argument(
     help="Set the logging level",
     default="INFO",
 )
+parser.add_argument("--save-frequency", dest="save_frequency", type=int, default=10)
 inputs = parser.parse_args()
 
 logger = logging.getLogger("oasisx")
@@ -93,7 +94,7 @@ logger.setLevel(getattr(logging, inputs.log_level.upper(), logging.INFO))
 V0 = 1.0
 L = inputs.L
 t_c = L / V0
-T_end = t_c
+T_end = 20 * t_c
 RE = 1600
 nu = 1 / (RE * (V0 * L))
 dt = 0.001
@@ -108,19 +109,17 @@ options = {"low_memory_version": inputs.lm}
 
 solver_options = {
     "tentative": {
-        "ksp_type": "preonly",
-        "pc_type": "lu",
-        "pc_factor_mat_solver_type": "mumps",
+        "ksp_type": "bcgs",
+        "pc_type": "jacobi",
     },
     "pressure": {
-        "ksp_type": "preonly",
-        "pc_type": "lu",
-        "pc_factor_mat_solver_type": "mumps",
+        "ksp_type": "minres",
+        "pc_type": "hypre",
+        "pc_hypre_type": "boomeramg",
     },
     "scalar": {
-        "ksp_type": "preonly",
-        "pc_type": "lu",
-        "pc_factor_mat_solver_type": "mumps",
+        "ksp_type": "cg",
+        "pc_type": "sor",
     },
 }
 
@@ -241,14 +240,16 @@ vtxp = dolfinx.io.VTXWriter(
     mesh_policy=dolfinx.cpp.io.VTXMeshPolicy.reuse,
 )
 t = 0
+save_interval = inputs.save_frequency
 for i in range(num_steps):
     print(f"{i}/{num_steps}", end="\r")
     t += float(dt)
     logger.debug(f"Time step {i + 1}/{num_steps}, solving at t={t:.3f}.")
     solver.solve(dt, nu, max_iter=1)
     v_out.interpolate(solver.u)
-    vtxu.write(t)
-    vtxp.write(t)
+    if i % save_interval == 0:
+        vtxu.write(t)
+        vtxp.write(t)
 
 vtxu.close()
 vtxp.close()

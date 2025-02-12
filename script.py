@@ -341,6 +341,9 @@ def create_periodic_mesh(
             send_ghost_cells_from_new_owner.append(cell)
             num_cells_per_proc[i] += 1
             new_cell_topology_dm.extend(c_to_v.links(cell))
+    send_ghost_cells_from_new_owner = np.array(
+        send_ghost_cells_from_new_owner, dtype=np.int32
+    )
     new_cell_topology_dm = np.asarray(new_cell_topology_dm, dtype=np.int32).reshape(-1)
 
     # Create new owner to old owner communicator
@@ -397,6 +400,10 @@ def create_periodic_mesh(
     # Set up ownership structure of cells, nodes and vertices on the process
     cell_map = mesh.topology.index_map(mesh.topology.dim)
     cell_owners = get_ownership(cell_map)
+    assert (send_ghost_cells_from_new_owner > -1).all()
+    assert (
+        send_ghost_cells_from_new_owner < cell_map.size_local + cell_map.num_ghosts
+    ).all()
     global_ghost_cells_from_new_owner = cell_map.local_to_global(
         np.array(send_ghost_cells_from_new_owner, dtype=np.int32)
     ).astype(np.int64)
@@ -578,6 +585,8 @@ def create_periodic_mesh(
 
     # Extend geometry with extra cells
     new_cell_geom_dm = geom_dm[send_ghost_cells_from_new_owner]
+    assert (new_cell_geom_dm > -1).all()
+    assert (new_cell_geom_dm < geom_im.size_local + geom_im.num_ghosts).all()
     gl_new_cell_geom_dm = geom_im.local_to_global(new_cell_geom_dm.reshape(-1)).astype(
         np.int64
     )
@@ -682,10 +691,14 @@ def create_periodic_mesh(
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     cells_losing_vertex = f_to_c.array[f_to_c.offsets[indicator_facets]]
+    assert (cells_losing_vertex > -1).all()
+    assert (cells_losing_vertex < cell_map.size_local + cell_map.num_ghosts).all()
     cells_losing_vertex_gl = cell_map.local_to_global(cells_losing_vertex)
 
     # Pack dofmap for each of these cells, replacing the vertices that are removed with mapped vertices
     renumbered_dm = new_c[cells_losing_vertex].reshape(-1)
+    assert (renumbered_dm > -1).all()
+    assert (renumbered_dm < tmp_vertex_map.size_local + tmp_vertex_map.num_ghosts).all()
     lost_cells_dm_global = tmp_vertex_map.local_to_global(renumbered_dm)
     lost_cells_dm_owners = tmp_vertex_ownership[renumbered_dm]
 
@@ -694,6 +707,11 @@ def create_periodic_mesh(
         -1
     )
     lost_geom_dm = geom_im.local_to_global(org_geom_dm_cells_losing_vertex)
+    assert (org_geom_dm_cells_losing_vertex > -1).all()
+    assert (
+        org_geom_dm_cells_losing_vertex < geom_im.size_local + geom_im.num_ghosts
+    ).all()
+
     lost_geom_owner = node_owners[org_geom_dm_cells_losing_vertex]
     lost_geom_igi = mesh.geometry.input_global_indices[org_geom_dm_cells_losing_vertex]
 
@@ -961,6 +979,10 @@ def create_periodic_mesh(
             unique_lost_cells_oci,
         ]
     ).astype(np.int64)
+
+    assert (
+        len(np.intersect1d(tmp_vertex_map.ghosts, lost_cells_unique_new_ghosts)) == 0
+    ), "Ghost in both additional maps"
 
     all_ghosts = np.hstack(
         [tmp_vertex_map.ghosts, lost_cells_unique_new_ghosts]
