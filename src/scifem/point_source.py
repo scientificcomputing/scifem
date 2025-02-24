@@ -107,19 +107,34 @@ class PointSource:
         num_dofs = self._function_space.dofmap.dof_layout.num_dofs * bs
         if len(self._cells) > 0:
             # NOTE: Expression lives on only this communicator rank
+            # Expression is evaluated for every point in every cell, which means that we
+            # need to discard values that are not on the diagonal.
             expr = dolfinx.fem.Expression(u, ref_x, comm=MPI.COMM_SELF)
             all_values = expr.eval(mesh, self._cells)
             # Diagonalize values (num_cells, num_points, num_dofs, bs) -> (num_cells, num_dofs)
-            basis_values = np.empty((len(self._cells), num_dofs), dtype=all_values.dtype)
-            for i in range(len(self._cells)):
-                basis_values[i] = sum(
-                    [
-                        all_values[i, i * num_dofs * bs : (i + 1) * num_dofs * bs][
-                            j * num_dofs : (j + 1) * num_dofs
+            if Version(dolfinx.__version__) <= Version("0.9.0"):
+                basis_values = np.empty((len(self._cells), num_dofs), dtype=all_values.dtype)
+                for i in range(len(self._cells)):
+                    basis_values[i] = sum(
+                        [
+                            all_values[i, i * num_dofs * bs : (i + 1) * num_dofs * bs][
+                                j * num_dofs : (j + 1) * num_dofs
+                            ]
+                            for j in range(bs)
                         ]
-                        for j in range(bs)
-                    ]
+                    )
+            else:
+                basis_values = np.zeros(
+                    (len(self._cells), num_dofs), dtype=dolfinx.default_scalar_type
                 )
+                if bs == 1:
+                    # Values have shape (num_cells, num_points, num_dofs)
+                    for i in range(len(self._cells)):
+                        basis_values[i] = all_values[i, i, :]
+                else:
+                    # Values have shape (num_cells, num_points, bs, num_dofs*bs)
+                    for i in range(len(self._cells)):
+                        basis_values[i] = sum(all_values[i, i, j, :] for j in range(bs))
         else:
             basis_values = np.zeros((0, num_dofs), dtype=dolfinx.default_scalar_type)
         self._basis_values = basis_values
