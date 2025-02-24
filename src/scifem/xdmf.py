@@ -155,7 +155,7 @@ def h5pyfile(h5name, filemode="r", force_serial: bool = False, comm=None):
     else:
         if comm.size > 1 and not force_serial:
             raise ValueError(
-                "h5py is not installed with MPI support, while using {comm.size} processes.",
+                f"h5py is not installed with MPI support, while using {comm.size} processes.",
                 "If you really want to do this, turn on the `force_serial` flag.",
             )
         h5file = h5py.File(h5name, filemode)
