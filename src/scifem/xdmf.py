@@ -387,7 +387,7 @@ class BaseXDMFFile(abc.ABC):
 
     @property
     @abc.abstractmethod
-    def data_arrays(self) -> list[npt.NDArray[np.float64]]:
+    def data_arrays(self) -> list[npt.NDArray[np.floating]]:
         """The data arrays."""
         ...
 
@@ -651,7 +651,7 @@ class XDMFFile(BaseXDMFFile):
         return [f.name for f in self.functions]
 
     @property
-    def data_arrays(self) -> list[npt.NDArray[np.float64]]:
+    def data_arrays(self) -> list[npt.NDArray[np.floating]]:
         return [f.x.array for f in self.functions]
 
 
@@ -659,7 +659,7 @@ class NumpyXDMFFile(BaseXDMFFile):
     def __init__(
         self,
         filename: os.PathLike,
-        arrays: list[npt.NDArray[np.float64]],
+        arrays: list[npt.NDArray[np.floating]],
         function_space_data: FunctionSpaceData,
         filemode: typing.Literal["r", "a", "w"] = "w",
         backend: typing.Literal["h5py", "adios2"] = "adios2",
@@ -695,5 +695,5 @@ class NumpyXDMFFile(BaseXDMFFile):
         return self._data_names
 
     @property
-    def data_arrays(self) -> list[npt.NDArray[np.float64]]:
+    def data_arrays(self) -> list[npt.NDArray[np.floating]]:
         return self._data_arrays
