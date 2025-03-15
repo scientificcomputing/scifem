@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 import logging
 import typing
 import xml.etree.ElementTree as ET
@@ -374,11 +375,80 @@ def create_pointcloud(
         write_hdf5_h5py(functions=functions, h5name=h5name, data=data)
 
 
+def read_time_values_from_xdmf(xdmfname: os.PathLike) -> dict[float, int]:
+    """Read time values from an XDMF file.
+
+    Args:
+        xdmfname: The name of the XDMF file.
+
+    Returns:
+        A dictionary with time values as keys and step numbers as values.
+
+    """
+    tree = ET.parse(xdmfname)
+    current_name = ""
+    all_times_values: dict[str, dict[float, int]] = defaultdict(dict)
+    index = 0
+    for elem in tree.iter():
+        if elem.tag == "Attribute":
+            new_current_name = elem.get("Name", "")
+            if new_current_name != current_name:
+                current_name = new_current_name
+                index = 0
+        if elem.tag == "Time":
+            time_value = float(elem.get("Value", 0.0))
+            if current_name == "":
+                raise ValueError(f"No name found for time value {time_value}")
+
+            all_times_values[current_name][time_value] = index
+            index += 1
+
+    # Check if all time values are the same
+    first_time_values = list(all_times_values.values())[0]
+    for name, time_values in all_times_values.items():
+        if time_values != first_time_values:
+            raise ValueError(f"Time values for {name} are not the same")
+
+    return first_time_values
+
+
+# Taken from adios4dolfinx
+adios_to_numpy_dtype = {
+    "float": np.float32,
+    "double": np.float64,
+    "float complex": np.complex64,
+    "double complex": np.complex128,
+    "uint32_t": np.uint32,
+}
+
+
+def compute_local_range(comm: MPI.Intracomm, N: np.int64):
+    """
+    Divide a set of `N` objects into `M` partitions, where `M` is
+    the size of the MPI communicator `comm`.
+
+    NOTE: If N is not divisible by the number of ranks, the first `r`
+    processes gets an extra value
+
+    Returns the local range of values
+    """
+    rank = comm.rank
+    size = comm.size
+    n = N // size
+    r = N % size
+    # First r processes has one extra value
+    if rank < r:
+        return [rank * (n + 1), (rank + 1) * (n + 1)]
+    else:
+        return [rank * n + r, (rank + 1) * n + r]
+
+
 class BaseXDMFFile(abc.ABC):
     filename: os.PathLike
     filemode: typing.Literal["r", "a", "w"]
     backend: typing.Literal["h5py", "adios2"]
     _data: FunctionSpaceData
+    _time_values: dict[float, int]
 
     @property
     @abc.abstractmethod
@@ -400,12 +470,15 @@ class BaseXDMFFile(abc.ABC):
                 raise FileNotFoundError(f"{self.h5name} does not exist")
             if not self.xdmfname.exists():
                 raise FileNotFoundError(f"{self.xdmfname} does not exist")
+
+            # Read time values from XDMF file
+
         elif self.filemode == "w":
             # Overwrite existing files so make sure they don't exist
             self.h5name.unlink(missing_ok=True)
             self.xdmfname.unlink(missing_ok=True)
-
-        self._time_values: dict[float, int] = {}
+        else:
+            raise NotImplementedError(f"Filemode {self.filemode} not supported")
 
     def _init_backend(self) -> None:
         assert self.backend in [
@@ -423,11 +496,26 @@ class BaseXDMFFile(abc.ABC):
         if self.backend == "h5py":
             self._init_h5py()
 
+        self._init_time_values()
+
+    def _init_time_values(self) -> None:
+        if self.filemode == "r":
+            self._time_values = read_time_values_from_xdmf(self.xdmfname)
+        elif self.filemode == "w":
+            self._time_values = {}
+        else:
+            raise NotImplementedError(f"Filemode {self.filemode} not supported")
+
     def _init_h5py(self) -> None:
         logger.debug("Initializing h5py")
         self._outfile = h5pyfile(
             h5name=self.h5name, filemode=self.filemode, comm=self._data.comm
         ).__enter__()
+        if self.filemode == "r":
+            assert "Step0" in self._outfile, "Step0 not found in HDF5 file"
+            self._step = self._outfile["Step0"]
+            return None
+
         self._step = self._outfile.create_group(np.bytes_("Step0"))
         points = self._step.create_dataset(
             "Points",
@@ -458,9 +546,24 @@ class BaseXDMFFile(abc.ABC):
             )
             dset[self._data.local_range[0] : self._data.local_range[1], :] = array
 
+    def _read_h5py(self, index: int) -> None:
+        logger.debug(f"Writing h5py at time {index}")
+        for data_name, data_array in zip(self.data_names, self.data_arrays):
+            # Pad array to 3D if vector space with 2 components
+            data_array[:] = self._step[f"Values_{data_name}_{index}"][
+                self._data.local_range[0] : self._data.local_range[1], :
+            ].flatten()
+
     def _close_h5py(self) -> None:
         logger.debug("Closing HDF5 file")
         self._outfile.close()
+
+    def _open_adios(self):
+        self._adios = self.adios2.ADIOS(self._data.comm)
+        self._io = self._adios.DeclareIO("Point cloud writer")
+        self._io.SetEngine("HDF5")
+        mode = self.adios2.Mode.Write if self.filemode == "w" else self.adios2.Mode.Read
+        self._outfile = self._io.Open(self.h5name.as_posix(), mode)
 
     def _init_adios(self) -> None:
         logger.debug("Initializing ADIOS2")
@@ -469,13 +572,12 @@ class BaseXDMFFile(abc.ABC):
         def resolve_adios_scope(adios2):
             return adios2 if not hasattr(adios2, "bindings") else adios2.bindings
 
-        adios2 = resolve_adios_scope(adios2)
+        self.adios2 = resolve_adios_scope(adios2)
 
         # Create ADIOS2 reader
-        self._adios = adios2.ADIOS(self._data.comm)
-        self._io = self._adios.DeclareIO("Point cloud writer")
-        self._io.SetEngine("HDF5")
-        self._outfile = self._io.Open(self.h5name.as_posix(), adios2.Mode.Write)
+        if self.filemode == "r":
+            return None
+        self._open_adios()
         pointvar = self._io.DefineVariable(
             "Points",
             self._data.points_out,
@@ -515,10 +617,56 @@ class BaseXDMFFile(abc.ABC):
             self._outfile.Put(valuevar, array)
         self._outfile.PerformPuts()
 
+    def _read_adios(self, index: int) -> None:
+        logger.debug(f"Reading adios at time {index}")
+        self._open_adios()
+        hit = False
+        for data_name, data_array in zip(self.data_names, self.data_arrays):
+            variable_name = f"Values_{data_name}_{index}"
+            for i in range(self._outfile.Steps()):
+                self._outfile.BeginStep()
+                if variable_name in self._io.AvailableVariables().keys():
+                    arr = self._io.InquireVariable(variable_name)
+                    arr_shape = arr.Shape()
+
+                    assert len(arr_shape) >= 1  # TODO: Should we always pick the first element?
+                    arr_range = compute_local_range(self._data.comm, arr_shape[0])
+
+                    if len(arr_shape) == 1:
+                        arr.SetSelection([[arr_range[0]], [arr_range[1] - arr_range[0]]])
+                        vals = np.empty(
+                            arr_range[1] - arr_range[0], dtype=adios_to_numpy_dtype[arr.Type()]
+                        )
+                    else:
+                        arr.SetSelection(
+                            [[arr_range[0], 0], [arr_range[1] - arr_range[0], arr_shape[1]]]
+                        )
+                        vals = np.empty(
+                            (arr_range[1] - arr_range[0], arr_shape[1]),
+                            dtype=adios_to_numpy_dtype[arr.Type()],
+                        )
+                        assert arr_shape[1] == 1
+
+                    self._outfile.Get(arr, vals, self.adios2.Mode.Sync)
+                    data_array[:] = vals.flatten()
+                    hit = True
+
+                self._outfile.EndStep()
+                if hit:
+                    break
+
+        self._close_adios()
+        if not hit:
+            raise ValueError(f"Variable {variable_name} not found in ADIOS2 file")
+
     def _close_adios(self) -> None:
         logger.debug("Closing ADIOS2 file")
-        self._outfile.Close()
-        assert self._adios.RemoveIO("Point cloud writer")
+        try:
+            self._outfile.Close()
+        except ValueError:
+            pass
+        else:
+            assert self._adios.RemoveIO("Point cloud writer")
 
     def close(self) -> None:
         """Close the XDMF file."""
@@ -565,10 +713,10 @@ class BaseXDMFFile(abc.ABC):
                 xp.attrib["xpointer"] = (
                     "xpointer(/Xdmf/Domain/Grid[@GridType='Uniform'][1]/*[self::Topology or self::Geometry])"  # noqa: E501
                 )
-                time = ET.SubElement(ugrid, "Time")
-                time.attrib["Value"] = str(time_value)
                 attrib = ET.SubElement(ugrid, "Attribute")
                 attrib.attrib["Name"] = name
+                time = ET.SubElement(ugrid, "Time")
+                time.attrib["Value"] = str(time_value)
                 out_bs = self._data.bs
                 if out_bs == 1:
                     attrib.attrib["AttributeType"] = "Scalar"
@@ -618,6 +766,27 @@ class BaseXDMFFile(abc.ABC):
             self._write_adios(index)
         elif self.backend == "h5py":
             self._write_h5py(index)
+
+    def read(self, time: float) -> None:
+        """Read the point cloud at a given time.
+
+        Args:
+            time: The time value.
+
+        """
+        logger.debug(f"Writing time {time}")
+        time = float(time)
+        if time not in self._time_values:
+            msg = f"Time {time} not found in file."
+            logger.warning(msg)
+            return
+
+        index = self._time_values[time]
+
+        if self.backend == "adios2":
+            self._read_adios(index)
+        elif self.backend == "h5py":
+            self._read_h5py(index)
 
 
 class XDMFFile(BaseXDMFFile):
