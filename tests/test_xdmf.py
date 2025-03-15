@@ -92,6 +92,12 @@ def test_XDMFFile_2D_dolfinx(cell_type, degree, value_shape, backend, use_ctx_ma
     assert (folder / "data.xdmf").is_file()
     assert (folder / "data.h5").is_file()
 
+    u_new = dolfinx.fem.Function(V, dtype=stype, name="u")
+    with scifem.xdmf.XDMFFile(folder / "data.xdmf", [u_new], backend=backend, filemode="r") as xdmf:
+        xdmf.read(0.3)
+
+    assert np.allclose(u_new.x.array, u.x.array)
+
 
 @pytest.mark.parametrize(
     "backend",
