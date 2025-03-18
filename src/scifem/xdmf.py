@@ -550,9 +550,13 @@ class BaseXDMFFile(abc.ABC):
         logger.debug(f"Writing h5py at time {index}")
         for data_name, data_array in zip(self.data_names, self.data_arrays):
             # Pad array to 3D if vector space with 2 components
-            data_array[:] = self._step[f"Values_{data_name}_{index}"][
-                self._data.local_range[0] : self._data.local_range[1], :
-            ].flatten()
+            key = f"Values_{data_name}_{index}"
+            if key not in self._step:
+                raise ValueError(f"Variable {data_name} not found in HDF5 file")
+
+            data_array[: self._data.num_dofs_local * self._data.bs] = self._step[
+                f"Values_{data_name}_{index}"
+            ][self._data.local_range[0] : self._data.local_range[1], : self._data.bs].flatten()
 
     def _close_h5py(self) -> None:
         logger.debug("Closing HDF5 file")
@@ -628,32 +632,22 @@ class BaseXDMFFile(abc.ABC):
                 if variable_name in self._io.AvailableVariables().keys():
                     arr = self._io.InquireVariable(variable_name)
                     arr_shape = arr.Shape()
-
-                    assert len(arr_shape) >= 1  # TODO: Should we always pick the first element?
-                    arr_range = compute_local_range(self._data.comm, arr_shape[0])
-
-                    if len(arr_shape) == 1:
-                        arr.SetSelection([[arr_range[0]], [arr_range[1] - arr_range[0]]])
-                        vals = np.empty(
-                            arr_range[1] - arr_range[0], dtype=adios_to_numpy_dtype[arr.Type()]
-                        )
-                    else:
-                        arr.SetSelection(
-                            [[arr_range[0], 0], [arr_range[1] - arr_range[0], arr_shape[1]]]
-                        )
-                        vals = np.empty(
-                            (arr_range[1] - arr_range[0], arr_shape[1]),
-                            dtype=adios_to_numpy_dtype[arr.Type()],
-                        )
-                        assert arr_shape[1] == 1
+                    vals = np.empty(arr_shape, dtype=adios_to_numpy_dtype[arr.Type()])
 
                     self._outfile.Get(arr, vals, self.adios2.Mode.Sync)
-                    data_array[:] = vals.flatten()
+                    start = self._data.local_range[0]
+                    end = self._data.local_range[0] + self._data.num_dofs_local
+                    data_array[: self._data.num_dofs_local * self._data.bs] = vals[
+                        start:end, : self._data.bs
+                    ].flatten()
                     hit = True
-
-                self._outfile.EndStep()
-                if hit:
+                    self._outfile.EndStep()
                     break
+                else:
+                    self._outfile.EndStep()
+            else:
+                self._outfile.EndStep()
+                break
 
         self._close_adios()
         if not hit:
