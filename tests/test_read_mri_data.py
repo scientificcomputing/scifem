@@ -16,7 +16,7 @@ import basix.ufl
 def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tmp_path):
     nibabel = pytest.importorskip("nibabel")
 
-    # Generate rotation and scaling matrix equivalent to a unit cube (shifted half a voxel in RAS coordiantes)
+    # Generate rotation and scaling matrix equivalent to a unit cube
     rotation_matrix_3D = np.array(
         [[1, 0, 0], [0, np.cos(theta), -np.sin(theta)], [0, np.sin(theta), np.cos(theta)]]
     )
@@ -53,9 +53,10 @@ def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tm
     ]
 
     # Transform mesh into physical space
-    # As the voxel coordinates has origin in the midpoint of the RAS voxel, we add 1/(2M) to the translation to account
-    # for this in the mesh, such that for a non-translated geoemtry (theta=0), (translation=0), the origin in
-    # physical spaces is at (-0.5,-0.5,-0.5) in RAS, which corresponds to the corner of voxel (0,0,0)
+    # As the voxel coordinates has origin in the midpoint of the RAS voxel, we add 1/(2M) to
+    # the translation to account for this in the mesh, such that for a non-translated geoemtry
+    # (theta=0), (translation=0), the origin in physical spaces is at (-0.5,-0.5,-0.5) in RAS,
+    # which corresponds to the corner of voxel (0,0,0)
     midpoint_shift = 1.0 / (2 * M) * np.ones(3)
     shifted_coords = mesh.geometry.x - midpoint_shift
 
