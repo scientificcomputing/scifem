@@ -8,7 +8,7 @@ import numpy.typing as npt
 
 
 def apply_mri_transform(
-    path: Path, coordinates: npt.NDArray[np.floating]
+    path: Path, coordinates: npt.NDArray[np.floating], use_tkr: bool = False
 ) -> npt.NDArray[np.inexact]:
     """Given a path to a set of MRI voxel data, return the data evaluated at the given coordinates.
 
@@ -21,12 +21,21 @@ def apply_mri_transform(
     """
     image = nibabel.load(path)
     data = image.get_fdata()
-    vox2ras = image.header.get_vox2ras_tkr()
+    # This depends on how one uses FreeSurfer
+    if use_tkr:
+        vox2ras = image.header.get_vox2ras_tkr()
+    else:
+        # VOX to ras explanation: https://surfer.nmr.mgh.harvard.edu/ftp/articles/vox2ras.pdf
+        vox2ras = image.header.get_vox2ras()
     ras2vox = np.linalg.inv(vox2ras)
-
     ijk_vectorized = naff.apply_affine(ras2vox, coordinates)
+
     # Round indices to nearest integer
+    # The file standard assumes that the voxel coordinates refer to the center of each voxel.
+    # https://brainder.org/2012/09/23/the-nifti-file-format/
     ijk_rounded = np.rint(ijk_vectorized).astype("int")
+
+    assert np.all(ijk_rounded >= 0)
     return data[ijk_rounded[:, 0], ijk_rounded[:, 1], ijk_rounded[:, 2]]
 
 
