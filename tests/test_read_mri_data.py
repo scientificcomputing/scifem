@@ -5,53 +5,58 @@ from scifem.biomedical import read_mri_data_to_function
 import pytest
 import basix.ufl
 
+
 @pytest.mark.parametrize("degree", [0, 1, 3])
 @pytest.mark.parametrize("M", [25, 17])
 @pytest.mark.parametrize("Nx", [7, 3])
 @pytest.mark.parametrize("Ny", [23, 8])
 @pytest.mark.parametrize("Nz", [9, 17])
-@pytest.mark.parametrize("theta", [np.pi/3, 0, -np.pi])
+@pytest.mark.parametrize("theta", [np.pi / 3, 0, -np.pi])
 @pytest.mark.parametrize("translation", [np.array([0, 0, 0]), np.array([2.1, 1.3, 0.4])])
-def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation,tmp_path):
+def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tmp_path):
     nibabel = pytest.importorskip("nibabel")
-    
+
     # Generate rotation and scaling matrix equivalent to a unit cube (shifted half a voxel in RAS coordiantes)
-    rotation_matrix_3D = np.array([[1, 0, 0],[0, np.cos(theta), -np.sin(theta)],[0, np.sin(theta), np.cos(theta)]])
-    scale_matrix = 1./M * np.identity(3)   
+    rotation_matrix_3D = np.array(
+        [[1, 0, 0], [0, np.cos(theta), -np.sin(theta)], [0, np.sin(theta), np.cos(theta)]]
+    )
+    scale_matrix = 1.0 / M * np.identity(3)
 
     # Generate the affien mapping for nibabel
-    A = np.append(np.dot(rotation_matrix_3D,scale_matrix), (translation).reshape(3,1), axis=1)
+    A = np.append(np.dot(rotation_matrix_3D, scale_matrix), (translation).reshape(3, 1), axis=1)
     A = np.vstack([A, [0, 0, 0, 1]])
-    
+
     # Write transformed data to file
-    data = np.arange(1, M**3+1,dtype=np.float64).reshape(M,M,M)
+    data = np.arange(1, M**3 + 1, dtype=np.float64).reshape(M, M, M)
     image = nibabel.nifti1.Nifti1Image(data, affine=A)
 
     path = MPI.COMM_WORLD.bcast(tmp_path, root=0)
     filename = path.with_suffix(".mgz")
-    
+
     if MPI.COMM_WORLD.rank == 0:
         nibabel.save(image, filename)
     MPI.COMM_WORLD.Barrier()
     # Create unit cube
-    mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, Nx, Ny, Nz, cell_type=dolfinx.cpp.mesh.CellType.hexahedron)
-
-
+    mesh = dolfinx.mesh.create_unit_cube(
+        MPI.COMM_WORLD, Nx, Ny, Nz, cell_type=dolfinx.cpp.mesh.CellType.hexahedron
+    )
 
     # Find voxel position on reference cube (done prior to mesh transformation)
     q_el = basix.ufl.quadrature_element(mesh.topology.cell_name(), degree=degree)
     V = dolfinx.fem.functionspace(mesh, q_el)
-    dx = 1/M
-    coords = np.abs(V.tabulate_dof_coordinates()) # Remove rounding error
+    dx = 1 / M
+    coords = np.abs(V.tabulate_dof_coordinates())  # Remove rounding error
     # NOTE: Voxel coordinates are based on center of cell rather than corner
     reference_input_index = ((coords) // dx).astype(np.int32)
-    reference_data = data[reference_input_index[:,0], reference_input_index[:, 1], reference_input_index[:, 2]]
+    reference_data = data[
+        reference_input_index[:, 0], reference_input_index[:, 1], reference_input_index[:, 2]
+    ]
 
     # Transform mesh into physical space
     # As the voxel coordinates has origin in the midpoint of the RAS voxel, we add 1/(2M) to the translation to account
     # for this in the mesh, such that for a non-translated geoemtry (theta=0), (translation=0), the origin in
     # physical spaces is at (-0.5,-0.5,-0.5) in RAS, which corresponds to the corner of voxel (0,0,0)
-    midpoint_shift = 1./(2*M)*np.ones(3)
+    midpoint_shift = 1.0 / (2 * M) * np.ones(3)
     shifted_coords = mesh.geometry.x - midpoint_shift
 
     # Rotate, then translate geometry
