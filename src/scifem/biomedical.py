@@ -13,6 +13,10 @@ def apply_mri_transform(
     Args:
         path: Path to the MRI data, should be a file format supported by nibabel.
         coordinates: Coordinates to evaluate the MRI data at.
+        use_tkr: If true, use the old freesurfer `tkregister`, see:
+            https://www.mail-archive.com/freesurfer@nmr.mgh.harvard.edu/msg69541.html 
+            for more details. Else use the standard VOX2RAS transform (equivalent to attaching
+            an affine map to a nibabel image.
 
     Returns:
         The data evaluated at these points.
@@ -86,6 +90,7 @@ def read_mri_data_to_function(
         mesh: The mesh to attach the MRI data to.
         cells: Subset of cells to evaluate the MRI data at. If None, all cells are used.
         degree: Degree of the (quadrature) function space to attach the MRI data to. Defaults to 0.
+            If degree is 0, use a DG-0 space instead of a quadrature space, to simplify post-processing.
         dtype: Data type used for input data. Can be used for rounding data.
 
     Raises:
