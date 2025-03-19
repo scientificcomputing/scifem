@@ -22,7 +22,7 @@ def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tm
     )
     scale_matrix = 1.0 / M * np.identity(3)
 
-    # Generate the affien mapping for nibabel
+    # Generate the affine mapping for nibabel
     A = np.append(np.dot(rotation_matrix_3D, scale_matrix), (translation).reshape(3, 1), axis=1)
     A = np.vstack([A, [0, 0, 0, 1]])
 
