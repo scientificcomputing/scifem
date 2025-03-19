@@ -14,7 +14,7 @@ def apply_mri_transform(
         path: Path to the MRI data, should be a file format supported by nibabel.
         coordinates: Coordinates to evaluate the MRI data at.
         use_tkr: If true, use the old freesurfer `tkregister`, see:
-            https://www.mail-archive.com/freesurfer@nmr.mgh.harvard.edu/msg69541.html 
+            https://www.mail-archive.com/freesurfer@nmr.mgh.harvard.edu/msg69541.html
             for more details. Else use the standard VOX2RAS transform (equivalent to attaching
             an affine map to a nibabel image.
 
