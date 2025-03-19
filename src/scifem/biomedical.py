@@ -1,8 +1,6 @@
 import dolfinx
 import basix.ufl
 from pathlib import Path
-import nibabel
-import nibabel.affines as naff
 import numpy as np
 import numpy.typing as npt
 
@@ -19,6 +17,11 @@ def apply_mri_transform(
     Returns:
         The data evaluated at these points.
     """
+    try:
+        import nibabel
+        import nibabel.affines as naff
+    except ImportError:
+        raise ImportError("This function requires the nibabel package to be installed")
     image = nibabel.load(path)
     data = image.get_fdata()
     # This depends on how one uses FreeSurfer
