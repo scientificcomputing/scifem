@@ -1,7 +1,7 @@
 from mpi4py import MPI
 import dolfinx
 import numpy as np
-from scifem.biomedical import read_mri_data_to_function
+from scifem.biomedical import read_mri_data_to_function, read_mri_data_to_tag
 import pytest
 import basix.ufl
 
@@ -38,7 +38,12 @@ def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tm
     MPI.COMM_WORLD.Barrier()
     # Create unit cube
     mesh = dolfinx.mesh.create_unit_cube(
-        MPI.COMM_WORLD, Nx, Ny, Nz, cell_type=dolfinx.cpp.mesh.CellType.hexahedron
+        MPI.COMM_WORLD,
+        Nx,
+        Ny,
+        Nz,
+        cell_type=dolfinx.cpp.mesh.CellType.hexahedron,
+        ghost_mode=dolfinx.mesh.GhostMode.shared_facet,
     )
 
     # Find voxel position on reference cube (done prior to mesh transformation)
@@ -67,3 +72,11 @@ def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tm
     func = read_mri_data_to_function(filename, mesh, degree=degree, dtype=np.float64)
 
     np.testing.assert_allclose(func.x.array, reference_data)
+
+    if degree == 0:
+        cell_map = mesh.topology.index_map(mesh.topology.dim)
+        num_cells_local = cell_map.size_local + cell_map.num_ghosts
+        # Pick every second cell
+        cells = np.arange(num_cells_local, dtype=np.int32)[::2]
+        tag = read_mri_data_to_tag(filename, mesh, edim=mesh.topology.dim, entities=cells)
+        np.testing.assert_allclose(tag.values, reference_data[::2])
