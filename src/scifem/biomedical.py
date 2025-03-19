@@ -90,7 +90,8 @@ def read_mri_data_to_function(
         mesh: The mesh to attach the MRI data to.
         cells: Subset of cells to evaluate the MRI data at. If None, all cells are used.
         degree: Degree of the (quadrature) function space to attach the MRI data to. Defaults to 0.
-            If degree is 0, use a DG-0 space instead of a quadrature space, to simplify post-processing.
+            If degree is 0, use a DG-0 space instead of a quadrature space, to simplify
+            post-processing.
         dtype: Data type used for input data. Can be used for rounding data.
 
     Raises:
