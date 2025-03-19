@@ -23,7 +23,7 @@ h5py = ["h5py"]
 adios2 = ["adios2"]
 docs = ["jupyter-book", "jupytext", "pyvista[jupyter]", "sphinxcontrib-bibtex"]
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
-test = ["pytest", "petsc4py", "h5py"]
+test = ["pytest", "petsc4py", "h5py", "scifem[biomed]"]
 biomed = ["nibabel"]
 all = ["scifem[docs,dev,test,audio2,h5py,biomed]"]
 
