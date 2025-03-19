@@ -81,8 +81,6 @@ def read_mri_data_to_function(
 ) -> dolfinx.fem.Function:
     """Read in MRI data over a set of cells in the mesh and attach it to an appropriate function.
 
-
-
     Args:
         mri_data_path: Path to MRI data
         mesh: The mesh to attach the MRI data to.
