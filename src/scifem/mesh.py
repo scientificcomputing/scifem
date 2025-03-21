@@ -14,6 +14,7 @@ __all__ = [
     "reverse_mark_entities",
     "extract_submesh",
     "find_interface",
+    "compute_subdomain_exterior_facets",
 ]
 
 
