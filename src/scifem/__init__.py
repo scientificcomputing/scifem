@@ -6,7 +6,7 @@ import numpy as np
 import numpy.typing as npt
 from . import _scifem  # type: ignore
 from .point_source import PointSource
-from .assembly import assemble_scalar
+from .assembly import assemble_scalar, norm
 from . import xdmf
 from .solvers import BlockedNewtonSolver, NewtonSolver
 from .mesh import create_entity_markers, transfer_meshtags_to_submesh
@@ -27,6 +27,7 @@ __all__ = [
     "BlockedNewtonSolver",
     "transfer_meshtags_to_submesh",
     "evaluate_function",
+    "norm",
 ]
 
 
