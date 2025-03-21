@@ -126,7 +126,7 @@ def reverse_mark_entities(
 
 
 def extract_submesh(
-    mesh: dolfinx.mesh.Mesh, entity_tag: dolfinx.mesh.MeshTags, tags: tuple[int, ...]
+    mesh: dolfinx.mesh.Mesh, entity_tag: dolfinx.mesh.MeshTags, tags: typing.Sequence[int, ...]
 ) -> tuple[
     dolfinx.mesh.Mesh,
     npt.NDArray[np.int32],

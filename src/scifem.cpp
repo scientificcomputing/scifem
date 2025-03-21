@@ -261,8 +261,6 @@ transfer_meshtags_to_submesh(
 
   for (std::size_t i = 0; i < local_indices.size(); ++i)
   {
-    assert(i < parent_values.size());
-    assert(i < local_indices.size());
 
     auto parent_entity = local_indices[i];
     auto parent_value = parent_values[i];
