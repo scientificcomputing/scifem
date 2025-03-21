@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from . import _scifem  # type: ignore
+import collections
 import dolfinx
 import typing
 import numpy as np
 import numpy.typing as npt
 
-__all__ = ["create_entity_markers", "transfer_meshtags_to_submesh"]
+__all__ = [
+    "create_entity_markers",
+    "transfer_meshtags_to_submesh",
+    "SubmeshData",
+    "reverse_mark_entities",
+    "extract_submesh",
+]
 
 
 # (tag, locator, on_boundary) where on_boundary is optional
@@ -103,3 +110,63 @@ def transfer_meshtags_to_submesh(
         entity_tag._cpp_object, submesh.topology._cpp_object, vertex_to_parent, cell_to_parent
     )
     return dolfinx.mesh.MeshTags(cpp_tag), sub_to_parent_entity_map
+
+
+def reverse_mark_entities(
+    entity_map: dolfinx.common.IndexMap, entities: npt.NDArray[np.int32]
+) -> npt.NDArray[np.int32]:
+    """Communicate entities marked on a single process to all processes that ghosts or
+    owns this entity.
+
+    Args:
+        entity_map: Index-map describing entity ownership
+        entities: Local indices of entities to communicate
+    Returns:
+        Local indices marked on any process sharing this entity
+    """
+    comm_vec = dolfinx.la.vector(entity_map, dtype=np.int32)
+    comm_vec.array[:] = 0
+    comm_vec.array[entities] = 1
+    comm_vec.scatter_reverse(dolfinx.la.InsertMode.add)
+    comm_vec.scatter_forward()
+    return np.flatnonzero(comm_vec.array).astype(np.int32)
+
+
+SubmeshData = collections.namedtuple(
+    "SubmeshData", ["domain", "cell_map", "vertex_map", "node_map", "cell_tag"]
+)
+
+
+def extract_submesh(
+    mesh: dolfinx.mesh.Mesh, entity_tag: dolfinx.mesh.MeshTags, tags: typing.Sequence[int]
+) -> SubmeshData:
+    """Generate a sub-mesh from a subset of tagged entities in a meshtag object.
+
+    Args:
+        mesh: The mesh to extract the submesh from.
+        entity_tag: MeshTags object containing marked entities.
+        tags: What tags the marked entities used in the submesh should have.
+
+    Returns:
+        A tuple `(submesh, subcell_to_parent_entity, subvertex_to_parent_vertex,
+        subnode_to_parent_node, entity_tag_on_submesh)`.
+    """
+
+    # Accumulate all entities, including ghosts, for the specfic set of tagged entities
+    edim = entity_tag.dim
+    mesh.topology.create_connectivity(edim, mesh.topology.dim)
+    emap = mesh.topology.index_map(entity_tag.dim)
+    marker = dolfinx.la.vector(emap)
+    tags_as_arr = np.asarray(tags, dtype=entity_tag.values.dtype)
+    all_tagged_indices = np.isin(entity_tag.values, tags_as_arr)
+    marker.array[entity_tag.indices[all_tagged_indices]] = 1
+    marker.scatter_reverse(dolfinx.la.InsertMode.add)
+    marker.scatter_forward()
+    entities = np.flatnonzero(marker.array)
+    # Extract submesh
+    submesh, cell_map, vertex_map, node_map = dolfinx.mesh.create_submesh(mesh, edim, entities)
+
+    # Transfer cell markers
+    new_et, _ = transfer_meshtags_to_submesh(entity_tag, submesh, vertex_map, cell_map)
+    new_et.name = entity_tag.name
+    return SubmeshData(submesh, cell_map, vertex_map, node_map, new_et)
