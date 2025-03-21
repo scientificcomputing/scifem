@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from . import _scifem  # type: ignore
+import collections
 import dolfinx
 import typing
 import numpy as np
 import numpy.typing as npt
 
-__all__ = ["create_entity_markers", "transfer_meshtags_to_submesh"]
+__all__ = [
+    "create_entity_markers",
+    "transfer_meshtags_to_submesh",
+    "SubmeshData",
+    "reverse_mark_entities",
+    "extract_submesh",
+]
 
 
 # (tag, locator, on_boundary) where on_boundary is optional
@@ -125,15 +132,14 @@ def reverse_mark_entities(
     return np.flatnonzero(comm_vec.array).astype(np.int32)
 
 
+SubmeshData = collections.namedtuple(
+    "SubmeshData", ["domain", "cell_map", "vertex_map", "node_map", "cell_tag"]
+)
+
+
 def extract_submesh(
-    mesh: dolfinx.mesh.Mesh, entity_tag: dolfinx.mesh.MeshTags, tags: typing.Sequence[int, ...]
-) -> tuple[
-    dolfinx.mesh.Mesh,
-    npt.NDArray[np.int32],
-    npt.NDArray[np.int32],
-    npt.NDArray[np.int32],
-    dolfinx.mesh.MeshTags,
-]:
+    mesh: dolfinx.mesh.Mesh, entity_tag: dolfinx.mesh.MeshTags, tags: typing.Sequence[int]
+) -> SubmeshData:
     """Generate a sub-mesh from a subset of tagged entities in a meshtag object.
 
     Args:
@@ -163,4 +169,4 @@ def extract_submesh(
     # Transfer cell markers
     new_et, _ = transfer_meshtags_to_submesh(entity_tag, submesh, vertex_map, cell_map)
     new_et.name = entity_tag.name
-    return submesh, cell_map, vertex_map, node_map, new_et
+    return SubmeshData(submesh, cell_map, vertex_map, node_map, new_et)
