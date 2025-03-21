@@ -276,13 +276,9 @@ transfer_meshtags_to_submesh(
     {
       if (entity_found)
         break;
-      std::int32_t sub_cell = parent_entity_to_sub_cell[parent_cell];
-      if (sub_cell
-          > submesh_topology->index_map(submesh_tdim)->size_local()
-                + submesh_topology->index_map(submesh_tdim)->num_ghosts())
-      {
-      }
-      if (sub_cell > -1)
+
+      if (std::int32_t sub_cell = parent_entity_to_sub_cell[parent_cell];
+          sub_cell > -1)
       {
 
         // For a cell in the sub mesh find all attached entities,
