@@ -8,6 +8,7 @@
 #include <dolfinx/fem/ElementDofLayout.h>
 #include <dolfinx/fem/FiniteElement.h>
 #include <dolfinx/fem/FunctionSpace.h>
+#include <dolfinx/la/Vector.h>
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/mesh/MeshTags.h>
 #include <memory>
@@ -179,21 +180,30 @@ transfer_meshtags_to_submesh(
                                          + parent_sub_entity_map->num_ghosts();
   std::vector<std::int32_t> parent_entity_to_sub_cell(parent_num_sub_entities,
                                                       -1);
-  for (std::int32_t i = 0; i < cell_map.size(); ++i)
-  {
-    parent_entity_to_sub_cell[cell_map[i]] = i;
-  }
+  for (std::int32_t k = 0; k < cell_map.size(); ++k)
+    parent_entity_to_sub_cell[cell_map[k]] = k;
 
   // Access various connectivity maps
   auto sub_e_to_v = submesh_topology->connectivity(tag_dim, 0);
+  if (!sub_e_to_v)
+  {
+    throw std::runtime_error("Missing submesh connectivity between "
+                             + std::to_string(tag_dim) + " and 0");
+  }
   auto sub_c_to_e = submesh_topology->connectivity(submesh_tdim, tag_dim);
+  if (!sub_c_to_e)
+  {
+    throw std::runtime_error("Missing submesh connectivity between "
+                             + std::to_string(submesh_tdim) + " and "
+                             + std::to_string(tag_dim));
+  }
   auto e_to_v = topology->connectivity(tag_dim, 0);
-  auto e_to_sub_cell = topology->connectivity(tag_dim, submesh_tdim);
   if (!e_to_v)
   {
     throw std::runtime_error("Missing connectivity between "
                              + std::to_string(tag_dim) + " and 0");
   }
+  auto e_to_sub_cell = topology->connectivity(tag_dim, submesh_tdim);
   if (!e_to_sub_cell)
   {
     throw std::runtime_error("Missing connectivity between "
@@ -207,27 +217,77 @@ transfer_meshtags_to_submesh(
   std::size_t num_sum_entities
       = sub_entity_map->size_local() + sub_entity_map->num_ghosts();
   std::vector<std::int32_t> sub_entity_to_parent(num_sum_entities, -1);
-  std::vector<std::int32_t> submesh_values(num_sum_entities, -1);
+
+  // Initialize submesh values with numerical min
+  std::vector<T> submesh_values(num_sum_entities,
+                                std::numeric_limits<T>::min());
   std::vector<std::int32_t> submesh_indices(num_sum_entities);
   std::iota(submesh_indices.begin(), submesh_indices.end(), 0);
 
-  std::span<const std::int32_t> org_indices = tags.indices();
-  std::span<const T> org_values = tags.values();
+  // Map tag indices to global index
+  std::span<const std::int32_t> tag_indices = tags.indices();
+  auto parent_entity_map = topology->index_map(tag_dim);
+  std::vector<std::int64_t> global_tag_indices(tag_indices.size());
+  parent_entity_map->local_to_global(tag_indices, global_tag_indices);
+
+  // Accumulate global indices across processes
+  dolfinx::la::Vector<std::int64_t> index_mapper(parent_entity_map, 1);
+  index_mapper.set(-1);
+  std::span<std::int64_t> indices = index_mapper.mutable_array();
+  for (std::size_t i = 0; i < global_tag_indices.size(); ++i)
+    indices[tag_indices[i]] = global_tag_indices[i];
+  index_mapper.scatter_rev([](std::int32_t a, std::int32_t b)
+                           { return std::max<std::int32_t>(a, b); });
+  index_mapper.scatter_fwd();
+
+  // Map tag values in a similar way (Allowing negative values)
+  dolfinx::la::Vector<T> values_mapper(parent_entity_map, 1);
+  values_mapper.set(std::numeric_limits<T>::min());
+  std::span<T> values = values_mapper.mutable_array();
+  std::span<const T> tag_values = tags.values();
+  for (std::size_t i = 0; i < tag_values.size(); ++i)
+    values[tag_indices[i]] = tag_values[i];
+  values_mapper.scatter_rev([](T a, T b) { return std::max<T>(a, b); });
+  values_mapper.scatter_fwd();
+
   // For each entity in the tag, find all cells of the submesh connected to this
-  // entity
-  for (std::size_t i = 0; i < org_indices.size(); ++i)
+  // entity. Global to local returns -1 if not on process.
+  std::vector<std::int32_t> local_indices(indices.size());
+  parent_entity_map->global_to_local(indices, local_indices);
+  std::span<const T> parent_values = values_mapper.array();
+
+  if (local_indices.size() != parent_values.size())
+    throw std::runtime_error("Number of indices and values do not match");
+
+  for (std::size_t i = 0; i < local_indices.size(); ++i)
   {
-    auto entity_vertices = e_to_v->links(org_indices[i]);
+    assert(i < parent_values.size());
+    assert(i < local_indices.size());
+
+    auto parent_entity = local_indices[i];
+    auto parent_value = parent_values[i];
+    if (parent_entity == -1)
+      continue;
+    assert(parent_entity < e_to_v->num_nodes());
+
+    auto entity_vertices = e_to_v->links(parent_entity);
     bool entity_found = false;
-    for (auto parent_cell : e_to_sub_cell->links(org_indices[i]))
+    for (auto parent_cell : e_to_sub_cell->links(parent_entity))
     {
       if (entity_found)
         break;
       std::int32_t sub_cell = parent_entity_to_sub_cell[parent_cell];
-      if (sub_cell != -1)
+      if (sub_cell
+          > submesh_topology->index_map(submesh_tdim)->size_local()
+                + submesh_topology->index_map(submesh_tdim)->num_ghosts())
       {
-        // For a cell in the sub mesh find all attached entities, and
-        // define them by their vertices in the sub mesh
+      }
+      if (sub_cell > -1)
+      {
+
+        // For a cell in the sub mesh find all attached entities,
+        // and define them by their vertices in the sub mesh
+        assert(sub_cell < sub_c_to_e->num_nodes());
         for (auto sub_entity : sub_c_to_e->links(sub_cell))
         {
           if (entity_found)
@@ -246,11 +306,11 @@ transfer_meshtags_to_submesh(
           }
           if (entity_matches)
           {
-            // Found entity in submesh with the same vertices as in the parent
-            // mesh
-            submesh_values[sub_entity] = org_values[i];
+            // Found entity in submesh with the same vertices as in the
+            // parent mesh
+            submesh_values[sub_entity] = parent_value;
             entity_found = true;
-            sub_entity_to_parent[sub_entity] = org_indices[i];
+            sub_entity_to_parent[sub_entity] = parent_entity;
           }
         }
       }
@@ -303,7 +363,7 @@ void declare_meshtag_operators(nanobind::module_& m, std::string type)
              cell_map)
       {
         std::tuple<dolfinx::mesh::MeshTags<T>, std::vector<std::int32_t>>
-            sub_data = scifem::transfer_meshtags_to_submesh<std::int32_t>(
+            sub_data = scifem::transfer_meshtags_to_submesh<T>(
                 tags, submesh_topology,
                 std::span(vertex_map.data(), vertex_map.size()),
                 std::span(cell_map.data(), cell_map.size()));
