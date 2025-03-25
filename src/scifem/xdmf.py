@@ -596,6 +596,9 @@ class BaseXDMFFile(abc.ABC):
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
+    def __del__(self):
+        self.close()
+
     def write(self, time: float) -> None:
         """Write the point cloud at a given time.
 
