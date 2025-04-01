@@ -8,6 +8,7 @@ import numpy as np
 from petsc4py import PETSc
 import ufl
 import dolfinx
+import itertools
 
 
 __all__ = ["NewtonSolver", "BlockedNewtonSolver"]
@@ -70,10 +71,25 @@ class NewtonSolver:
         self.w = w
 
         # Create PETSc objects for block assembly
-        self.b = dolfinx.fem.petsc.create_vector_block(self._F)
-        self.A = dolfinx.fem.petsc.create_matrix_block(self._J)
-        self.dx = dolfinx.fem.petsc.create_vector_block(self._F)
-        self.x = dolfinx.fem.petsc.create_vector_block(self._F)
+        try:
+            self.b = dolfinx.fem.petsc.create_vector_block(self._F)
+            self.A = dolfinx.fem.petsc.create_matrix_block(self._J)
+            self.dx = dolfinx.fem.petsc.create_vector_block(self._F)
+            self.x = dolfinx.fem.petsc.create_vector_block(self._F)
+        except AttributeError:
+            self.b = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+            self.A = dolfinx.fem.petsc.create_matrix(self._J, kind="mpi")
+            self.dx = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+            self.x = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+    
+            self._maps = [
+            (
+                form.function_spaces[0].dofmaps(0).index_map,
+                form.function_spaces[0].dofmaps(0).index_map_bs,
+            )
+            for form in self.F
+        ]
+
 
         # Set PETSc options
         opts = PETSc.Options()
@@ -119,26 +135,10 @@ class NewtonSolver:
                 self._pre_solve_callback(self)
 
             # Pack constants and coefficients
-            constants_L = [
-                form and dolfinx.cpp.fem.pack_constants(form._cpp_object) for form in self._F
-            ]
-            coeffs_L = [dolfinx.cpp.fem.pack_coefficients(form._cpp_object) for form in self._F]
-            constants_a = [
-                [
-                    dolfinx.cpp.fem.pack_constants(form._cpp_object)
-                    if form is not None
-                    else np.array([], dtype=PETSc.ScalarType)
-                    for form in forms
-                ]
-                for forms in self._J
-            ]
-            coeffs_a = [
-                [
-                    {} if form is None else dolfinx.cpp.fem.pack_coefficients(form._cpp_object)
-                    for form in forms
-                ]
-                for forms in self._J
-            ]
+            constants_L = dolfinx.fem.pack_constants(self._F)
+            coeffs_L = dolfinx.fem.pack_coefficients(self._F)
+            constants_a = [dolfinx.fem.pack_constants(form) if form is not None else np.array([], dtype=b.dtype) for form in self._J]  # type: ignore
+            coeffs_a = [{} if form is None else dolfinx.fem.pack_coefficients(form) for form in self._J]
 
             # Scatter previous solution `w` to `self.x`, the blocked version used for lifting
             dolfinx.cpp.la.petsc.scatter_local_vectors(
@@ -157,27 +157,42 @@ class NewtonSolver:
             # Assemble F(u_{i-1}) - J(u_D - u_{i-1}) and set du|_bc= u_D - u_{i-1}
             with self.b.localForm() as b_local:
                 b_local.set(0.0)
-            dolfinx.fem.petsc.assemble_vector_block(
-                self.b,
-                self._F,
-                self._J,
-                bcs=self.bcs,
-                x0=self.x,
-                coeffs_a=coeffs_a,
-                constants_a=constants_a,
-                coeffs_L=coeffs_L,
-                constants_L=constants_L,
-                # dolfinx 0.8 compatibility
-                # this is called 'scale' in 0.8, 'alpha' in 0.9
-                **{_alpha_kw: -1.0},
-            )
-            self.b.ghostUpdate(PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
+            try:
+                dolfinx.fem.petsc.assemble_vector_block(
+                    self.b,
+                    self._F,
+                    self._J,
+                    bcs=self.bcs,
+                    x0=self.x,
+                    coeffs_a=coeffs_a,
+                    constants_a=constants_a,
+                    coeffs_L=coeffs_L,
+                    constants_L=constants_L,
+                    # dolfinx 0.8 compatibility
+                    # this is called 'scale' in 0.8, 'alpha' in 0.9
+                    **{_alpha_kw: -1.0},
+                )
+            except AttributeError:
+                dolfinx.fem.petsc.assemble_vector(self.b, self._F, coeffs=coeffs_L,constants=constants_L)
+                bcs1 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(self._J, 1), self.bcs)
+                dolfinx.fem.petsc.apply_lifting(self.b, self._J, bcs=bcs1, x0=self.x,
+                                                coeffs=coeffs_a,
+                                                constants=constants_a,
+                                                alpha=-1.)
+                self.b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+                bcs0 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(self._F), self.bcs)
+                dolfinx.fem.petsc.set_bc(self.b, bcs0)
+                self.b.ghostUpdate(PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
+
 
             # Assemble Jacobian
             self.A.zeroEntries()
-            dolfinx.fem.petsc.assemble_matrix_block(
-                self.A, self._J, bcs=self.bcs, constants=constants_a, coeffs=coeffs_a
-            )
+            try:
+                dolfinx.fem.petsc.assemble_matrix_block(
+                    self.A, self._J, bcs=self.bcs, constants=constants_a, coeffs=coeffs_a
+                )
+            except AttributeError:
+                dolfinx.fem.petsc.assemble_matrix(self.A, self._J, self.bcs, coeffs=coeffs_a, constants=constants_a)
             self.A.assemble()
 
             self._solver.solve(self.b, self.dx)
@@ -323,10 +338,25 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         self._post_solve_callback: Callable[["BlockedNewtonSolver"], None] | None = None
 
         # Create structures for holding arrays and matrix
-        self._b = dolfinx.fem.petsc.create_vector_block(self._F)
-        self._J = dolfinx.fem.petsc.create_matrix_block(self._a)
-        self._dx = dolfinx.fem.petsc.create_vector_block(self._F)
-        self._x = dolfinx.fem.petsc.create_vector_block(self._F)
+        try:
+            self._b = dolfinx.fem.petsc.create_vector_block(self._F)
+            self._J = dolfinx.fem.petsc.create_matrix_block(self._a)
+            self._dx = dolfinx.fem.petsc.create_vector_block(self._F)
+            self._x = dolfinx.fem.petsc.create_vector_block(self._F)
+        except AttributeError:
+            self._b = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+            self._J = dolfinx.fem.petsc.create_matrix(self._a, kind="mpi")
+            self._dx = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+            self._x = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+    
+            self._maps = [
+            (
+                form.function_spaces[0].dofmaps(0).index_map,
+                form.function_spaces[0].dofmaps(0).index_map_bs,
+            )
+            for form in self._F
+        ]
+
         self._J.setOptionsPrefix(prefix)
         self._J.setFromOptions()
 
@@ -395,7 +425,8 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         # Assemble F(u_{i-1}) - J(u_D - u_{i-1}) and set du|_bc= u_D - u_{i-1}
         with b.localForm() as b_local:
             b_local.set(0.0)
-        dolfinx.fem.petsc.assemble_vector_block(
+        try:
+            dolfinx.fem.petsc.assemble_vector_block(
             b,
             self._F,
             self._a,
@@ -405,6 +436,14 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
             # this is called 'scale' in 0.8, 'alpha' in 0.9
             **{_alpha_kw: -1.0},
         )
+        except AttributeError:
+            dolfinx.fem.petsc.assemble_vector(b, self._F)
+            bcs1 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(self._a, 1), self._bcs)
+            dolfinx.fem.petsc.apply_lifting(b, self._a, bcs=bcs1, x0=x,
+                                            alpha=-1.)
+            b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+            bcs0 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(self._F), self._bcs)
+            dolfinx.fem.petsc.set_bc(b, bcs0)
         b.ghostUpdate(PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
 
     def _assemble_jacobian(self, x: PETSc.Vec, A: PETSc.Mat) -> None:
@@ -414,7 +453,10 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         """
         # Assemble Jacobian
         A.zeroEntries()
-        dolfinx.fem.petsc.assemble_matrix_block(A, self._a, bcs=self._bcs)
+        try:
+            dolfinx.fem.petsc.assemble_matrix_block(A, self._a, bcs=self._bcs)
+        except AttributeError:
+            dolfinx.fem.petsc.assemble_matrix(A, self._a, self._bcs)
         A.assemble()
 
     def _update_function(self, solver, dx: PETSc.Vec, x: PETSc.Vec):
