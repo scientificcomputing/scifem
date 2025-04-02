@@ -115,9 +115,23 @@ L = dolfinx.fem.form([L0, L1])
 
 # We can now assemble the matrix and vector
 
-A = dolfinx.fem.petsc.assemble_matrix_block(a)
+try:
+    A = dolfinx.fem.petsc.assemble_matrix_block(a)
+except AttributeError:
+    A = dolfinx.fem.petsc.assemble_matrix(a, kind="mpi")
 A.assemble()
-b = dolfinx.fem.petsc.assemble_vector_block(L, a, bcs=[])
+
+bcs = []
+try:
+    b = dolfinx.fem.petsc.assemble_vector_block(L, a, bcs=bcs)
+except AttributeError:
+    b = dolfinx.fem.petsc.assemble_vector(L, a, bcs=bcs, kind="mpi")
+    bcs1 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(jacobian, 1), bcs)  # type: ignore
+    apply_lifting(F, jacobian, bcs=bcs1, x0=x, alpha=-1.0)  # type: ignore
+    b.ghostUpdate(F, PETSc.InsertMode.ADD, PETSc.ScatterMode.REVERSE)  # type: ignore
+    bcs0 = dolfinx.fem.bcs_by_block(olfinx.fem.extract_function_spaces(residual), bcs)  # type: ignore
+    dolfinx.fem.petsc.set_bc(L, bcs0, x0=x, alpha=-1.0)
+    b.ghostUpdate(F, PETSc.InsertMode.INSERT, PETSc.ScatterMode.FORWARD)
 
 # Next, we modify the second part of the block to contain `h`
 # We start by enforcing the multiplier constraint $h$ by modifying the right hand side vector

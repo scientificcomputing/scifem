@@ -141,12 +141,22 @@ def test_singular_poisson(tensor, degree, dtype):
     a = dolfinx.fem.form([[a00, a01], [a10, None]], dtype=stype)
     L = dolfinx.fem.form([L0, L1], dtype=stype)
 
-    A = dolfinx.fem.petsc.assemble_matrix_block(a)
+    try:
+        A = dolfinx.fem.petsc.assemble_matrix_block(a)
+    except AttributeError:
+        A = dolfinx.fem.petsc.assemble_matrix(a, kind="mpi")
     A.assemble()
-    b = dolfinx.fem.petsc.create_vector_block(L)
+
+    try:
+        b = dolfinx.fem.petsc.create_vector_block(L)
+    except AttributeError:
+        b = dolfinx.fem.petsc.create_vector(L, kind="mpi")
     with b.localForm() as loc:
         loc.set(0)
-    dolfinx.fem.petsc.assemble_vector_block(b, L, a, bcs=[])
+    try:
+        dolfinx.fem.petsc.assemble_vector_block(b, L, a, bcs=[])
+    except AttributeError:
+        dolfinx.fem.petsc.assemble_vector(b, L)
 
     ksp = PETSc.KSP().create(mesh.comm)
     ksp.setOperators(A)
@@ -155,7 +165,10 @@ def test_singular_poisson(tensor, degree, dtype):
     pc.setType("lu")
     pc.setFactorSolverType("mumps")
 
-    x = dolfinx.fem.petsc.create_vector_block(L)
+    try:
+        x = dolfinx.fem.petsc.create_vector_block(L)
+    except AttributeError:
+        x = dolfinx.fem.petsc.create_vector(L, kind="mpi")
     ksp.solve(b, x)
     x.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
     uh = dolfinx.fem.Function(V)
