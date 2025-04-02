@@ -94,7 +94,7 @@ def test_NewtonSolver(factor, auto_split):
     dolfinx.log.set_log_level(dolfinx.log.LogLevel.ERROR)
     u.x.array[:] = factor * 0.1
     p.x.array[:] = factor * 0.02
-    blocked_solver.convergence_criterion = "residual"
+    blocked_solver.convergence_criterion = "incremental"
     dolfinx.log.set_log_level(dolfinx.log.LogLevel.INFO)
     blocked_solver.solve()
 
