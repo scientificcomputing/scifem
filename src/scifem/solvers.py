@@ -146,6 +146,7 @@ class NewtonSolver:
                     {} if form is None else dolfinx.fem.pack_coefficients(form) for form in self._J
                 ]
             except AttributeError:
+                # NOTE: DOLFINx 0.9 compatibility
                 # Pack constants and coefficients
                 constants_L = [
                     form and dolfinx.cpp.fem.pack_constants(form._cpp_object) for form in self._F
