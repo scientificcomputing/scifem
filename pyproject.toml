@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "scifem"
-version = "0.3.0"
+version = "0.5.0"
 description = "Scientific tools for finite element methods"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,8 +23,9 @@ h5py = ["h5py"]
 adios2 = ["adios2"]
 docs = ["jupyter-book", "jupytext", "pyvista[jupyter]", "sphinxcontrib-bibtex"]
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
-test = ["pytest", "petsc4py", "h5py"]
-all = ["scifem[docs,dev,test,audio2,h5py]"]
+test = ["pytest", "petsc4py", "h5py", "scifem[biomed]"]
+biomed = ["nibabel"]
+all = ["scifem[docs,dev,test,audio2,h5py,biomed]"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -124,7 +125,7 @@ tag = true
 sign_tags = false
 tag_name = "v{new_version}"
 tag_message = "Bump version: {current_version} → {new_version}"
-current_version = "0.3.0"
+current_version = "0.5.0"
 
 
 [[tool.bumpversion.files]]
