@@ -141,7 +141,7 @@ class NewtonSolver:
                     if form is not None
                     else np.array([], dtype=self.x.array.dtype)
                     for form in self._J
-                ]  # type: ignore
+                ]
                 coeffs_a = [
                     {} if form is None else dolfinx.fem.pack_coefficients(form) for form in self._J
                 ]
@@ -156,7 +156,14 @@ class NewtonSolver:
                     [
                         dolfinx.cpp.fem.pack_constants(form._cpp_object)
                         if form is not None
-                        else np.array([], dtype=PETSc.ScalarType)
+                        else np.array([], dtype=self.x.array.dtype)
+                        for form in forms
+                    ]
+                    for forms in self._J
+                ]
+                coeffs_a = [
+                    [
+                        {} if form is None else dolfinx.cpp.fem.pack_coefficients(form._cpp_object)
                         for form in forms
                     ]
                     for forms in self._J
