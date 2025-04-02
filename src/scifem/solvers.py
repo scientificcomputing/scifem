@@ -443,7 +443,7 @@ class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
                                             alpha=-1.)
             b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
             bcs0 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(self._F), self._bcs)
-            dolfinx.fem.petsc.set_bc(b, bcs0)
+            dolfinx.fem.petsc.set_bc(b, bcs0, x0=x, alpha=-1.)
         b.ghostUpdate(PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
 
     def _assemble_jacobian(self, x: PETSc.Vec, A: PETSc.Mat) -> None:
