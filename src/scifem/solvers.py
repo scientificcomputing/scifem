@@ -133,18 +133,33 @@ class NewtonSolver:
                 self._pre_solve_callback(self)
 
             # Pack constants and coefficients
-            constants_L = dolfinx.fem.pack_constants(self._F)
-            coeffs_L = dolfinx.fem.pack_coefficients(self._F)
-            constants_a = [
-                dolfinx.fem.pack_constants(form)
-                if form is not None
-                else np.array([], dtype=self.x.array.dtype)
-                for form in self._J
-            ]  # type: ignore
-            coeffs_a = [
-                {} if form is None else dolfinx.fem.pack_coefficients(form) for form in self._J
-            ]
-
+            try:
+                constants_L = dolfinx.fem.pack_constants(self._F)
+                coeffs_L = dolfinx.fem.pack_coefficients(self._F)
+                constants_a = [
+                    dolfinx.fem.pack_constants(form)
+                    if form is not None
+                    else np.array([], dtype=self.x.array.dtype)
+                    for form in self._J
+                ]  # type: ignore
+                coeffs_a = [
+                    {} if form is None else dolfinx.fem.pack_coefficients(form) for form in self._J
+                ]
+            except AttributeError:
+                # Pack constants and coefficients
+                constants_L = [
+                    form and dolfinx.cpp.fem.pack_constants(form._cpp_object) for form in self._F
+                ]
+                coeffs_L = [dolfinx.cpp.fem.pack_coefficients(form._cpp_object) for form in self._F]
+                constants_a = [
+                    [
+                        dolfinx.cpp.fem.pack_constants(form._cpp_object)
+                        if form is not None
+                        else np.array([], dtype=PETSc.ScalarType)
+                        for form in forms
+                    ]
+                    for forms in self._J
+                ]
             # Scatter previous solution `w` to `self.x`, the blocked version used for lifting
             dolfinx.cpp.la.petsc.scatter_local_vectors(
                 self.x,
