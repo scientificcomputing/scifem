@@ -197,7 +197,7 @@ class NewtonSolver:
                 bcs0 = dolfinx.fem.bcs_by_block(
                     dolfinx.fem.extract_function_spaces(self._F), self.bcs
                 )
-                dolfinx.fem.petsc.set_bc(self.b, bcs0, x0=self.x, alpha=-1.)
+                dolfinx.fem.petsc.set_bc(self.b, bcs0, x0=self.x, alpha=-1.0)
                 self.b.ghostUpdate(PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
 
             # Assemble Jacobian
