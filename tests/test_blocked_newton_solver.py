@@ -4,7 +4,7 @@ import numpy as np
 import dolfinx
 import dolfinx.nls.petsc
 from petsc4py import PETSc
-from scifem import assemble_scalar, BlockedNewtonSolver
+from scifem import assemble_scalar, BlockedNewtonSolver, NewtonSolver
 import basix.ufl
 import ufl
 import pytest
