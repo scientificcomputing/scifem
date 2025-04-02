@@ -138,7 +138,7 @@ class NewtonSolver:
             constants_a = [
                 dolfinx.fem.pack_constants(form)
                 if form is not None
-                else np.array([], dtype=self._b.x.array.dtype)
+                else np.array([], dtype=self.x.array.dtype)
                 for form in self._J
             ]  # type: ignore
             coeffs_a = [
