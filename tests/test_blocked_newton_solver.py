@@ -4,26 +4,23 @@ import numpy as np
 import dolfinx
 import dolfinx.nls.petsc
 from petsc4py import PETSc
-from scifem import NewtonSolver, assemble_scalar, BlockedNewtonSolver
+from scifem import assemble_scalar, BlockedNewtonSolver
 import basix.ufl
 import ufl
 import pytest
-from packaging.version import parse as _v
 
 
 @pytest.mark.parametrize("factor", [1, -1])
 @pytest.mark.parametrize("auto_split", [True, False])
 def test_NewtonSolver(factor, auto_split):
-
     def left_boundary(x):
         return np.isclose(x[0], 0.0)
 
     dtype = PETSc.RealType
     ftype = PETSc.ScalarType
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 12, dtype=dtype)
-    mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
+    mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     boundary_facets = dolfinx.mesh.locate_entities_boundary(mesh, 1, left_boundary)
-
 
     el_0 = basix.ufl.element("Lagrange", mesh.basix_cell(), 1)
     el_1 = basix.ufl.element("Lagrange", mesh.basix_cell(), 2)
@@ -63,24 +60,21 @@ def test_NewtonSolver(factor, auto_split):
             [ufl.derivative(F0, u, du), ufl.derivative(F0, p, dp)],
             [ufl.derivative(F1, u, du), ufl.derivative(F1, p, dp)],
         ]
- 
+
     # Reference solution
     u_ex = factor * ufl.sqrt(u_expr / c0)
     p_ex = factor * ufl.sqrt(p_expr / c1)
 
     # Create BC on second space
-    dofs_q = dolfinx.fem.locate_dofs_topological(Q, 
-        mesh.topology.dim-1, boundary_facets)
-    p_bc = dolfinx.fem.Function(Q,dtype=ftype)
+    dofs_q = dolfinx.fem.locate_dofs_topological(Q, mesh.topology.dim - 1, boundary_facets)
+    p_bc = dolfinx.fem.Function(Q, dtype=ftype)
     try:
         ip = Q.element.interpolation_points()
-    
+
     except TypeError:
         ip = Q.element.interpolation_points
     p_bc.interpolate(dolfinx.fem.Expression(p_ex, ip))
     bc_q = dolfinx.fem.dirichletbc(p_bc, dofs_q)
-
-
 
     petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"}
     # solver = NewtonSolver(F, J, [u, p], bcs=[bc_q], max_iterations=25, petsc_options=petsc_options)
@@ -92,10 +86,10 @@ def test_NewtonSolver(factor, auto_split):
     # assert assemble_scalar(err_u) < tol
     # assert assemble_scalar(err_p) < tol
 
-
-
     # Check consistency with other Newton solver
-    blocked_solver = BlockedNewtonSolver(F, [u, p],bcs=[bc_q], J=None if auto_split else J, petsc_options=petsc_options)
+    blocked_solver = BlockedNewtonSolver(
+        F, [u, p], bcs=[bc_q], J=None if auto_split else J, petsc_options=petsc_options
+    )
 
     dolfinx.log.set_log_level(dolfinx.log.LogLevel.ERROR)
     u.x.array[:] = factor * 0.1
