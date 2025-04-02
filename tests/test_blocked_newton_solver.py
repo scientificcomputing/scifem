@@ -77,14 +77,14 @@ def test_NewtonSolver(factor, auto_split):
     bc_q = dolfinx.fem.dirichletbc(p_bc, dofs_q)
 
     petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"}
-    # solver = NewtonSolver(F, J, [u, p], bcs=[bc_q], max_iterations=25, petsc_options=petsc_options)
-    # solver.solve()
+    solver = NewtonSolver(F, J, [u, p], bcs=[bc_q], max_iterations=25, petsc_options=petsc_options)
+    solver.solve()
 
-    # err_u = ufl.inner(u_ex - u, u_ex - u) * ufl.dx
-    # err_p = ufl.inner(p_ex - p, p_ex - p) * ufl.dx
-    # tol = np.finfo(dtype).eps * 1.0e3
-    # assert assemble_scalar(err_u) < tol
-    # assert assemble_scalar(err_p) < tol
+    err_u = ufl.inner(u_ex - u, u_ex - u) * ufl.dx
+    err_p = ufl.inner(p_ex - p, p_ex - p) * ufl.dx
+    tol = np.finfo(dtype).eps * 1.0e3
+    assert assemble_scalar(err_u) < tol
+    assert assemble_scalar(err_p) < tol
 
     # Check consistency with other Newton solver
     blocked_solver = BlockedNewtonSolver(
