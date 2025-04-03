@@ -151,7 +151,7 @@ uh = dolfinx.fem.Function(V, name="u")
 if main_assembly:
     rh = dolfinx.fem.Function(R)
     rh.x.array[0] = h
-    b_real_space = b.copy()
+    b_real_space = b.duplicate()
     dolfinx.fem.petsc.assign([uh, rh], b_real_space)
     b.axpy(1, b_real_space)
 
