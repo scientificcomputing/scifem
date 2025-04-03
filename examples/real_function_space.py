@@ -154,7 +154,7 @@ if main_assembly:
     b_real_space = b.duplicate()
     dolfinx.fem.petsc.assign([uh, rh], b_real_space)
     b.axpy(1, b_real_space)
-
+    b_real_space.destroy()
 else:
     if dolfinx.__version__ == "0.8.0":
         maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
@@ -197,6 +197,13 @@ else:
     uh.x.array[: len(x_local[0])] = x_local[0]
     uh.x.scatter_forward()
 
+
+# We destroy all PETSc objects
+
+b.destroy()
+xh.destroy()
+A.destroy()
+ksp.destroy()
 
 diff = uh - u_exact(x)
 error = dolfinx.fem.form(ufl.inner(diff, diff) * ufl.dx)

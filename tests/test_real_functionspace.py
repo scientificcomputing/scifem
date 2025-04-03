@@ -194,6 +194,11 @@ def test_singular_poisson(tensor, degree, dtype):
         uh.x.array[: len(x_local[0])] = x_local[0]
         uh.x.scatter_forward()
 
+    b.destroy()
+    x.destroy()
+    A.destroy()
+    ksp.destroy()
+
     error = dolfinx.fem.form(ufl.inner(u_ex - uh, u_ex - uh) * dx, dtype=stype)
 
     e_local = dolfinx.fem.assemble_scalar(error)
