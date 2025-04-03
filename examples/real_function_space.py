@@ -156,9 +156,9 @@ if main_assembly:
     b.axpy(1, b_real_space)
     b_real_space.destroy()
 else:
-    if dolfinx.__version__ == "0.8.0":
+    if Version(dolfinx.__version__) < Version("0.9.0"):
         maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
-    elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
+    else:
         maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
 
     b_local = get_local_vectors(b, maps)
