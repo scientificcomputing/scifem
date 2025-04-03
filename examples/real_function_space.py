@@ -121,34 +121,54 @@ except AttributeError:
     A = dolfinx.fem.petsc.assemble_matrix(a, kind="mpi")
 A.assemble()
 
+
+# On the main branch of DOLFINx, the `assemble_vector` function for blocked spaces has been rewritten to reflect how
+# it works for standard assembly and `nest` assembly. This means that lifting is applied manually.
+# In this case, with no Dirichlet BC, we could skip those steps.
+# However, for clarity we include them here.
+
 bcs = []
+main_assembly = False
 try:
     b = dolfinx.fem.petsc.assemble_vector_block(L, a, bcs=bcs)
 except AttributeError:
-    b = dolfinx.fem.petsc.assemble_vector(L, a, bcs=bcs, kind="mpi")
-    bcs1 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(jacobian, 1), bcs)  # type: ignore
-    apply_lifting(F, jacobian, bcs=bcs1, x0=x, alpha=-1.0)  # type: ignore
-    b.ghostUpdate(F, PETSc.InsertMode.ADD, PETSc.ScatterMode.REVERSE)  # type: ignore
-    bcs0 = dolfinx.fem.bcs_by_block(olfinx.fem.extract_function_spaces(residual), bcs)  # type: ignore
-    dolfinx.fem.petsc.set_bc(L, bcs0, x0=x, alpha=-1.0)
-    b.ghostUpdate(F, PETSc.InsertMode.INSERT, PETSc.ScatterMode.FORWARD)
+    main_assembly = True
+    b = dolfinx.fem.petsc.assemble_vector(L, kind="mpi")
+    bcs1 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(a, 1), bcs)  # type: ignore
+    dolfinx.fem.petsc.apply_lifting(b, a, bcs=bcs1)  # type: ignore
+    b.ghostUpdate(PETSc.InsertMode.ADD, PETSc.ScatterMode.REVERSE)  # type: ignore
+    bcs0 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(L), bcs)  # type: ignore
+    dolfinx.fem.petsc.set_bc(b, bcs0)  
+    b.ghostUpdate(PETSc.InsertMode.INSERT, PETSc.ScatterMode.FORWARD)
 
 # Next, we modify the second part of the block to contain `h`
-# We start by enforcing the multiplier constraint $h$ by modifying the right hand side vector
+# We start by enforcing the multiplier constraint $h$ by modifying the right hand side vector.
+# On the main branch, this is greatly simplified
 
-if dolfinx.__version__ == "0.8.0":
-    maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
-elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
-    maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
 
-b_local = get_local_vectors(b, maps)
-b_local[1][:] = h
-scatter_local_vectors(
-        b,
-        b_local,
-        maps,
-    )
-b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+uh = dolfinx.fem.Function(V, name="u")
+
+if main_assembly:
+    rh = dolfinx.fem.Function(R)
+    rh.x.array[0] = h
+    b_real_space = b.copy()
+    dolfinx.fem.petsc.assign([uh, rh], b_real_space)
+    b.axpy(1, b_real_space)
+
+else:
+    if dolfinx.__version__ == "0.8.0":
+        maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
+    elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
+        maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
+
+    b_local = get_local_vectors(b, maps)
+    b_local[1][:] = h
+    scatter_local_vectors(
+            b,
+            b_local,
+            maps,
+        )
+    b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # We can now solve the linear system
 
@@ -159,16 +179,23 @@ pc = ksp.getPC()
 pc.setType("lu")
 pc.setFactorSolverType("mumps")
 
-xh = dolfinx.fem.petsc.create_vector_block(L)
+if main_assembly:
+    xh = b.duplicate()
+else:
+    xh = dolfinx.fem.petsc.create_vector_block(L)
+
 ksp.solve(b, xh)
 xh.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # Finally, we extract the solution u from the blocked system and compute the error
 
 uh = dolfinx.fem.Function(V, name="u")
-x_local = get_local_vectors(xh, maps)
-uh.x.array[: len(x_local[0])] = x_local[0]
-uh.x.scatter_forward()
+if main_assembly:
+    dolfinx.fem.petsc.assign(xh, [uh, rh])
+else:
+    x_local = get_local_vectors(xh, maps)
+    uh.x.array[: len(x_local[0])] = x_local[0]
+    uh.x.scatter_forward()
 
 
 diff = uh - u_exact(x)
@@ -182,7 +209,7 @@ vtk_mesh = dolfinx.plot.vtk_mesh(V)
 
 import pyvista
 
-pyvista.start_xvfb()
+#pyvista.start_xvfb()
 grid = pyvista.UnstructuredGrid(*vtk_mesh)
 grid.point_data["u"] = uh.x.array.real
 
