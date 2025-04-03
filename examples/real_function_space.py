@@ -138,7 +138,7 @@ except AttributeError:
     dolfinx.fem.petsc.apply_lifting(b, a, bcs=bcs1)  # type: ignore
     b.ghostUpdate(PETSc.InsertMode.ADD, PETSc.ScatterMode.REVERSE)  # type: ignore
     bcs0 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(L), bcs)  # type: ignore
-    dolfinx.fem.petsc.set_bc(b, bcs0)  
+    dolfinx.fem.petsc.set_bc(b, bcs0)
     b.ghostUpdate(PETSc.InsertMode.INSERT, PETSc.ScatterMode.FORWARD)
 
 # Next, we modify the second part of the block to contain `h`
