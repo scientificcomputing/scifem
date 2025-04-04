@@ -352,7 +352,8 @@ else:
                     Options passed to the PETSc Krylov solver.
                 entity_maps: Maps used to map entities between different meshes.
                     Only needed if the forms have not been compiled a priori,
-                    and has coefficients, test, or trial functions that are defined on different meshes.
+                    and has coefficients, test, or trial functions that are defined on
+                    different meshes.
             """
             # Initialize base class
             super().__init__(u[0].function_space.mesh.comm)
