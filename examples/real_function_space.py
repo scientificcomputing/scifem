@@ -219,7 +219,7 @@ vtk_mesh = dolfinx.plot.vtk_mesh(V)
 
 import pyvista
 
-#pyvista.start_xvfb(1.0)
+pyvista.start_xvfb(1.0)
 grid = pyvista.UnstructuredGrid(*vtk_mesh)
 grid.point_data["u"] = uh.x.array.real
 
