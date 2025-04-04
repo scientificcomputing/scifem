@@ -59,6 +59,7 @@ import dolfinx.fem.petsc
 
 import numpy as np
 from scifem import create_real_functionspace, assemble_scalar
+from scifem.petsc import apply_lifting_and_set_bc, zero_petsc_vector
 import ufl
 
 M = 20
@@ -106,8 +107,10 @@ a10 = ufl.inner(u, dl) * ufl.dx
 L0 = ufl.inner(f, du) * ufl.dx + ufl.inner(g, du) * ufl.ds
 L1 = ufl.inner(zero, dl) * ufl.dx
 
-a = dolfinx.fem.form([[a00, a01], [a10, None]])
-L = dolfinx.fem.form([L0, L1])
+a = [[a00, a01], [a10, None]]
+L = [L0, L1]
+a_compiled = dolfinx.fem.form(a)
+L_compiled = dolfinx.fem.form(L)
 
 # Note that we have defined the variational form in a block form, and
 # that we have not included $h$ in the variational form. We will enforce this
@@ -116,9 +119,9 @@ L = dolfinx.fem.form([L0, L1])
 # We can now assemble the matrix and vector
 
 try:
-    A = dolfinx.fem.petsc.assemble_matrix_block(a)
+    A = dolfinx.fem.petsc.assemble_matrix_block(a_compiled)
 except AttributeError:
-    A = dolfinx.fem.petsc.assemble_matrix(a, kind="mpi")
+    A = dolfinx.fem.petsc.assemble_matrix(a_compiled, kind="mpi")
 A.assemble()
 
 
@@ -130,16 +133,11 @@ A.assemble()
 bcs = []
 main_assembly = False
 try:
-    b = dolfinx.fem.petsc.assemble_vector_block(L, a, bcs=bcs)
+    b = dolfinx.fem.petsc.assemble_vector_block(L_compiled, a_compiled, bcs=bcs)
 except AttributeError:
     main_assembly = True
-    b = dolfinx.fem.petsc.assemble_vector(L, kind="mpi")
-    bcs1 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(a, 1), bcs)  # type: ignore
-    dolfinx.fem.petsc.apply_lifting(b, a, bcs=bcs1)  # type: ignore
-    b.ghostUpdate(PETSc.InsertMode.ADD, PETSc.ScatterMode.REVERSE)  # type: ignore
-    bcs0 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(L), bcs)  # type: ignore
-    dolfinx.fem.petsc.set_bc(b, bcs0)
-    b.ghostUpdate(PETSc.InsertMode.INSERT, PETSc.ScatterMode.FORWARD)
+    b = dolfinx.fem.petsc.assemble_vector(L_compiled, kind="mpi")
+    apply_lifting_and_set_bc(b, a_compiled, bcs=bcs)
 
 # Next, we modify the second part of the block to contain `h`
 # We start by enforcing the multiplier constraint $h$ by modifying the right hand side vector.
@@ -149,11 +147,18 @@ except AttributeError:
 uh = dolfinx.fem.Function(V, name="u")
 
 if main_assembly:
+    # We start by inserting the value in the real space
     rh = dolfinx.fem.Function(R)
     rh.x.array[0] = h
+    # Next we need to add this value to the existing right hand side vector.
+    # Therefore we create assign 0s to the primal space
     b_real_space = b.duplicate()
+    uh.x.array[:] = 0
+    # Transfer the data to `b_real_space`
     dolfinx.fem.petsc.assign([uh, rh], b_real_space)
+    # And accumulate the values in the right hand side vector
     b.axpy(1, b_real_space)
+    # We destroy the temporary work vector after usage
     b_real_space.destroy()
 else:
     if Version(dolfinx.__version__) < Version("0.9.0"):
@@ -171,7 +176,6 @@ else:
     b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # We can now solve the linear system
-
 ksp = PETSc.KSP().create(mesh.comm)
 ksp.setOperators(A)
 ksp.setType("preonly")
@@ -216,7 +220,7 @@ vtk_mesh = dolfinx.plot.vtk_mesh(V)
 
 import pyvista
 
-pyvista.start_xvfb(1.0)
+#pyvista.start_xvfb(1.0)
 grid = pyvista.UnstructuredGrid(*vtk_mesh)
 grid.point_data["u"] = uh.x.array.real
 

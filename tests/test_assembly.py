@@ -1,8 +1,18 @@
 from mpi4py import MPI
 
 from scifem import assemble_scalar, norm
-from dolfinx.mesh import create_unit_square
-from dolfinx.fem import Function, functionspace, Constant
+from dolfinx.mesh import create_unit_square, exterior_facet_indices
+import dolfinx
+import basix.ufl
+from dolfinx.fem import (
+    Function,
+    functionspace,
+    Constant,
+    form,
+    locate_dofs_topological,
+    dirichletbc,
+)
+from dolfinx import default_scalar_type
 import ufl
 import pytest
 import numpy as np
@@ -100,3 +110,96 @@ def test_norm(norm_type, dtype, gtype):
     reference = assemble_scalar(ref_form)
     tol = 50 * np.finfo(dtype).eps
     assert np.isclose(result, reference, atol=tol)
+
+
+@pytest.mark.skipif(not dolfinx.has_petsc4py, reason="Requires DOLFINX with PETSc4py")
+@pytest.mark.skipit(
+    hasattr(dolfinx.fem.petsc, "create_matrix_nest"),
+    reason="Requires latest version of DOLFINx PETSc API",
+)
+@pytest.mark.parametrize("kind", [None, "mpi", "nest"])
+@pytest.mark.parametrize(
+    "alpha", [dolfinx.default_scalar_type(3.0), dolfinx.default_scalar_type(-2.0)]
+)
+def test_lifting_helper(kind, alpha):
+    from petsc4py import PETSc
+    import scifem.assembly
+    import dolfinx.fem.petsc
+
+    mesh = create_unit_square(MPI.COMM_WORLD, 12, 15)
+    el0 = basix.ufl.element("Lagrange", mesh.basix_cell(), 1)
+    el1 = basix.ufl.element("Lagrange", mesh.basix_cell(), 2)
+
+    if kind is None:
+        el = basix.ufl.mixed_element([el0, el1])
+        W = functionspace(mesh, el)
+        V, _ = W.sub(0).collapse()
+        Q, _ = W.sub(1).collapse()
+    else:
+        V = functionspace(mesh, el0)
+        Q = functionspace(mesh, el1)
+        W = ufl.MixedFunctionSpace(V, Q)
+
+    k = Function(V)
+    k.interpolate(lambda x: 3 + x[0] * x[1])
+    u, p = ufl.TrialFunctions(W)
+    v, q = ufl.TestFunctions(W)
+
+    if kind is None:
+        L = [
+            ufl.inner(dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(0.0)), v) * ufl.dx,
+            ufl.inner(dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(0.0)), q) * ufl.dx,
+        ]
+    else:
+        L = [ufl.ZeroBaseForm((v,)), ufl.ZeroBaseForm((q,))]
+    a = [
+        [k * ufl.inner(u, v) * ufl.dx, None],
+        [ufl.inner(u, q) * ufl.dx, k * ufl.inner(p, q) * ufl.dx],
+    ]
+    if kind is None:
+        # Flatten a and L
+        L = sum(L)
+        a = [sum([aij if aij is not None else 0 for ai in a for aij in ai])]
+
+    L_compiled = form(L)
+    a_compiled = form(a)
+
+    mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+    bndry_facets = exterior_facet_indices(mesh.topology)
+
+    bc_space = W.sub(1) if kind is None else Q
+
+    bndry_dofs = locate_dofs_topological(bc_space, mesh.topology.dim - 1, bndry_facets)
+    bcs = [dirichletbc(default_scalar_type(2.0), bndry_dofs, bc_space)]
+    if kind is None:
+        lifting_bcs = [bcs]
+    else:
+        lifting_bcs = bcs
+
+    b = dolfinx.fem.petsc.create_vector(L_compiled, kind=kind)
+    scifem.petsc.zero_petsc_vector(b)
+    scifem.petsc.apply_lifting_and_set_bc(b, a_compiled, lifting_bcs, alpha=alpha)
+
+    # Create reference multiplication of alpha Ag
+    if kind is None:
+        a_compiled = a_compiled[0]
+    A = dolfinx.fem.petsc.create_matrix(a_compiled, kind=kind)
+    dolfinx.fem.petsc.assemble_matrix(A, a_compiled)
+    A.assemble()
+
+    g_ = dolfinx.fem.petsc.create_vector(L_compiled, kind=kind)
+    scifem.petsc.zero_petsc_vector(g_)
+
+    if kind is not None:
+        bcs0 = dolfinx.fem.bcs_by_block(dolfinx.fem.extract_function_spaces(a_compiled, 0), bcs)
+    else:
+        bcs0 = bcs
+    dolfinx.fem.petsc.set_bc(g_, bcs0)
+
+    b_ref = dolfinx.fem.petsc.create_vector(L_compiled, kind=kind)
+    A.mult(g_, b_ref)
+    b_ref.scale(-alpha)
+    dolfinx.fem.petsc.set_bc(b_ref, bcs0, alpha=alpha)
+    scifem.petsc.ghost_update(b_ref, PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
+    with b.localForm() as b_local, b_ref.localForm() as b_ref_local:
+        np.testing.assert_allclose(b_local.array, b_ref_local.array)
