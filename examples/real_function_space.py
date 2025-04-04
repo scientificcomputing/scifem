@@ -186,7 +186,7 @@ pc.setFactorSolverType("mumps")
 if main_assembly:
     xh = b.duplicate()
 else:
-    xh = dolfinx.fem.petsc.create_vector_block(L)
+    xh = dolfinx.fem.petsc.create_vector_block(L_compiled)
 
 ksp.solve(b, xh)
 xh.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
