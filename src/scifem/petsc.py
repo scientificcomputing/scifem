@@ -100,7 +100,7 @@ if dolfinx.has_petsc4py:
 
 else:
 
-    def apply_lifting_and_set_bc(_b, _a, _bcs, _x, _alpha):
+    def apply_lifting_and_set_bc(_b, _a, _bcs, _x, _alpha):  # type: ignore
         raise RuntimeError(
             "petsc4py is not available. Cannot apply lifting and set boundary conditions."
         )
