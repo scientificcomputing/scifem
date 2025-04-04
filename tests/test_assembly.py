@@ -114,7 +114,7 @@ def test_norm(norm_type, dtype, gtype):
 
 
 @pytest.mark.skipif(not dolfinx.has_petsc4py, reason="Requires DOLFINX with PETSc4py")
-@pytest.mark.skipit(
+@pytest.mark.skipif(
     hasattr(dolfinx.fem.petsc, "create_matrix_nest"),
     reason="Requires latest version of DOLFINx PETSc API",
 )
