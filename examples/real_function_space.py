@@ -200,7 +200,7 @@ else:
     x_local = get_local_vectors(xh, maps)
     uh.x.array[: len(x_local[0])] = x_local[0]
     uh.x.scatter_forward()
-
+xh.destroy()
 
 # We destroy all PETSc objects
 
