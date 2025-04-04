@@ -1,6 +1,7 @@
 from mpi4py import MPI
 
 from scifem import assemble_scalar, norm
+import scifem.petsc
 from dolfinx.mesh import create_unit_square, exterior_facet_indices
 import dolfinx
 import basix.ufl
@@ -123,7 +124,6 @@ def test_norm(norm_type, dtype, gtype):
 )
 def test_lifting_helper(kind, alpha):
     from petsc4py import PETSc
-    import scifem.assembly
     import dolfinx.fem.petsc
 
     mesh = create_unit_square(MPI.COMM_WORLD, 12, 15)
