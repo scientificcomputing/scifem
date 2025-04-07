@@ -6,7 +6,10 @@ import numpy.typing as npt
 
 
 def apply_mri_transform(
-    path: Path, coordinates: npt.NDArray[np.floating], vox2ras_transform: npt.NDArray[np.floating] | None = None, use_tkr: bool = False
+    path: Path,
+    coordinates: npt.NDArray[np.floating],
+    vox2ras_transform: npt.NDArray[np.floating] | None = None,
+    use_tkr: bool = False,
 ) -> npt.NDArray[np.inexact]:
     """Given a path to a set of MRI voxel data, return the data evaluated at the given coordinates.
 
@@ -41,7 +44,9 @@ def apply_mri_transform(
         # print("orientation: ", orientation)
         mgh_header = mgh.header
     else:
-        raise ValueError(f"Unsupported image type: {type(image)} - Supported types are mgz and nifti")
+        raise ValueError(
+            f"Unsupported image type: {type(image)} - Supported types are mgz and nifti"
+        )
 
     # This depends on how one uses FreeSurfer
     if vox2ras_transform is not None:
@@ -101,7 +106,7 @@ def read_mri_data_to_function(
     vox2ras_transform: npt.NDArray[np.floating] | None = None,
     degree: int = 0,
     dtype: np.inexact = dolfinx.default_scalar_type,
-    use_tkr: bool = False
+    use_tkr: bool = False,
 ) -> dolfinx.fem.Function:
     """Read in MRI data over a set of cells in the mesh and attach it to an appropriate function.
 
@@ -144,7 +149,9 @@ def read_mri_data_to_function(
     dof_positions = Vh.tabulate_dof_coordinates()
     dofmap = Vh.dofmap.list
     dofmap_pos = dofmap[cells].flatten()
-    data = apply_mri_transform(Path(mri_data_path), dof_positions[dofmap_pos], vox2ras_transform, use_tkr=use_tkr)
+    data = apply_mri_transform(
+        Path(mri_data_path), dof_positions[dofmap_pos], vox2ras_transform, use_tkr=use_tkr
+    )
 
     v = dolfinx.fem.Function(Vh)
     v.x.array[dofmap_pos] = data.astype(dtype)
