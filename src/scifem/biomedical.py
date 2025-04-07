@@ -61,9 +61,7 @@ def apply_mri_transform(
             vox2ras = mgh_header.get_vox2ras()
     # Check shape
     if vox2ras.shape != (4, 4):
-        raise ValueError(
-          f"vox2ras transform must be a 4x4 matrix, got shape {vox2ras.shape}"
-        )
+        raise ValueError(f"vox2ras transform must be a 4x4 matrix, got shape {vox2ras.shape}")
 
     ras2vox = np.linalg.inv(vox2ras)
 
