@@ -17,6 +17,8 @@ def apply_mri_transform(
     Args:
         path: Path to the MRI data, should be a file format supported by nibabel.
         coordinates: Coordinates to evaluate the MRI data at.
+        vox2ras_transform: Optional transformation matrix to convert from voxel to ras coordinates.
+            If None, use the transformation matrix from the given MRI data.
         use_tkr: If true, use the old freesurfer `tkregister`, see:
             https://www.mail-archive.com/freesurfer@nmr.mgh.harvard.edu/msg69541.html
             for more details. Else use the standard VOX2RAS transform (equivalent to attaching
@@ -57,6 +59,11 @@ def apply_mri_transform(
         else:
             # VOX to ras explanation: https://surfer.nmr.mgh.harvard.edu/ftp/articles/vox2ras.pdf
             vox2ras = mgh_header.get_vox2ras()
+    # Check shape
+    if vox2ras.shape != (4, 4):
+        raise ValueError(
+          f"vox2ras transform must be a 4x4 matrix, got shape {vox2ras.shape}"
+        )
 
     ras2vox = np.linalg.inv(vox2ras)
 
