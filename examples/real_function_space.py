@@ -59,6 +59,7 @@ import dolfinx.fem.petsc
 
 import numpy as np
 from scifem import create_real_functionspace, assemble_scalar
+from scifem.petsc import apply_lifting_and_set_bc, zero_petsc_vector
 import ufl
 
 M = 20
@@ -106,8 +107,10 @@ a10 = ufl.inner(u, dl) * ufl.dx
 L0 = ufl.inner(f, du) * ufl.dx + ufl.inner(g, du) * ufl.ds
 L1 = ufl.inner(zero, dl) * ufl.dx
 
-a = dolfinx.fem.form([[a00, a01], [a10, None]])
-L = dolfinx.fem.form([L0, L1])
+a = [[a00, a01], [a10, None]]
+L = [L0, L1]
+a_compiled = dolfinx.fem.form(a)
+L_compiled = dolfinx.fem.form(L)
 
 # Note that we have defined the variational form in a block form, and
 # that we have not included $h$ in the variational form. We will enforce this
@@ -115,29 +118,64 @@ L = dolfinx.fem.form([L0, L1])
 
 # We can now assemble the matrix and vector
 
-A = dolfinx.fem.petsc.assemble_matrix_block(a)
+try:
+    A = dolfinx.fem.petsc.assemble_matrix_block(a_compiled)
+except AttributeError:
+    A = dolfinx.fem.petsc.assemble_matrix(a_compiled, kind="mpi")
 A.assemble()
-b = dolfinx.fem.petsc.assemble_vector_block(L, a, bcs=[])
+
+
+# On the main branch of DOLFINx, the `assemble_vector` function for blocked spaces has been rewritten to reflect how
+# it works for standard assembly and `nest` assembly. This means that lifting is applied manually.
+# In this case, with no Dirichlet BC, we could skip those steps.
+# However, for clarity we include them here.
+
+bcs = []
+main_assembly = False
+try:
+    b = dolfinx.fem.petsc.assemble_vector_block(L_compiled, a_compiled, bcs=bcs)
+except AttributeError:
+    main_assembly = True
+    b = dolfinx.fem.petsc.assemble_vector(L_compiled, kind="mpi")
+    apply_lifting_and_set_bc(b, a_compiled, bcs=bcs)
 
 # Next, we modify the second part of the block to contain `h`
-# We start by enforcing the multiplier constraint $h$ by modifying the right hand side vector
+# We start by enforcing the multiplier constraint $h$ by modifying the right hand side vector.
+# On the main branch, this is greatly simplified
 
-if dolfinx.__version__ == "0.8.0":
-    maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
-elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
-    maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
 
-b_local = get_local_vectors(b, maps)
-b_local[1][:] = h
-scatter_local_vectors(
-        b,
-        b_local,
-        maps,
-    )
-b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+uh = dolfinx.fem.Function(V, name="u")
+
+if main_assembly:
+    # We start by inserting the value in the real space
+    rh = dolfinx.fem.Function(R)
+    rh.x.array[0] = h
+    # Next we need to add this value to the existing right hand side vector.
+    # Therefore we create assign 0s to the primal space
+    b_real_space = b.duplicate()
+    uh.x.array[:] = 0
+    # Transfer the data to `b_real_space`
+    dolfinx.fem.petsc.assign([uh, rh], b_real_space)
+    # And accumulate the values in the right hand side vector
+    b.axpy(1, b_real_space)
+    # We destroy the temporary work vector after usage
+    b_real_space.destroy()
+else:
+    if Version(dolfinx.__version__) < Version("0.9.0"):
+        maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
+    else:
+        maps = [(Wi.dofmap.index_map, Wi.dofmap.index_map_bs) for Wi in W.ufl_sub_spaces()]
+
+    b_local = get_local_vectors(b, maps)
+    b_local[1][:] = h
+    scatter_local_vectors(
+            b,
+            b_local,
+            maps,
+        )
+    b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # We can now solve the linear system
-
 ksp = PETSc.KSP().create(mesh.comm)
 ksp.setOperators(A)
 ksp.setType("preonly")
@@ -145,17 +183,30 @@ pc = ksp.getPC()
 pc.setType("lu")
 pc.setFactorSolverType("mumps")
 
-xh = dolfinx.fem.petsc.create_vector_block(L)
+if main_assembly:
+    xh = b.duplicate()
+else:
+    xh = dolfinx.fem.petsc.create_vector_block(L_compiled)
+
 ksp.solve(b, xh)
 xh.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # Finally, we extract the solution u from the blocked system and compute the error
 
 uh = dolfinx.fem.Function(V, name="u")
-x_local = get_local_vectors(xh, maps)
-uh.x.array[: len(x_local[0])] = x_local[0]
-uh.x.scatter_forward()
+if main_assembly:
+    dolfinx.fem.petsc.assign(xh, [uh, rh])
+else:
+    x_local = get_local_vectors(xh, maps)
+    uh.x.array[: len(x_local[0])] = x_local[0]
+    uh.x.scatter_forward()
 
+# We destroy all PETSc objects
+
+b.destroy()
+xh.destroy()
+A.destroy()
+ksp.destroy()
 
 diff = uh - u_exact(x)
 error = dolfinx.fem.form(ufl.inner(diff, diff) * ufl.dx)
@@ -168,7 +219,7 @@ vtk_mesh = dolfinx.plot.vtk_mesh(V)
 
 import pyvista
 
-pyvista.start_xvfb()
+pyvista.start_xvfb(1.0)
 grid = pyvista.UnstructuredGrid(*vtk_mesh)
 grid.point_data["u"] = uh.x.array.real
 
