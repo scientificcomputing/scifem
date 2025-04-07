@@ -3,6 +3,7 @@ import basix.ufl
 from pathlib import Path
 import numpy as np
 import numpy.typing as npt
+import warnings
 
 
 def apply_mri_transform(
@@ -30,15 +31,14 @@ def apply_mri_transform(
     data = image.get_fdata()
     # Check if the image is in the correct orientation
     orientation = nibabel.aff2axcodes(image.affine)
-    assert orientation == ("R", "A", "S")
+    if orientation != ("R", "A", "S"):
+        warnings.warn(f"Image orientation is {orientation}, expected (R, A, S). ")
 
     # Define mgh_header depending on MRI data types (i.e. nifti or mgz)
     if isinstance(image, nibabel.freesurfer.mghformat.MGHImage):
         mgh_header = image.header
     elif isinstance(image, nibabel.nifti1.Nifti1Image):
         mgh = nibabel.MGHImage(image.dataobj, image.affine)
-        orientation = nibabel.aff2axcodes(mgh.affine)
-        # print("orientation: ", orientation)
         mgh_header = mgh.header
     else:
         raise ValueError(f"Unsupported image type: {type(image)} - Supported types are mgz and nifti")
