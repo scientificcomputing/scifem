@@ -141,12 +141,28 @@ def test_singular_poisson(tensor, degree, dtype):
     a = dolfinx.fem.form([[a00, a01], [a10, None]], dtype=stype)
     L = dolfinx.fem.form([L0, L1], dtype=stype)
 
-    A = dolfinx.fem.petsc.assemble_matrix_block(a)
+    new_assemble_mode = False
+    try:
+        A = dolfinx.fem.petsc.assemble_matrix_block(a)
+    except AttributeError:
+        new_assemble_mode = True
+        A = dolfinx.fem.petsc.assemble_matrix(a, kind="mpi")
     A.assemble()
-    b = dolfinx.fem.petsc.create_vector_block(L)
+
+    if new_assemble_mode:
+        b = dolfinx.fem.petsc.create_vector(L, kind="mpi")
+    else:
+        b = dolfinx.fem.petsc.create_vector_block(L)
+
     with b.localForm() as loc:
         loc.set(0)
-    dolfinx.fem.petsc.assemble_vector_block(b, L, a, bcs=[])
+
+    if new_assemble_mode:
+        dolfinx.fem.petsc.assemble_vector(b, L)
+        b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+        b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+    else:
+        dolfinx.fem.petsc.assemble_vector_block(b, L, a, bcs=[])
 
     ksp = PETSc.KSP().create(mesh.comm)
     ksp.setOperators(A)
@@ -155,16 +171,33 @@ def test_singular_poisson(tensor, degree, dtype):
     pc.setType("lu")
     pc.setFactorSolverType("mumps")
 
-    x = dolfinx.fem.petsc.create_vector_block(L)
+    if new_assemble_mode:
+        x = dolfinx.fem.petsc.create_vector(L, kind="mpi")
+    else:
+        x = dolfinx.fem.petsc.create_vector_block(L)
+
     ksp.solve(b, x)
     x.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+
     uh = dolfinx.fem.Function(V)
-    x_local = dolfinx.cpp.la.petsc.get_local_vectors(
-        x,
-        [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)],
-    )
-    uh.x.array[: len(x_local[0])] = x_local[0]
-    uh.x.scatter_forward()
+    rh = dolfinx.fem.Function(R)
+    if new_assemble_mode:
+        dolfinx.fem.petsc.assign(x, [uh, rh])
+    else:
+        x_local = dolfinx.cpp.la.petsc.get_local_vectors(
+            x,
+            [
+                (V.dofmap.index_map, V.dofmap.index_map_bs),
+                (R.dofmap.index_map, R.dofmap.index_map_bs),
+            ],
+        )
+        uh.x.array[: len(x_local[0])] = x_local[0]
+        uh.x.scatter_forward()
+
+    b.destroy()
+    x.destroy()
+    A.destroy()
+    ksp.destroy()
 
     error = dolfinx.fem.form(ufl.inner(u_ex - uh, u_ex - uh) * dx, dtype=stype)
 
