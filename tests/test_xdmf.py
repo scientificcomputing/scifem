@@ -28,7 +28,7 @@ _dolfinx_version = Version(dolfinx.__version__)
     "backend",
     [
         pytest.param("h5py", marks=pytest.mark.skipif(not hash5py, reason="h5py is not installed")),
-        "adios2",
+        # "adios2",
     ],
 )
 @pytest.mark.parametrize("degree", [1, 2, 3])

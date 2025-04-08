@@ -15,6 +15,8 @@ from mpi4py import MPI
 import numpy as np
 import numpy.typing as npt
 import dolfinx
+import basix
+import ufl
 
 logger = logging.getLogger(__name__)
 
@@ -300,9 +302,10 @@ def create_function_space_data(V: dolfinx.fem.FunctionSpace) -> FunctionSpaceDat
     bs = V.dofmap.index_map_bs
     index_map = V.dofmap.index_map
     comm = V.mesh.comm
+    gdim = V.mesh.geometry.dim
 
     return FunctionSpaceData(
-        points=points,
+        points=points[:, :gdim],
         bs=bs,
         num_dofs_global=index_map.size_global,
         num_dofs_local=index_map.size_local,
@@ -420,6 +423,48 @@ adios_to_numpy_dtype = {
     "double complex": np.complex128,
     "uint32_t": np.uint32,
 }
+
+
+def create_point_mesh(
+    comm: MPI.Intracomm,
+    points: npt.NDArray[np.floating],
+    cells: npt.NDArray[np.floating] | None = None,
+) -> dolfinx.mesh.Mesh:
+    """
+    Create a mesh consisting of points only.
+
+    Note:
+        No nodes are shared between processes.
+
+    Args:
+        comm: MPI communicator to create the mesh on.
+        points: Points local to the process in the mesh.
+    """
+    # Create mesh topology
+    if cells is None:
+        cells = np.arange(points.shape[0], dtype=np.int32).reshape(-1, 1)
+    topology = dolfinx.cpp.mesh.Topology(MPI.COMM_WORLD, dolfinx.mesh.CellType.point)
+    num_nodes_local = cells.shape[0]
+    imap = dolfinx.common.IndexMap(MPI.COMM_WORLD, num_nodes_local)
+    local_range = imap.local_range[0]
+    igi = np.arange(num_nodes_local, dtype=np.int64) + local_range
+    topology.set_index_map(0, imap)
+    topology.set_connectivity(dolfinx.graph.adjacencylist(cells.astype(np.int32)), 0, 0)
+
+    # Create mesh geometry
+    e = basix.ufl.element("Lagrange", "point", 0, shape=(points.shape[1],))
+    c_el = dolfinx.fem.coordinate_element(e.basix_element)
+    geometry = dolfinx.mesh.create_geometry(imap, cells, c_el._cpp_object, points, igi)
+
+    # Create DOLFINx mesh
+    if points.dtype == np.float64:
+        cpp_mesh = dolfinx.cpp.mesh.Mesh_float64(comm, topology, geometry._cpp_object)
+    elif points.dtype == np.float32:
+        cpp_mesh = dolfinx.cpp.mesh.Mesh_float32(comm, topology, geometry._cpp_object)
+    else:
+        raise RuntimeError(f"Unsupported dtype for mesh {points.dtype}")
+    # Wrap as Python object
+    return dolfinx.mesh.Mesh(cpp_mesh, domain=ufl.Mesh(e))
 
 
 def compute_local_range(comm: MPI.Intracomm, N: np.int64):
@@ -548,15 +593,37 @@ class BaseXDMFFile(abc.ABC):
 
     def _read_h5py(self, index: int) -> None:
         logger.debug(f"Writing h5py at time {index}")
-        for data_name, data_array in zip(self.data_names, self.data_arrays):
+
+        cells = self._step["Cells"]
+        points = self._step["Points"]
+        assert cells.shape[0] == points.shape[0]
+        local_range = compute_local_range(self._data.comm, cells.shape[0])
+        cells_local = cells[local_range[0] : local_range[1]]
+        points_local = points[local_range[0] : local_range[1], :]
+        point_mesh = create_point_mesh(
+            comm=self._data.comm,
+            points=points_local,
+            cells=cells_local.reshape(-1, 1),
+        )
+
+        if self._data.bs == 1:
+            shape: tuple[int, ...] = ()
+        else:
+            shape = (self._data.bs,)
+
+        V = dolfinx.fem.functionspace(point_mesh, ("DG", 0, shape))
+        self.vs = []
+        for data_name in self.data_names:
+            v = dolfinx.fem.Function(V, name=data_name)
             # Pad array to 3D if vector space with 2 components
             key = f"Values_{data_name}_{index}"
             if key not in self._step:
                 raise ValueError(f"Variable {data_name} not found in HDF5 file")
 
-            data_array[: self._data.num_dofs_local * self._data.bs] = self._step[
-                f"Values_{data_name}_{index}"
-            ][self._data.local_range[0] : self._data.local_range[1], : self._data.bs].flatten()
+            v.x.array[:] = self._step[f"Values_{data_name}_{index}"][
+                local_range[0] : local_range[1], : self._data.bs
+            ].flatten()
+            self.vs.append(v)
 
     def _close_h5py(self) -> None:
         logger.debug("Closing HDF5 file")
@@ -688,7 +755,12 @@ class BaseXDMFFile(abc.ABC):
         top_data.attrib["Format"] = "HDF"
         top_data.text = f"{self.h5name.name}:/Step0/Cells"
         geometry = ET.SubElement(grid, "Geometry")
-        geometry.attrib["GeometryType"] = "XYZ"
+        if self._data.points.shape[1] == 2:
+            geometry.attrib["GeometryType"] = "XY"
+        elif self._data.points.shape[1] == 3:
+            geometry.attrib["GeometryType"] = "XYZ"
+        else:
+            raise ValueError(f"Unsupported geometry type {self._data.points.shape[1]}")
         it0 = ET.SubElement(geometry, "DataItem")
         it0.attrib["Dimensions"] = f"{self._data.num_dofs_global} {self._data.points.shape[1]}"
         it0.attrib["Format"] = "HDF"
@@ -816,6 +888,18 @@ class XDMFFile(BaseXDMFFile):
     @property
     def data_arrays(self) -> list[npt.NDArray[np.floating]]:
         return [f.x.array for f in self.functions]
+
+    def _read_h5py(self, index: int) -> None:
+        super()._read_h5py(index)
+        for v, f in zip(self.vs, self.functions):
+            cell_map = f.function_space.mesh.topology.index_map(f.function_space.mesh.topology.dim)
+            num_cells = cell_map.size_local + cell_map.num_ghosts
+            cells = np.arange(num_cells, dtype=np.int32)
+            data = dolfinx.fem.create_interpolation_data(
+                f.function_space, v.function_space, cells, padding=1e-10
+            )
+
+            f.interpolate_nonmatching(v, cells, data)
 
 
 class NumpyXDMFFile(BaseXDMFFile):
