@@ -79,6 +79,8 @@ def read_mri_data_to_tag(
     mesh: dolfinx.mesh.Mesh,
     edim: int,
     entities: npt.NDArray[np.int32] | None = None,
+    vox2ras_transform: npt.NDArray[np.floating] | None = None,
+    use_tkr: bool = False,
 ) -> dolfinx.mesh.MeshTags:
     """Read in MRI data over a set of entities in the mesh and attach it to a mesh tag.
 
@@ -99,7 +101,7 @@ def read_mri_data_to_tag(
         entities = np.arange(num_entities, dtype=np.int32)
 
     midpoints = dolfinx.mesh.compute_midpoints(mesh, edim, entities)
-    data = apply_mri_transform(Path(mri_data_path), midpoints)
+    data = apply_mri_transform(Path(mri_data_path), midpoints, vox2ras_transform, use_tkr=use_tkr)
     et = dolfinx.mesh.meshtags(mesh, edim, entities, data.astype(np.int32))
     return et
 
