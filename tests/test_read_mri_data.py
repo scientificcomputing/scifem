@@ -16,7 +16,9 @@ import basix.ufl
 @pytest.mark.parametrize("mri_data_format", ["nifti", "mgh"])
 @pytest.mark.parametrize("external_affine", [True, False])
 @pytest.mark.parametrize("use_tkr", [False])
-def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tmp_path, mri_data_format, external_affine, use_tkr):
+def test_read_mri_data_to_function(
+    degree, M, Nx, Ny, Nz, theta, translation, tmp_path, mri_data_format, external_affine, use_tkr
+):
     nibabel = pytest.importorskip("nibabel")
 
     # Generate rotation and scaling matrix equivalent to a unit cube
@@ -84,9 +86,13 @@ def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tm
 
     # # Read data to function
     if external_affine:
-        func = read_mri_data_to_function(filename, mesh, degree=degree, dtype=np.float64, vox2ras_transform=A, use_tkr=use_tkr)
+        func = read_mri_data_to_function(
+            filename, mesh, degree=degree, dtype=np.float64, vox2ras_transform=A, use_tkr=use_tkr
+        )
     else:
-        func = read_mri_data_to_function(filename, mesh, degree=degree, dtype=np.float64, use_tkr=use_tkr)
+        func = read_mri_data_to_function(
+            filename, mesh, degree=degree, dtype=np.float64, use_tkr=use_tkr
+        )
 
     np.testing.assert_allclose(func.x.array, reference_data)
 
@@ -96,7 +102,16 @@ def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tm
         # Pick every second cell
         cells = np.arange(num_cells_local, dtype=np.int32)[::2]
         if external_affine:
-            tag = read_mri_data_to_tag(filename, mesh, edim=mesh.topology.dim, entities=cells, vox2ras_transform=A, use_tkr=use_tkr)
+            tag = read_mri_data_to_tag(
+                filename,
+                mesh,
+                edim=mesh.topology.dim,
+                entities=cells,
+                vox2ras_transform=A,
+                use_tkr=use_tkr,
+            )
         else:
-            tag = read_mri_data_to_tag(filename, mesh, edim=mesh.topology.dim, entities=cells, use_tkr=use_tkr)
+            tag = read_mri_data_to_tag(
+                filename, mesh, edim=mesh.topology.dim, entities=cells, use_tkr=use_tkr
+            )
         np.testing.assert_allclose(tag.values, reference_data[::2])
