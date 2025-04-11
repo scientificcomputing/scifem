@@ -13,7 +13,12 @@ import basix.ufl
 @pytest.mark.parametrize("Nz", [9, 17])
 @pytest.mark.parametrize("theta", [np.pi / 3, 0, -np.pi])
 @pytest.mark.parametrize("translation", [np.array([0, 0, 0]), np.array([2.1, 1.3, 0.4])])
-def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tmp_path):
+@pytest.mark.parametrize("mri_data_format", ["nifti", "mgh"])
+@pytest.mark.parametrize("external_affine", [True, False])
+@pytest.mark.parametrize("use_tkr", [False])
+def test_read_mri_data_to_function(
+    degree, M, Nx, Ny, Nz, theta, translation, tmp_path, mri_data_format, external_affine, use_tkr
+):
     nibabel = pytest.importorskip("nibabel")
 
     # Generate rotation and scaling matrix equivalent to a unit cube
@@ -25,14 +30,25 @@ def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tm
     # Generate the affine mapping for nibabel
     A = np.append(np.dot(rotation_matrix_3D, scale_matrix), (translation).reshape(3, 1), axis=1)
     A = np.vstack([A, [0, 0, 0, 1]])
+    Id = np.identity(4)
 
     # Write transformed data to file
-    data = np.arange(1, M**3 + 1, dtype=np.float64).reshape(M, M, M)
-    image = nibabel.nifti1.Nifti1Image(data, affine=A)
-
     path = MPI.COMM_WORLD.bcast(tmp_path, root=0)
+    if mri_data_format == "nifti":
+        data = np.arange(1, M**3 + 1, dtype=np.float64).reshape(M, M, M)
+        image = nibabel.nifti1.Nifti1Image(data, affine=Id if external_affine else A)
+    elif mri_data_format == "mgh":
+        data = np.arange(1, M**3 + 1, dtype=np.int32).reshape(M, M, M)
+        image = nibabel.freesurfer.mghformat.MGHImage(data, affine=Id if external_affine else A)
+
+    # Reorient the image to RAS
+    orig_ornt = nibabel.io_orientation(image.affine)
+    targ_ornt = nibabel.orientations.axcodes2ornt("RAS")
+    transform = nibabel.orientations.ornt_transform(orig_ornt, targ_ornt)
+    image = image.as_reoriented(transform)
     filename = path.with_suffix(".mgz")
 
+    # Save the image to file
     if MPI.COMM_WORLD.rank == 0:
         nibabel.save(image, filename)
     MPI.COMM_WORLD.Barrier()
@@ -69,7 +85,14 @@ def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tm
     mesh.geometry.x[:] = np.dot(rotation_matrix_3D, shifted_coords.T).T + translation
 
     # # Read data to function
-    func = read_mri_data_to_function(filename, mesh, degree=degree, dtype=np.float64)
+    if external_affine:
+        func = read_mri_data_to_function(
+            filename, mesh, degree=degree, dtype=np.float64, vox2ras_transform=A, use_tkr=use_tkr
+        )
+    else:
+        func = read_mri_data_to_function(
+            filename, mesh, degree=degree, dtype=np.float64, use_tkr=use_tkr
+        )
 
     np.testing.assert_allclose(func.x.array, reference_data)
 
@@ -78,5 +101,17 @@ def test_read_mri_data_to_function(degree, M, Nx, Ny, Nz, theta, translation, tm
         num_cells_local = cell_map.size_local + cell_map.num_ghosts
         # Pick every second cell
         cells = np.arange(num_cells_local, dtype=np.int32)[::2]
-        tag = read_mri_data_to_tag(filename, mesh, edim=mesh.topology.dim, entities=cells)
+        if external_affine:
+            tag = read_mri_data_to_tag(
+                filename,
+                mesh,
+                edim=mesh.topology.dim,
+                entities=cells,
+                vox2ras_transform=A,
+                use_tkr=use_tkr,
+            )
+        else:
+            tag = read_mri_data_to_tag(
+                filename, mesh, edim=mesh.topology.dim, entities=cells, use_tkr=use_tkr
+            )
         np.testing.assert_allclose(tag.values, reference_data[::2])
