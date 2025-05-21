@@ -13,6 +13,7 @@ import dolfinx.fem.petsc
 import numpy as np
 import numpy.typing as npt
 import ufl
+import typing
 
 from .utils import unroll_dofmap
 
@@ -27,6 +28,7 @@ class PointSource:
         V: dolfinx.fem.FunctionSpace,
         points: npt.NDArray[np.float32] | npt.NDArray[np.float64],
         magnitude: np.floating | np.complexfloating = dolfinx.default_scalar_type(1),
+        component: typing.Optional[int] = None,
     ) -> None:
         """Initialize a point source.
 
@@ -53,11 +55,14 @@ class PointSource:
         # Initialize empty arrays
         self._points = np.empty((0, 3), dtype=points.dtype)
         self._cells = np.empty(0, dtype=np.int32)
-        num_dofs = self._function_space.dofmap.dof_layout.num_dofs * self._function_space.dofmap.bs
+        num_dofs = (
+            self._function_space.dofmap.dof_layout.num_dofs
+            * self._function_space.dofmap.bs
+        )
         self._basis_values = np.empty(
             (0, num_dofs), dtype=self._function_space.mesh.geometry.x.dtype
         )
-
+        self._component = component
         self.recompute_sources()
         self.compute_cell_contributions()
 
@@ -85,7 +90,9 @@ class PointSource:
             self._cells = collision_data.dest_cells
             src_ranks = collision_data.src_owner
         else:
-            raise NotImplementedError(f"Unsupported version of dolfinx: {dolfinx.__version__}")
+            raise NotImplementedError(
+                f"Unsupported version of dolfinx: {dolfinx.__version__}"
+            )
         if -1 in src_ranks:
             raise ValueError("Point source is outside the mesh.")
 
@@ -96,7 +103,9 @@ class PointSource:
         mesh_nodes = mesh.geometry.x
         cmap = mesh.geometry.cmap
 
-        ref_x = np.zeros((len(self._cells), mesh.topology.dim), dtype=mesh.geometry.x.dtype)
+        ref_x = np.zeros(
+            (len(self._cells), mesh.topology.dim), dtype=mesh.geometry.x.dtype
+        )
         for i, (point, cell) in enumerate(zip(self._points, self._cells)):
             geom_dofs = mesh.geometry.dofmap[cell]
             ref_x[i] = cmap.pull_back(point.reshape(-1, 3), mesh_nodes[geom_dofs])
@@ -105,6 +114,20 @@ class PointSource:
         u = ufl.TestFunction(self._function_space)
         bs = self._function_space.dofmap.bs
         num_dofs = self._function_space.dofmap.dof_layout.num_dofs * bs
+        value_size = self._function_space.value_size
+
+        if self._component is not None:
+            if bs == 1 and value_size > 1:
+                assert self._component < value_size
+            elif bs > 1 and value_size == 1:
+                assert self._component < value_size
+            elif bs == 1 and value_size == 1:
+                assert self._component < 1
+            else:
+                raise ValueError(
+                    "Function space cannot be blocked and have vector valued basis functions."
+                )
+
         if len(self._cells) > 0:
             # NOTE: Expression lives on only this communicator rank
             # Expression is evaluated for every point in every cell, which means that we
@@ -112,25 +135,41 @@ class PointSource:
             expr = dolfinx.fem.Expression(u, ref_x, comm=MPI.COMM_SELF)
             all_values = expr.eval(mesh, self._cells)
             # Diagonalize values (num_cells, num_points, num_dofs, bs) -> (num_cells, num_dofs)
+            # or Diagonalize values (num_cells, num_points, value_size, num_dofs) -> (num_cells, num_dofs)
+
             if Version(dolfinx.__version__) <= Version("0.9.0"):
-                basis_values = np.empty((len(self._cells), num_dofs), dtype=all_values.dtype)
-                for i in range(len(self._cells)):
-                    basis_values[i] = sum(
-                        [
-                            all_values[i, i * num_dofs * bs : (i + 1) * num_dofs * bs][
-                                j * num_dofs : (j + 1) * num_dofs
+                basis_values = np.empty(
+                    (len(self._cells), num_dofs, value_size), dtype=all_values.dtype
+                )
+                if self._component is None:
+                    for i in range(len(self._cells)):
+                        basis_values[i] = sum(
+                            [
+                                all_values[
+                                    i, i * num_dofs * bs : (i + 1) * num_dofs * bs
+                                ][j * num_dofs : (j + 1) * num_dofs]
+                                for j in range(bs)
                             ]
-                            for j in range(bs)
-                        ]
-                    )
+                        )
             else:
                 basis_values = np.zeros(
                     (len(self._cells), num_dofs), dtype=dolfinx.default_scalar_type
                 )
                 if bs == 1:
-                    # Values have shape (num_cells, num_points, num_dofs)
-                    for i in range(len(self._cells)):
-                        basis_values[i] = all_values[i, i, :]
+                    if value_size > 1:
+                        # Values have shape (num_cells, num_points,value_size, num_dofs)
+                        if self._component is None:
+                            for i in range(len(self._cells)):
+                                basis_values[i] = sum(
+                                    all_values[i, i, j, :] for j in range(value_size)
+                                )
+                        else:
+                            for i in range(len(self._cells)):
+                                basis_values[i] = all_values[i, i, self._component, :]
+                    else:
+                        # Values have shape (num_cells, num_points, num_dofs)
+                        for i in range(len(self._cells)):
+                            basis_values[i] = all_values[i, i, :]
                 else:
                     # Values have shape (num_cells, num_points, bs, num_dofs*bs)
                     for i in range(len(self._cells)):
@@ -140,7 +179,9 @@ class PointSource:
         self._basis_values = basis_values
 
     def apply_to_vector(
-        self, b: dolfinx.fem.Function | dolfinx.la.Vector | PETSc.Vec, recompute: bool = False
+        self,
+        b: dolfinx.fem.Function | dolfinx.la.Vector | PETSc.Vec,
+        recompute: bool = False,
     ):
         """Apply the point sources to a vector.
 
