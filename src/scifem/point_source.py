@@ -55,10 +55,7 @@ class PointSource:
         # Initialize empty arrays
         self._points = np.empty((0, 3), dtype=points.dtype)
         self._cells = np.empty(0, dtype=np.int32)
-        num_dofs = (
-            self._function_space.dofmap.dof_layout.num_dofs
-            * self._function_space.dofmap.bs
-        )
+        num_dofs = self._function_space.dofmap.dof_layout.num_dofs * self._function_space.dofmap.bs
         self._basis_values = np.empty(
             (0, num_dofs), dtype=self._function_space.mesh.geometry.x.dtype
         )
@@ -90,9 +87,7 @@ class PointSource:
             self._cells = collision_data.dest_cells
             src_ranks = collision_data.src_owner
         else:
-            raise NotImplementedError(
-                f"Unsupported version of dolfinx: {dolfinx.__version__}"
-            )
+            raise NotImplementedError(f"Unsupported version of dolfinx: {dolfinx.__version__}")
         if -1 in src_ranks:
             raise ValueError("Point source is outside the mesh.")
 
@@ -103,9 +98,7 @@ class PointSource:
         mesh_nodes = mesh.geometry.x
         cmap = mesh.geometry.cmap
 
-        ref_x = np.zeros(
-            (len(self._cells), mesh.topology.dim), dtype=mesh.geometry.x.dtype
-        )
+        ref_x = np.zeros((len(self._cells), mesh.topology.dim), dtype=mesh.geometry.x.dtype)
         for i, (point, cell) in enumerate(zip(self._points, self._cells)):
             geom_dofs = mesh.geometry.dofmap[cell]
             ref_x[i] = cmap.pull_back(point.reshape(-1, 3), mesh_nodes[geom_dofs])
@@ -138,16 +131,38 @@ class PointSource:
             # or Diagonalize values (num_cells, num_points, value_size, num_dofs) -> (num_cells, num_dofs)
 
             if Version(dolfinx.__version__) <= Version("0.9.0"):
-                basis_values = np.empty(
-                    (len(self._cells), num_dofs, value_size), dtype=all_values.dtype
-                )
-                if self._component is None:
+                basis_values = np.empty((len(self._cells), num_dofs), dtype=all_values.dtype)
+                if bs == 1:
+                    if value_size > 1:
+                        # Values have shape (num_cells, num_points,value_size, num_dofs)
+                        all_values = all_values.reshape(
+                            len(self._cells), len(self._points), value_size, num_dofs
+                        )
+                        if self._component is None:
+                            for i in range(len(self._cells)):
+                                basis_values[i] = sum(
+                                    all_values[i, i, j, :] for j in range(value_size)
+                                )
+                        else:
+                            for i in range(len(self._cells)):
+                                basis_values[i, :] = all_values[i, i, self._component, :]
+                    else:
+                        for i in range(len(self._cells)):
+                            basis_values[i] = sum(
+                                [
+                                    all_values[i, i * num_dofs * bs : (i + 1) * num_dofs * bs][
+                                        j * num_dofs : (j + 1) * num_dofs
+                                    ]
+                                    for j in range(bs)
+                                ]
+                            )
+                else:
                     for i in range(len(self._cells)):
                         basis_values[i] = sum(
                             [
-                                all_values[
-                                    i, i * num_dofs * bs : (i + 1) * num_dofs * bs
-                                ][j * num_dofs : (j + 1) * num_dofs]
+                                all_values[i, i * num_dofs * bs : (i + 1) * num_dofs * bs][
+                                    j * num_dofs : (j + 1) * num_dofs
+                                ]
                                 for j in range(bs)
                             ]
                         )
@@ -165,7 +180,7 @@ class PointSource:
                                 )
                         else:
                             for i in range(len(self._cells)):
-                                basis_values[i] = all_values[i, i, self._component, :]
+                                basis_values[i, :] = all_values[i, i, self._component, :]
                     else:
                         # Values have shape (num_cells, num_points, num_dofs)
                         for i in range(len(self._cells)):
