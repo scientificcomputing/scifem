@@ -24,10 +24,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Update pip
+        run: python3 -m pip install --upgrade pip
+
       - name: Install package
         run: |
-          python3 -m pip install Cython pkgconfig
-          HDF5_MPI=ON HDF5_PKGCONFIG_NAME="hdf5" python3 -m pip install .[test] --no-build-isolation --no-binary=h5py
+          python3 -m pip install Cython pkgconfig setuptools packaging --upgrade
+          HDF5_MPI=ON HDF5_PKGCONFIG_NAME="hdf5" python3 -m pip install h5py --no-build-isolation --no-binary=h5py
+          python3 -m pip install .[test] --no-build-isolation
 
       - name: Run tests
         run: python3 -m pytest -v
