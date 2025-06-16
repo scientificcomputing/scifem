@@ -24,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Update pip
+        run: python3 -m pip install --upgrade pip
+
       - name: Install package
         run: |
           python3 -m pip install Cython pkgconfig
