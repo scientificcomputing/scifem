@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 import typing
-from dataclasses import dataclass
 import xml.etree.ElementTree as ET
 import contextlib
 from pathlib import Path
 import os
+import abc
 import functools
 import warnings
 
@@ -154,8 +154,9 @@ def h5pyfile(h5name, filemode="r", force_serial: bool = False, comm=None):
         h5file = h5py.File(h5name, filemode, driver="mpio", comm=comm)
     else:
         if comm.size > 1 and not force_serial:
-            warnings.warn(
-                "h5py is not installed with MPI support, while using {comm.size} processes"
+            raise ValueError(
+                f"h5py is not installed with MPI support, while using {comm.size} processes.",
+                "If you really want to do this, turn on the `force_serial` flag.",
             )
         h5file = h5py.File(h5name, filemode)
     yield h5file
@@ -373,12 +374,22 @@ def create_pointcloud(
         write_hdf5_h5py(functions=functions, h5name=h5name, data=data)
 
 
-@dataclass
-class XDMFFile:
+class BaseXDMFFile(abc.ABC):
     filename: os.PathLike
-    functions: typing.Sequence[dolfinx.fem.Function]
-    filemode: typing.Literal["r", "a", "w"] = "w"
-    backend: typing.Literal["h5py", "adios2"] = "adios2"
+    filemode: typing.Literal["r", "a", "w"]
+    backend: typing.Literal["h5py", "adios2"]
+    _data: FunctionSpaceData
+
+    @property
+    @abc.abstractmethod
+    def data_names(self) -> list[str]:
+        """The names of the data."""
+
+    @property
+    @abc.abstractmethod
+    def data_arrays(self) -> list[npt.NDArray[np.floating]]:
+        """The data arrays."""
+        ...
 
     def __post_init__(self) -> None:
         self.h5name = Path(self.filename).with_suffix(".h5")
@@ -394,19 +405,9 @@ class XDMFFile:
             self.h5name.unlink(missing_ok=True)
             self.xdmfname.unlink(missing_ok=True)
 
-        if len(self.functions) == 0:
-            raise ValueError("No functions to write to point cloud")
-        for f in self.functions:
-            if not isinstance(f, dolfinx.fem.Function):
-                raise ValueError("All functions must be of type dolfinx.fem.Function")
-
-        data = check_function_space(self.functions)
-        if data is None:
-            raise ValueError("All functions must be in the same function space")
-        self._data = data
         self._time_values: dict[float, int] = {}
-        self._comm = self.functions[0].function_space.mesh.comm
 
+    def _init_backend(self) -> None:
         assert self.backend in [
             "h5py",
             "adios2",
@@ -441,17 +442,17 @@ class XDMFFile:
 
     def _write_h5py(self, index: int) -> None:
         logger.debug(f"Writing h5py at time {index}")
-        for u in self.functions:
+        for data_name, data_array in zip(self.data_names, self.data_arrays):
             # Pad array to 3D if vector space with 2 components
             array = np.zeros(
                 (self._data.num_dofs_local, self._data.bs if self._data.bs != 2 else 3),
-                dtype=u.x.array.dtype,
+                dtype=data_array.dtype,
             )
-            array[:, : self._data.bs] = u.x.array[
+            array[:, : self._data.bs] = data_array[
                 : self._data.num_dofs_local * self._data.bs
             ].reshape(-1, self._data.bs)
             dset = self._step.create_dataset(
-                f"Values_{u.name}_{index}",
+                f"Values_{data_name}_{index}",
                 (self._data.num_dofs_global, array.shape[1]),
                 dtype=array.dtype,
             )
@@ -495,17 +496,17 @@ class XDMFFile:
 
     def _write_adios(self, index: int) -> None:
         logger.debug(f"Writing adios at time {index}")
-        for u in self.functions:
+        for data_name, data_array in zip(self.data_names, self.data_arrays):
             array = np.zeros(
                 (self._data.num_dofs_local, self._data.bs if self._data.bs != 2 else 3),
-                dtype=u.x.array.dtype,
+                dtype=data_array.dtype,
             )
-            array[:, : self._data.bs] = u.x.array[
+            array[:, : self._data.bs] = data_array[
                 : self._data.num_dofs_local * self._data.bs
             ].reshape(-1, self._data.bs)
 
             valuevar = self._io.DefineVariable(
-                f"Values_{u.name}_{index}",
+                f"Values_{data_name}_{index}",
                 array,
                 shape=[self._data.num_dofs_global, array.shape[1]],
                 start=[self._data.local_range[0], 0],
@@ -516,8 +517,12 @@ class XDMFFile:
 
     def _close_adios(self) -> None:
         logger.debug("Closing ADIOS2 file")
-        self._outfile.Close()
-        assert self._adios.RemoveIO("Point cloud writer")
+        try:
+            self._outfile.Close()
+            assert self._adios.RemoveIO("Point cloud writer")
+        except ValueError:
+            # File is allready closed
+            logger.debug("ADIOS2 file already closed")
 
     def close(self) -> None:
         """Close the XDMF file."""
@@ -550,16 +555,16 @@ class XDMFFile:
         it0.attrib["Dimensions"] = f"{self._data.num_dofs_global} {self._data.points.shape[1]}"
         it0.attrib["Format"] = "HDF"
         it0.text = f"{self.h5name.name}:/Step0/Points"
-        for u in self.functions:
+        for name in self.data_names:
             ugrid_collection = ET.SubElement(domain, "Grid")
             ugrid_collection.attrib["GridType"] = "Collection"
             ugrid_collection.attrib["CollectionType"] = "Temporal"
-            ugrid_collection.attrib["Name"] = u.name
+            ugrid_collection.attrib["Name"] = name
 
             for step, time_value in enumerate(sorted(self._time_values)):
                 ugrid = ET.SubElement(ugrid_collection, "Grid")
                 ugrid.attrib["GridType"] = "Uniform"
-                ugrid.attrib["Name"] = u.name
+                ugrid.attrib["Name"] = name
                 xp = ET.SubElement(ugrid, "xi:include")
                 xp.attrib["xpointer"] = (
                     "xpointer(/Xdmf/Domain/Grid[@GridType='Uniform'][1]/*[self::Topology or self::Geometry])"  # noqa: E501
@@ -567,7 +572,7 @@ class XDMFFile:
                 time = ET.SubElement(ugrid, "Time")
                 time.attrib["Value"] = str(time_value)
                 attrib = ET.SubElement(ugrid, "Attribute")
-                attrib.attrib["Name"] = u.name
+                attrib.attrib["Name"] = name
                 out_bs = self._data.bs
                 if out_bs == 1:
                     attrib.attrib["AttributeType"] = "Scalar"
@@ -580,7 +585,7 @@ class XDMFFile:
                 it1 = ET.SubElement(attrib, "DataItem")
                 it1.attrib["Dimensions"] = f"{self._data.num_dofs_global} {out_bs}"
                 it1.attrib["Format"] = "HDF"
-                it1.text = f"{self.h5name.name}:/Step0/Values_{u.name}_{step}"
+                it1.text = f"{self.h5name.name}:/Step0/Values_{name}_{step}"
 
         ET.indent(xdmf)
         text = [
@@ -593,6 +598,9 @@ class XDMFFile:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def __del__(self):
         self.close()
 
     def write(self, time: float) -> None:
@@ -617,3 +625,82 @@ class XDMFFile:
             self._write_adios(index)
         elif self.backend == "h5py":
             self._write_h5py(index)
+
+
+class XDMFFile(BaseXDMFFile):
+    def __init__(
+        self,
+        filename: os.PathLike,
+        functions: typing.Sequence[dolfinx.fem.Function],
+        filemode: typing.Literal["r", "a", "w"] = "w",
+        backend: typing.Literal["h5py", "adios2"] = "adios2",
+    ) -> None:
+        self.functions = functions
+        self.filename = filename
+        self.filemode = filemode
+        self.backend = backend
+        super().__post_init__()
+        if len(self.functions) == 0:
+            raise ValueError("No functions to write to point cloud")
+        for f in self.functions:
+            if not isinstance(f, dolfinx.fem.Function):
+                raise ValueError("All functions must be of type dolfinx.fem.Function")
+
+        data = check_function_space(self.functions)
+        if data is None:
+            raise ValueError("All functions must be in the same function space")
+        self._data = data
+
+        self._init_backend()
+
+    @property
+    def data_names(self) -> list[str]:
+        return [f.name for f in self.functions]
+
+    @property
+    def data_arrays(self) -> list[npt.NDArray[np.floating]]:
+        return [f.x.array for f in self.functions]
+
+
+class NumpyXDMFFile(BaseXDMFFile):
+    def __init__(
+        self,
+        filename: os.PathLike,
+        arrays: list[npt.NDArray[np.floating]],
+        function_space_data: FunctionSpaceData,
+        filemode: typing.Literal["r", "a", "w"] = "w",
+        backend: typing.Literal["h5py", "adios2"] = "adios2",
+        array_names: list[str] | None = None,
+    ) -> None:
+        if len(arrays) == 0:
+            raise ValueError("No arrays to write to point cloud")
+        for f in arrays:
+            if not isinstance(f, np.ndarray):
+                raise ValueError("All arrays must be of type numpy.ndarray")
+        f0 = arrays[0]
+        for f in arrays[1:]:
+            if f.shape != f0.shape:
+                raise ValueError("All arrays must have the same shape")
+
+        self._data_arrays = arrays
+        self._data = function_space_data
+        # FIXME: Should we do some checks here on the data?
+
+        if array_names is None:
+            array_names = [f"array_{i}" for i in range(len(arrays))]
+        self._data_names = array_names
+
+        self.filename = filename
+        self.filemode = filemode
+        self.backend = backend
+        super().__post_init__()
+
+        self._init_backend()
+
+    @property
+    def data_names(self) -> list[str]:
+        return self._data_names
+
+    @property
+    def data_arrays(self) -> list[npt.NDArray[np.floating]]:
+        return self._data_arrays

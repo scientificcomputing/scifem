@@ -109,9 +109,6 @@ def test_create_celltags_empty(entities_list):
     assert set(cell_tag.values) == set()
 
 
-import pytest
-
-
 @pytest.mark.parametrize("edim", [0, 1, 2, 3])
 def test_submesh_meshtags(edim):
     mesh = dolfinx.mesh.create_unit_cube(
@@ -127,13 +124,11 @@ def test_submesh_meshtags(edim):
     emap = mesh.topology.index_map(edim)
 
     # Put every second owned cell in submesh
-    num_cells_local = emap.size_local + emap.num_ghosts
-    subset_cells_local = np.arange(num_cells_local, dtype=np.int32)[::2]
-    cell_communicator = dolfinx.la.vector(emap, 1)
-    cell_communicator.array[subset_cells_local] = 1
-    cell_communicator.scatter_reverse(dolfinx.la.InsertMode.add)
-    cell_communicator.scatter_forward()
-    subset_cells = np.flatnonzero(cell_communicator.array).astype(np.int32)
+    num_entities_local = emap.size_local
+    subset_entities = np.arange(0, num_entities_local, 2, dtype=np.int32)
+    # Include ghosts entities
+    subset_cells = scifem.mesh.reverse_mark_entities(emap, subset_entities)
+
     submesh, entity_to_parent, vertex_to_parent, _ = dolfinx.mesh.create_submesh(
         mesh, edim, subset_cells
     )
@@ -153,14 +148,171 @@ def test_submesh_meshtags(edim):
             np.arange(num_parent_entities, dtype=np.int32),
             entity_communicator.array.astype(np.int32),
         )
-
         sub_tag, sub_entity_to_parent = scifem.mesh.transfer_meshtags_to_submesh(
             parent_tag, submesh, vertex_to_parent, entity_to_parent
         )
         submesh.topology.create_connectivity(i, edim)
-
         midpoints = dolfinx.mesh.compute_midpoints(submesh, i, sub_tag.indices)
         mesh.topology.create_connectivity(i, mesh.topology.dim)
         parent_midpoints = dolfinx.mesh.compute_midpoints(mesh, i, parent_tag.indices)
 
         np.testing.assert_allclose(midpoints, parent_midpoints[sub_entity_to_parent])
+
+
+@pytest.mark.parametrize("codim", [0, 1, 2])
+@pytest.mark.parametrize("tdim", [1, 2, 3])
+@pytest.mark.parametrize(
+    "ghost_mode", [dolfinx.mesh.GhostMode.none, dolfinx.mesh.GhostMode.shared_facet]
+)
+def test_submesh_creator(codim, tdim, ghost_mode):
+    edim = tdim - codim
+    if edim < 0:
+        pytest.xfail("Codim larger than tdim")
+
+    if tdim == 1:
+        mesh = dolfinx.mesh.create_unit_interval(MPI.COMM_WORLD, 27, ghost_mode=ghost_mode)
+    elif tdim == 2:
+        mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 18, ghost_mode=ghost_mode)
+    elif tdim == 3:
+        mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 7, 5, 8, ghost_mode=ghost_mode)
+    else:
+        raise ValueError("Invalid tdim")
+
+    tol = 50 * np.finfo(mesh.geometry.x.dtype).eps
+
+    def first_marker(x):
+        return x[0] <= 0.5 + tol
+
+    def second_marker(x):
+        return x[tdim - 1] >= 0.6 - tol
+
+    first_val = 2
+    second_val = 3
+    mesh.topology.create_entities(edim)
+    emap = mesh.topology.index_map(edim)
+
+    # Only include entities on this process to check if `extract_mesh` correctly accumulates them.
+    entities = np.arange(emap.size_local + emap.num_ghosts, dtype=np.int32)
+    values = np.full_like(entities, 1, dtype=np.int32)
+    values[dolfinx.mesh.locate_entities(mesh, edim, first_marker)] = first_val
+    values[dolfinx.mesh.locate_entities(mesh, edim, second_marker)] = second_val
+
+    # Constructor we are testing
+    etag = dolfinx.mesh.meshtags(mesh, edim, entities[: emap.size_local], values[: emap.size_local])
+    submesh, cell_map, vertex_map, node_map, sub_etag = scifem.mesh.extract_submesh(
+        mesh, etag, (first_val, second_val)
+    )
+
+    parent_indices = cell_map[sub_etag.indices]
+    np.testing.assert_allclose(sub_etag.values, values[parent_indices])
+
+    # Create with standard constructor (reference)
+    e_comm = dolfinx.la.vector(emap, 1)
+    e_comm.array[:] = 0
+    e_comm.array[dolfinx.mesh.locate_entities(mesh, edim, first_marker)] = 1
+    e_comm.array[dolfinx.mesh.locate_entities(mesh, edim, second_marker)] = 1
+    e_comm.scatter_reverse(dolfinx.la.InsertMode.add)
+    e_comm.scatter_forward()
+    sub_entities = np.flatnonzero(e_comm.array).astype(np.int32)
+    ref_submesh, ref_cm, ref_vm, ref_nm = dolfinx.mesh.create_submesh(mesh, edim, sub_entities)
+
+    np.testing.assert_allclose(cell_map, ref_cm)
+    np.testing.assert_allclose(vertex_map, ref_vm)
+    np.testing.assert_allclose(node_map, ref_nm)
+    assert (
+        submesh.topology.index_map(edim).size_local
+        == ref_submesh.topology.index_map(edim).size_local
+    )
+    assert (
+        submesh.topology.index_map(edim).size_global
+        == ref_submesh.topology.index_map(edim).size_global
+    )
+    assert (
+        submesh.topology.index_map(edim).num_ghosts
+        == ref_submesh.topology.index_map(edim).num_ghosts
+    )
+
+
+@pytest.mark.parametrize("tdim", [1, 2, 3])
+@pytest.mark.parametrize(
+    "ghost_mode", [dolfinx.mesh.GhostMode.none, dolfinx.mesh.GhostMode.shared_facet]
+)
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_find_interface(tdim, ghost_mode, dtype):
+    comm = MPI.COMM_WORLD
+    if tdim == 1:
+        mesh = dolfinx.mesh.create_unit_interval(comm, 26, ghost_mode=ghost_mode, dtype=dtype)
+    elif tdim == 2:
+        mesh = dolfinx.mesh.create_unit_square(comm, 10, 13, ghost_mode=ghost_mode, dtype=dtype)
+    elif tdim == 3:
+        mesh = dolfinx.mesh.create_unit_cube(comm, 6, 5, 8, ghost_mode=ghost_mode, dtype=dtype)
+    else:
+        raise ValueError("Invalid tdim")
+
+    tol = 50 * np.finfo(dtype).eps
+
+    def half_entities(x):
+        return x[0] <= 0.5 + tol
+
+    cell_map = mesh.topology.index_map(tdim)
+    all_cells = np.arange(cell_map.size_local + cell_map.num_ghosts, dtype=np.int32)
+    values = np.full_like(all_cells, 1, dtype=np.int32)
+    values[dolfinx.mesh.locate_entities(mesh, tdim, half_entities)] = 2
+    cell_tags = dolfinx.mesh.meshtags(mesh, tdim, all_cells, values)
+
+    interface = scifem.mesh.find_interface(cell_tags, (1,), (2,))
+
+    def ref_interface(x):
+        return np.isclose(x[0], 0.5)
+
+    ref_interface_facets = dolfinx.mesh.locate_entities(mesh, tdim - 1, ref_interface)
+    np.testing.assert_allclose(interface, ref_interface_facets)
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+@pytest.mark.parametrize(
+    "ghost_mode", [dolfinx.mesh.GhostMode.none, dolfinx.mesh.GhostMode.shared_facet]
+)
+@pytest.mark.parametrize(
+    "cell_type", [dolfinx.cpp.mesh.CellType.tetrahedron, dolfinx.cpp.mesh.CellType.hexahedron]
+)
+def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
+    comm = MPI.COMM_WORLD
+    mesh = dolfinx.mesh.create_unit_cube(
+        comm, 10, 5, 7, cell_type=cell_type, ghost_mode=ghost_mode, dtype=dtype
+    )
+
+    def center(x):
+        return (x[0] - 0.5) ** 2 + (x[1] - 0.5) ** 2 + (x[2] - 0.5) ** 2 <= 0.2**2
+
+    tdim = mesh.topology.dim
+    cell_map = mesh.topology.index_map(tdim)
+    all_cells = np.arange(cell_map.size_local + cell_map.num_ghosts, dtype=np.int32)
+    values = np.full_like(all_cells, 1, dtype=np.int32)
+    values[dolfinx.mesh.locate_entities(mesh, tdim, center)] = 2
+    cell_tags = dolfinx.mesh.meshtags(mesh, tdim, all_cells, values)
+
+    ext_facets_1 = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (1,))
+
+    # Exterior facets for domain 1 are the original exterior facets + those at the interface
+    mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+    owned_exterior_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
+    exterior_facet_indices = scifem.mesh.reverse_mark_entities(
+        mesh.topology.index_map(tdim - 1), owned_exterior_facets
+    )
+
+    # Compute reference exterior facets by interface computations
+    interface = scifem.mesh.find_interface(cell_tags, (1,), (2,))
+
+    ref_ext_facets_1 = np.unique(np.concatenate([exterior_facet_indices, interface])).astype(
+        np.int32
+    )
+    np.testing.assert_allclose(ext_facets_1, ref_ext_facets_1)
+
+    # Exterior facets are only those at the interface
+    ext_facets_2 = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (2,))
+    np.testing.assert_allclose(ext_facets_2, interface)
+
+    # Exterior facets are only exterior
+    ext_facets = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (1, 2))
+    np.testing.assert_allclose(ext_facets, exterior_facet_indices)
