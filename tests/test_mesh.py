@@ -202,10 +202,9 @@ def test_submesh_creator(codim, tdim, ghost_mode):
     submesh, cell_map, vertex_map, node_map, sub_etag = scifem.mesh.extract_submesh(
         mesh, etag, (first_val, second_val)
     )
-    try:
-        parent_indices = cell_map[sub_etag.indices]
-    except TypeError:
-        parent_indices = cell_map.sub_topology_to_topology(sub_etag.indices, inverse=False)
+
+    submap_array = scifem.mesh.get_entity_map(cell_map)
+    parent_indices = submap_array[sub_etag.indices]
     np.testing.assert_allclose(sub_etag.values, values[parent_indices])
 
     # Create with standard constructor (reference)
@@ -218,33 +217,13 @@ def test_submesh_creator(codim, tdim, ghost_mode):
     sub_entities = np.flatnonzero(e_comm.array).astype(np.int32)
     ref_submesh, ref_cm, ref_vm, ref_nm = dolfinx.mesh.create_submesh(mesh, edim, sub_entities)
 
-    try:
-        from dolfinx.mesh import EntityMap
+    submap_array = scifem.mesh.get_entity_map(cell_map)
+    ref_submap_array = scifem.mesh.get_entity_map(ref_cm)
+    np.testing.assert_allclose(submap_array, ref_submap_array)
 
-        assert isinstance(cell_map, EntityMap)
-        assert isinstance(vertex_map, EntityMap)
-        mapped_indices = cell_map.sub_topology_to_topology(sub_etag.indices, inverse=False)
-        ref_mapped_indices = ref_cm.sub_topology_to_topology(sub_etag.indices, inverse=False)
-        np.testing.assert_allclose(mapped_indices, ref_mapped_indices)
-
-        num_sub_vertices = (
-            submesh.topology.index_map(0).size_local + submesh.topology.index_map(0).num_ghosts
-        )
-        num_ref_vertices = (
-            ref_submesh.topology.index_map(0).size_local
-            + ref_submesh.topology.index_map(0).num_ghosts
-        )
-        assert num_sub_vertices == num_ref_vertices
-        mapped_vertices = vertex_map.sub_topology_to_topology(
-            np.arange(num_sub_vertices, dtype=np.int32), inverse=False
-        )
-        ref_mapped_vertices = ref_vm.sub_topology_to_topology(
-            np.arange(num_ref_vertices, dtype=np.int32), inverse=False
-        )
-        np.testing.assert_allclose(mapped_vertices, ref_mapped_vertices)
-    except ImportError:
-        np.testing.assert_allclose(cell_map, ref_cm)
-        np.testing.assert_allclose(vertex_map, ref_vm)
+    subvertexmap_array = scifem.mesh.get_entity_map(vertex_map)
+    ref_subvertexmap_array = scifem.mesh.get_entity_map(ref_vm)
+    np.testing.assert_allclose(subvertexmap_array, ref_subvertexmap_array)
 
     np.testing.assert_allclose(node_map, ref_nm)
     assert (

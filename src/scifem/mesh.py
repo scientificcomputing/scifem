@@ -6,6 +6,7 @@ import dolfinx
 import typing
 import numpy as np
 import numpy.typing as npt
+from typing import Protocol
 
 __all__ = [
     "create_entity_markers",
@@ -22,6 +23,40 @@ if typing.TYPE_CHECKING:
         tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]]]
         | tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]], bool]
     )
+
+
+class _EntityMap(Protocol):
+    """Protocol for EntityMap-like objects."""
+
+    sub_topology: dolfinx.mesh.Topology
+    dim: int
+
+    def sub_topology_to_topology(
+        self, entities: npt.NDArray[np.int32], inverse: bool
+    ) -> npt.NDArray[np.int32]:
+        """Map entities between sub-topology and topology."""
+        ...
+
+
+def get_entity_map(entity_map: _EntityMap | npt.NDArray[np.int32]) -> npt.NDArray[np.int32]:
+    """Get an entity map from the sub-topology to the topology.
+
+    This function handles both the deprecated construction of an entity map as a numpy array
+    and the newer `EntityMap` class from `dolfinx.mesh`.
+
+    Args:
+        entity_map: An `EntityMap` object or a numpy array representing the mapping.
+    Returns:
+        Mapped indices of entities.
+    """
+    try:
+        sub_top = entity_map.sub_topology
+        assert isinstance(sub_top, dolfinx.mesh.Topology)
+        sub_map = sub_top.index_map(entity_map.dim)
+        indices = np.arange(sub_map.size_local + sub_map.num_ghosts, dtype=np.int32)
+        return entity_map.sub_topology_to_topology(indices, inverse=False)
+    except AttributeError:
+        return entity_map
 
 
 def create_entity_markers(
@@ -75,95 +110,44 @@ def create_entity_markers(
     return dolfinx.mesh.meshtags(domain, dim, facets, markers[facets])
 
 
-try:
-    from dolfinx.mesh import EntityMap
+def transfer_meshtags_to_submesh(
+    entity_tag: dolfinx.mesh.MeshTags,
+    submesh: dolfinx.mesh.Mesh,
+    vertex_to_parent: _EntityMap | npt.NDArray[np.int32],
+    cell_to_parent: _EntityMap | npt.NDArray[np.int32],
+) -> tuple[dolfinx.mesh.MeshTags, npt.NDArray[np.int32]]:
+    """
+    Transfer a ``entity_tag`` from a parent mesh to a ``submesh``.
 
-    def transfer_meshtags_to_submesh(
-        entity_tag: dolfinx.mesh.MeshTags,
-        submesh: dolfinx.mesh.Mesh,
-        vertex_to_parent: EntityMap,
-        cell_to_parent: EntityMap,
-    ) -> tuple[dolfinx.mesh.MeshTags, npt.NDArray[np.int32]]:
-        """
-        Transfer a ``entity_tag`` from a parent mesh to a ``submesh``.
-
-        Args:
-            entity_tag: Tag to transfer
-            submesh: Submesh to transfer tag to
-            vertex_to_parent: Mapping from submesh vertices to parent mesh vertices
-            cell_to_parent: Mapping from submesh cells to parent entities
-        Returns:
-            A tuple (submesh_tag, sub_to_parent_entity_map) where: ``submesh_tag``
-            is the tag on the submesh and ``sub_to_parent_entity_map`` is a mapping
-            from submesh entities in the tag to the corresponding entities in the parent.
-        """
-        dim = entity_tag.dim
-        sub_tdim = submesh.topology.dim
-        if dim > sub_tdim:
-            raise RuntimeError(
-                f"Cannot transfer meshtags of dimension {dim} to submesh with topological dimension"
-            )
-
-        submesh.topology.create_connectivity(sub_tdim, sub_tdim)
-        submesh.topology.create_connectivity(entity_tag.dim, 0)
-        submesh.topology.create_connectivity(sub_tdim, entity_tag.dim)
-        entity_tag.topology.create_connectivity(dim, 0)
-        entity_tag.topology.create_connectivity(dim, sub_tdim)
-
-        # Construct arrays to pass to C++ function
-        sub_vertex_map = submesh.topology.index_map(0)
-        v_to_p = vertex_to_parent.sub_topology_to_topology(
-            np.arange(sub_vertex_map.size_local + sub_vertex_map.num_ghosts, dtype=np.int32),
-            inverse=False,
+    Args:
+        entity_tag: Tag to transfer
+        submesh: Submesh to transfer tag to
+        vertex_to_parent: Mapping from submesh vertices to parent mesh vertices
+        cell_to_parent: Mapping from submesh cells to parent entities
+    Returns:
+        A tuple (submesh_tag, sub_to_parent_entity_map) where: ``submesh_tag``
+        is the tag on the submesh and ``sub_to_parent_entity_map`` is a mapping
+        from submesh entities in the tag to the corresponding entities in the parent.
+    """
+    dim = entity_tag.dim
+    sub_tdim = submesh.topology.dim
+    if dim > sub_tdim:
+        raise RuntimeError(
+            f"Cannot transfer meshtags of dimension {dim} to submesh with topological dimension"
         )
 
-        sub_cell_map = submesh.topology.index_map(submesh.topology.dim)
-        c_to_p = cell_to_parent.sub_topology_to_topology(
-            np.arange(sub_cell_map.size_local + sub_cell_map.num_ghosts, dtype=np.int32),
-            inverse=False,
-        )
-        cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
-            entity_tag._cpp_object, submesh.topology._cpp_object, v_to_p, c_to_p
-        )
-        return dolfinx.mesh.MeshTags(cpp_tag), sub_to_parent_entity_map
-except ImportError:
+    submesh.topology.create_connectivity(sub_tdim, sub_tdim)
+    submesh.topology.create_connectivity(entity_tag.dim, 0)
+    submesh.topology.create_connectivity(sub_tdim, entity_tag.dim)
+    entity_tag.topology.create_connectivity(dim, 0)
+    entity_tag.topology.create_connectivity(dim, sub_tdim)
 
-    def transfer_meshtags_to_submesh(
-        entity_tag: dolfinx.mesh.MeshTags,
-        submesh: dolfinx.mesh.Mesh,
-        vertex_to_parent: npt.NDArray[np.int32],
-        cell_to_parent: npt.NDArray[np.int32],
-    ) -> tuple[dolfinx.mesh.MeshTags, npt.NDArray[np.int32]]:
-        """
-        Transfer a ``entity_tag`` from a parent mesh to a ``submesh``.
-
-        Args:
-            entity_tag: Tag to transfer
-            submesh: Submesh to transfer tag to
-            vertex_to_parent: Mapping from submesh vertices to parent mesh vertices
-            cell_to_parent: Mapping from submesh cells to parent entities
-        Returns:
-            A tuple (submesh_tag, sub_to_parent_entity_map) where: ``submesh_tag`` is the
-            tag on the submesh and ``sub_to_parent_entity_map`` is a mapping from submesh entities
-            in the tag to the corresponding entities in the parent.
-        """
-        dim = entity_tag.dim
-        sub_tdim = submesh.topology.dim
-        if dim > sub_tdim:
-            raise RuntimeError(
-                f"Cannot transfer meshtags of dimension {dim} to submesh with topological dimension"
-            )
-
-        submesh.topology.create_connectivity(sub_tdim, sub_tdim)
-        submesh.topology.create_connectivity(entity_tag.dim, 0)
-        submesh.topology.create_connectivity(sub_tdim, entity_tag.dim)
-        entity_tag.topology.create_connectivity(dim, 0)
-        entity_tag.topology.create_connectivity(dim, sub_tdim)
-
-        cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
-            entity_tag._cpp_object, submesh.topology._cpp_object, vertex_to_parent, cell_to_parent
-        )
-        return dolfinx.mesh.MeshTags(cpp_tag), sub_to_parent_entity_map
+    v_to_p = get_entity_map(vertex_to_parent)
+    c_to_p = get_entity_map(cell_to_parent)
+    cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
+        entity_tag._cpp_object, submesh.topology._cpp_object, v_to_p, c_to_p
+    )
+    return dolfinx.mesh.MeshTags(cpp_tag), sub_to_parent_entity_map
 
 
 def reverse_mark_entities(
@@ -319,15 +303,8 @@ def compute_subdomain_exterior_facets(
             sub_mesh.topology.dim - 1,
         )
     integration_entities = integration_entities.reshape(-1, 2)
-    # Map submesh_cell to parent cell
-    try:
-        from dolfinx.mesh import EntityMap  # noqa: F401
-
-        integration_entities[:, 0] = cell_map.sub_topology_to_topology(
-            integration_entities[:, 0], inverse=False
-        )
-    except ImportError:
-        integration_entities[:, 0] = cell_map[integration_entities[:, 0]]
+    submap_array = get_entity_map(cell_map)
+    integration_entities[:, 0] = submap_array[integration_entities[:, 0]]
 
     # Get cell to facet connectivity (parent mesh)
     mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
