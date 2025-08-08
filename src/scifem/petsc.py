@@ -96,6 +96,11 @@ if dolfinx.has_petsc4py:
         except AttributeError:
             for _bcs in bcs0:
                 dolfinx.fem.petsc.set_bc(b, _bcs, x0=x, alpha=alpha)
+        except TypeError:
+            # Catch the case when bcs0 shouldn't be a nested list (e.g., for a single form)
+            assert len(bcs0) == 1, "bcs0 should be a single DirichletBC or a list of DirichletBCs."
+            dolfinx.fem.petsc.set_bc(b, bcs0[0], x0=x, alpha=alpha)
+
         ghost_update(b, PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
 
 else:
