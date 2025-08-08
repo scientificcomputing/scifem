@@ -203,7 +203,8 @@ def test_submesh_creator(codim, tdim, ghost_mode):
         mesh, etag, (first_val, second_val)
     )
 
-    parent_indices = cell_map[sub_etag.indices]
+    submap_array = scifem.mesh.get_entity_map(cell_map)
+    parent_indices = submap_array[sub_etag.indices]
     np.testing.assert_allclose(sub_etag.values, values[parent_indices])
 
     # Create with standard constructor (reference)
@@ -216,8 +217,14 @@ def test_submesh_creator(codim, tdim, ghost_mode):
     sub_entities = np.flatnonzero(e_comm.array).astype(np.int32)
     ref_submesh, ref_cm, ref_vm, ref_nm = dolfinx.mesh.create_submesh(mesh, edim, sub_entities)
 
-    np.testing.assert_allclose(cell_map, ref_cm)
-    np.testing.assert_allclose(vertex_map, ref_vm)
+    submap_array = scifem.mesh.get_entity_map(cell_map)
+    ref_submap_array = scifem.mesh.get_entity_map(ref_cm)
+    np.testing.assert_allclose(submap_array, ref_submap_array)
+
+    subvertexmap_array = scifem.mesh.get_entity_map(vertex_map)
+    ref_subvertexmap_array = scifem.mesh.get_entity_map(ref_vm)
+    np.testing.assert_allclose(subvertexmap_array, ref_subvertexmap_array)
+
     np.testing.assert_allclose(node_map, ref_nm)
     assert (
         submesh.topology.index_map(edim).size_local
