@@ -10,6 +10,7 @@ from .assembly import assemble_scalar, norm
 from . import xdmf
 from .solvers import BlockedNewtonSolver, NewtonSolver
 from .mesh import create_entity_markers, transfer_meshtags_to_submesh
+from .refinement import fix_overconstrained_cells
 from .eval import evaluate_function
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "transfer_meshtags_to_submesh",
     "evaluate_function",
     "norm",
+    "fix_overconstrained_cells"
 ]
 
 
