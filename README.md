@@ -38,6 +38,36 @@ python3 -m pip install --no-build-isolation git+https://github.com/scientificcom
 
 Note that you should pass the flag `--no-build-isolation` to `pip` to avoid issues with the build environment, such as incompatible versions of `nanobind`.
 
+### `spack`
+The spack package manager is the recommended way to install scifem, and especially on HPC systems.
+First, clone the spack repository and enable spack
+
+```bash
+git clone --depth=2 https://github.com/spack/spack.git
+# For bash/zsh/sh
+. spack/share/spack/setup-env.sh
+
+# For tcsh/csh
+source spack/share/spack/setup-env.csh
+
+# For fish
+. spack/share/spack/setup-env.fish
+```
+
+Next create an environment:
+
+```bash
+spack env create scifem_env
+spack env activate scifem_env
+```
+
+and install the relevant packages
+```bash
+spack add py-scifem+petsc+hdf5+biomed+adios2 ^petsc+mumps+hypre ^py-fenics-dolfinx+petsc4py
+spack concretize
+spack install
+```
+
 ### `conda`
 
 To install the package with `conda` run
