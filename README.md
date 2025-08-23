@@ -40,6 +40,7 @@ Note that you should pass the flag `--no-build-isolation` to `pip` to avoid issu
 
 ### `spack`
 The spack package manager is the recommended way to install scifem, and especially on HPC systems.
+For information about the package see: [spack-package: py-scifem](https://packages.spack.io/package.html?name=py-scifem)
 First, clone the spack repository and enable spack
 
 ```bash
