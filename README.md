@@ -61,14 +61,21 @@ Next create an environment:
 spack env create scifem_env
 spack env activate scifem_env
 ```
+Find the compilers on the system
+```bash
+spack compiler find
+```
 
 and install the relevant packages
 ```bash
-spack add py-scifem+petsc+hdf5+biomed+adios2 ^petsc+mumps+hypre ^py-fenics-dolfinx+petsc4py
+spack add py-scifem+petsc+hdf5+biomed+adios2 ^mpich ^petsc+mumps+hypre ^py-fenics-dolfinx+petsc4py
 spack concretize
 spack install
 ```
-
+Finally, note that spack needs some packages already installed on your system. On a clean ubuntu container for example one need to install the following packages before running spack
+```bash
+apt update && apt install gcc unzip git python3-dev g++ gfortran xz-utils -y
+```
 ### `conda`
 
 To install the package with `conda` run
