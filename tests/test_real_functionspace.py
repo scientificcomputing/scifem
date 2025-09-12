@@ -150,7 +150,7 @@ def test_singular_poisson(tensor, degree, dtype):
     A.assemble()
 
     if new_assemble_mode:
-        b = dolfinx.fem.petsc.create_vector(L, kind="mpi")
+        b = dolfinx.fem.petsc.create_vector(dolfinx.fem.extract_function_spaces(L), kind="mpi")
     else:
         b = dolfinx.fem.petsc.create_vector_block(L)
 
@@ -172,7 +172,7 @@ def test_singular_poisson(tensor, degree, dtype):
     pc.setFactorSolverType("mumps")
 
     if new_assemble_mode:
-        x = dolfinx.fem.petsc.create_vector(L, kind="mpi")
+        x = dolfinx.fem.petsc.create_vector(dolfinx.fem.extract_function_spaces(L), kind="mpi")
     else:
         x = dolfinx.fem.petsc.create_vector_block(L)
 
