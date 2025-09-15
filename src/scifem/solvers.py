@@ -76,10 +76,16 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                 self.dx = dolfinx.fem.petsc.create_vector_block(self._F)
                 self.x = dolfinx.fem.petsc.create_vector_block(self._F)
             except AttributeError:
-                self.b = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+                self.b = dolfinx.fem.petsc.create_vector(
+                    dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
+                )
                 self.A = dolfinx.fem.petsc.create_matrix(self._J, kind="mpi")
-                self.dx = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
-                self.x = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+                self.dx = dolfinx.fem.petsc.create_vector(
+                    dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
+                )
+                self.x = dolfinx.fem.petsc.create_vector(
+                    dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
+                )
 
                 self._maps = [
                     (
@@ -392,10 +398,16 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                 self._dx = dolfinx.fem.petsc.create_vector_block(self._F)
                 self._x = dolfinx.fem.petsc.create_vector_block(self._F)
             except AttributeError:
-                self._b = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+                self._b = dolfinx.fem.petsc.create_vector(
+                    dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
+                )
                 self._J = dolfinx.fem.petsc.create_matrix(self._a, kind="mpi")
-                self._dx = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
-                self._x = dolfinx.fem.petsc.create_vector(self._F, kind="mpi")
+                self._dx = dolfinx.fem.petsc.create_vector(
+                    dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
+                )
+                self._x = dolfinx.fem.petsc.create_vector(
+                    dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
+                )
 
                 self._maps = [
                     (
