@@ -329,11 +329,12 @@ def compute_interface_data(
     """
     Compute interior facet integrals that are consistently ordered according to the `cell_tags`,
     such that the data `(cell0, facet_idx0, cell1, facet_idx1)` is ordered such that
-    `cell_tags[cell0]`<`cell_tags[cell1]`, i.e the cell with the lowest cell marker is considered the
-    "+" restriction".
+    `cell_tags[cell0]`<`cell_tags[cell1]`, i.e the cell with the lowest cell marker
+    is considered the "+" restriction".
 
     Args:
-        cell_tags: MeshTags that must contain an integer marker for all cells adjacent to the `facet_indices`
+        cell_tags: MeshTags that must contain an integer marker for all cells adjacent
+            to the `facet_indices`
         facet_indices: List of facets (local index) that are on the interface.
     Returns:
         The integration data.
