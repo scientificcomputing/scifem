@@ -2,7 +2,7 @@ from mpi4py import MPI
 import dolfinx
 import pytest
 import ufl
-import scifem.bcs
+import scifem
 import numpy as np
 
 
