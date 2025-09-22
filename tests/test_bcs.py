@@ -54,6 +54,8 @@ def test_tangent_enforcement(cell_type: dolfinx.mesh.CellType):
         mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10)
     elif tdim == 3:
         mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 8, 10, 3)
+    else:
+        raise ValueError(f"Unsupported {cell_type=}")
 
     V = dolfinx.fem.functionspace(mesh, ("N1curl", 2))
 
