@@ -59,6 +59,7 @@ def interpolate_function_onto_facet_dofs(
             reference_facet_points = ref_points
         else:
             assert np.allclose(reference_facet_points, ref_points)
+    assert reference_facet_points is not None
     # Create expression for BC
     normal_expr = dolfinx.fem.Expression(expr, reference_facet_points)
 
