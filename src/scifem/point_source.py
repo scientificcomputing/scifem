@@ -78,9 +78,15 @@ class PointSource:
             )
             self._points = np.array(self._points).reshape(-1, 3)
         elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
-            collision_data = dolfinx.cpp.geometry.determine_point_ownership(
-                mesh._cpp_object, self._input_points, tol
-            )
+            try:
+                collision_data = dolfinx.cpp.geometry.determine_point_ownership(
+                    mesh._cpp_object, self._input_points, tol
+                )
+            except TypeError:
+                collision_data = dolfinx.geometry.determine_point_ownership(
+                    mesh, self._input_points, padding=tol
+                )
+
             self._points = collision_data.dest_points
             self._cells = collision_data.dest_cells
             src_ranks = collision_data.src_owner

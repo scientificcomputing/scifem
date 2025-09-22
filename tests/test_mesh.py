@@ -323,3 +323,69 @@ def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
     # Exterior facets are only exterior
     ext_facets = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (1, 2))
     np.testing.assert_allclose(ext_facets, exterior_facet_indices)
+
+
+@pytest.mark.parametrize(
+    "cell_type",
+    [
+        dolfinx.mesh.CellType.tetrahedron,
+        dolfinx.mesh.CellType.hexahedron,
+        dolfinx.mesh.CellType.triangle,
+        dolfinx.mesh.CellType.quadrilateral,
+        dolfinx.mesh.CellType.interval,
+    ],
+)
+@pytest.mark.parametrize("Nx", [6, 8, 11])
+def test_compute_interface_data(cell_type: dolfinx.mesh.CellType, Nx: int):
+    tdim = dolfinx.mesh.cell_dim(cell_type)
+    if tdim == 1:
+        mesh = dolfinx.mesh.create_unit_interval(
+            MPI.COMM_WORLD, Nx, ghost_mode=dolfinx.mesh.GhostMode.shared_facet
+        )
+    elif tdim == 2:
+        mesh = dolfinx.mesh.create_unit_square(
+            MPI.COMM_WORLD,
+            Nx,
+            8,
+            cell_type=cell_type,
+            ghost_mode=dolfinx.mesh.GhostMode.shared_facet,
+        )
+    elif tdim == 3:
+        mesh = dolfinx.mesh.create_unit_cube(
+            MPI.COMM_WORLD,
+            Nx,
+            3,
+            5,
+            cell_type=cell_type,
+            ghost_mode=dolfinx.mesh.GhostMode.shared_facet,
+        )
+    else:
+        raise ValueError(f"Invalid {cell_type=}")
+
+    interface_loc = 3 / Nx
+
+    def interface(x):
+        return np.isclose(x[0], interface_loc)
+
+    def left_domain(x, tol=100 * np.finfo(mesh.geometry.x.dtype).eps):
+        return x[0] <= interface_loc + tol
+
+    val_small = 3
+    val_big = 8
+    assert val_big > val_small
+    tdim = mesh.topology.dim
+    cell_map = mesh.topology.index_map(tdim)
+    num_cells_local = cell_map.size_local + cell_map.num_ghosts
+    values = np.full(num_cells_local, val_small, dtype=np.int32)
+    values[dolfinx.mesh.locate_entities(mesh, tdim, left_domain)] = val_big
+    cell_tags = dolfinx.mesh.meshtags(
+        mesh, tdim, np.arange(num_cells_local, dtype=np.int32), values
+    )
+
+    mesh.topology.create_connectivity(tdim - 1, tdim)
+    interface_facets = dolfinx.mesh.locate_entities(mesh, tdim - 1, interface)
+
+    interface_data = scifem.mesh.compute_interface_data(cell_tags, interface_facets)
+
+    assert np.isin(interface_data[:, 0], cell_tags.find(val_small)).all()
+    assert np.isin(interface_data[:, 2], cell_tags.find(val_big)).all()
