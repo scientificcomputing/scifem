@@ -1,6 +1,6 @@
 from mpi4py import MPI
 import dolfinx
-from scifem import create_material_space
+from scifem import create_material_space, assemble_scalar
 import pytest
 import numpy as np
 import ufl
@@ -70,14 +70,19 @@ def test_material_space(value_shape: tuple[int], cell_type: str):
         f.x.array[i * bs : (i + 1) * bs] = vals
 
         form = dolfinx.fem.form(ufl.inner(f, f) * ufl.dx)
-        local_integral = dolfinx.fem.assemble_scalar(form)
-        integral = mesh.comm.allreduce(local_integral, op=MPI.SUM)
+        integral = assemble_scalar(form)
+
+        # Compute integral of exact function on the restricted domain
         dx_restricted = ufl.Measure("dx", domain=mesh, subdomain_data=ct, subdomain_id=tag)
         if value_shape == ():
             f_ex = vals[0]
         else:
             f_ex = ufl.as_tensor(vals.reshape(value_shape))
-        form_ex = dolfinx.fem.form(ufl.inner(f_ex, f_ex) * dx_restricted)
-        local_integral_ex = dolfinx.fem.assemble_scalar(form_ex)
-        integral_ex = mesh.comm.allreduce(local_integral_ex, op=MPI.SUM)
+        form_ex = ufl.inner(f_ex, f_ex) * dx_restricted
+        integral_ex = assemble_scalar(form_ex)
         np.testing.assert_allclose(integral, integral_ex)
+
+        # Compute squared error on the restricted domain
+        diff = ufl.inner(f - f_ex, f - f_ex) * dx_restricted
+        error = assemble_scalar(diff)
+        np.testing.assert_allclose(error, 0.0)
