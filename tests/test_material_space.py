@@ -61,7 +61,8 @@ def test_material_space(value_shape: tuple[int], cell_type: str):
     for i, tag in enumerate(tags):
         np.testing.assert_allclose(array[ct.indices[ct.values == tag]].flatten(), i)
 
-    # Check that we can assign values to the function for each region, and that it gives a sensible result
+    # Check that we can assign values to the function for each region, and that it gives
+    # a sensible result
     bs = V.dofmap.bs
     for i, tag in enumerate(tags):
         vals = np.arange(i + 1, i + 1 + bs, dtype=np.float64)

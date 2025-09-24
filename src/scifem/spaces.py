@@ -40,7 +40,7 @@ def create_material_space(
     mesh: dolfinx.mesh.Mesh,
     cell_tag: dolfinx.mesh.MeshTags,
     tags: Sequence[int | np.int32 | np.int64],
-    value_shape: tuple[int] = None,
+    value_shape: tuple[()] | tuple[int | tuple[int]] | None = None,
 ) -> dolfinx.fem.FunctionSpace:
     """Create a material function space.
 
