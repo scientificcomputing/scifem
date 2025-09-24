@@ -103,10 +103,19 @@ def create_material_space(
     cpp_dofmap = dolfinx.cpp.fem.DofMap(e_layout, dof_imap, index_map_bs, dofmap_adj, bs)
 
     # Create function space
-    cpp_el = dolfinx.cpp.fem.FiniteElement_float64(
-        el.basix_element._e, block_shape=value_shape, symmetric=False
-    )
-    cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(mesh._cpp_object, cpp_el, cpp_dofmap)
+    try:
+        cpp_el = dolfinx.cpp.fem.FiniteElement_float64(
+            el.basix_element._e, block_shape=value_shape, symmetric=False
+        )
+        cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(mesh._cpp_object, cpp_el, cpp_dofmap)
+    except TypeError:
+        cpp_el = dolfinx.cpp.fem.FiniteElement_float64(
+            el.basix_element._e, block_size=bs, symmetric=False
+        )
+        cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(
+            mesh._cpp_object, cpp_el, cpp_dofmap, value_shape=value_shape
+        )
+
     _el = basix.ufl.element("P", mesh.basix_cell(), 0, shape=value_shape, discontinuous=True)
     V = dolfinx.fem.FunctionSpace(mesh, _el, cpp_space)
     return V
