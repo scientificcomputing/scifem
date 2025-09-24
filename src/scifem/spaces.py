@@ -4,6 +4,7 @@ import basix
 import numpy as np
 from . import _scifem  # type: ignore
 from collections.abc import Sequence
+from packaging.version import Version
 
 
 def create_real_functionspace(
@@ -75,7 +76,11 @@ def create_material_space(
     # Create index map describing the distribution of dofs across processes
     ghosts = np.arange(num_ghosts, dtype=np.int64)
     owners = np.full(num_ghosts, ghost_owner_rank, dtype=np.int32)
-    dof_imap = dolfinx.common.IndexMap(mesh.comm, num_dofs, ghosts, owners, tag=321)
+    if Version(dolfinx.__version__) > Version("0.9.0"):
+        imap_kwargs = {"tag": 321}
+    else:
+        imap_kwargs = {}
+    dof_imap = dolfinx.common.IndexMap(mesh.comm, num_dofs, ghosts, owners, **imap_kwargs)
 
     # Create element dof layout (1 dof per cell, based of the DG-0 element)
     value_size = int(np.prod(value_shape))
