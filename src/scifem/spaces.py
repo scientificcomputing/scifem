@@ -37,24 +37,30 @@ def create_real_functionspace(
     return dolfinx.fem.FunctionSpace(mesh, ufl_e, cppV)
 
 
-def create_material_space(
+def create_space_of_simple_functions(
     mesh: dolfinx.mesh.Mesh,
     cell_tag: dolfinx.mesh.MeshTags,
     tags: Sequence[int | np.int32 | np.int64],
     value_shape: tuple[()] | tuple[int | tuple[int]] | None = None,
 ) -> dolfinx.fem.FunctionSpace:
-    """Create a material function space.
+    """Create a space of simple functions.
+
+    This is a space that represents piecewise constant functions of `N` patches,
+    where `N` is the number of input `tags`.
+    Each patch is defined by the cells in `cell_tag` which is marked with the
+    corresponding tag value.
+
+    Note:
+        All cells are expected to have a tag in `tags`.
 
     Args:
-        mesh: The mesh the material space is defined on.
-        cell_tag: The mesh tags defining the materials on this process.
-        tags: The material tags that should be represented in the function space.
+        mesh: The mesh the function space is defined on.
+        cell_tag: The mesh tags defining the different patches of cells.
+        tags: The set of unique values within `cell_tag` that defines the different patches.
+        value_shape: The shape of the values in the space.
 
     Returns:
-        The material function space.
-    Note:
-        The material function space is a discontinuous, piecewise constant
-        function space with one degree of freedom per unique cell tag value.
+        The space of simple functions.
 
     """
     value_shape = () if value_shape is None else value_shape
@@ -66,6 +72,12 @@ def create_material_space(
         )
 
     cell_map = mesh.topology.index_map(mesh.topology.dim)
+
+    # Sanity check cell tags
+    if cell_map.size_local + cell_map.num_ghosts != len(cell_tag.indices):
+        raise ValueError("Every cell in the cell tag must have a value assigned to it.")
+    if not np.isin(cell_tag.values, tags).all():
+        raise ValueError("All values in the cell tag must be in the input tags.")
 
     # Determine the owner of the material degrees of freedom.
     # It will be the process that owns the cell with global index 0
