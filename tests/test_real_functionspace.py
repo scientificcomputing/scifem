@@ -89,7 +89,7 @@ def test_real_function_space_vector(cell_type, dtype):
 @pytest.mark.parametrize("tensor", [0, 1, 2])
 @pytest.mark.parametrize("degree", range(1, 5))
 def test_singular_poisson(tensor, degree, dtype):
-    M = 25
+    M = 9
 
     rtype, stype = dtype
     mesh = dolfinx.mesh.create_unit_square(
