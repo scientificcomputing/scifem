@@ -263,7 +263,7 @@ def test_create_ponitcloud_2D(cell_type, degree, value_shape, tmp_path):
     "cell_type", [dolfinx.mesh.CellType.tetrahedron, dolfinx.mesh.CellType.hexahedron]
 )
 @pytest.mark.parametrize("value_shape", [(), (3,)])
-def test_create_ponitcloud_3D(cell_type, degree, value_shape, tmp_path):
+def test_create_pointcloud_3D(cell_type, degree, value_shape, tmp_path):
     folder = MPI.COMM_WORLD.bcast(tmp_path, root=0)
     mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 2, 3, 5, cell_type, dtype=np.float64)
 
