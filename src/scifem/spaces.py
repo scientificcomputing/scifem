@@ -58,8 +58,12 @@ def create_material_space(
 
     """
     value_shape = () if value_shape is None else value_shape
-    assert mesh.topology._cpp_object == cell_tag.topology
-    assert cell_tag.dim == mesh.topology.dim
+    if mesh.topology._cpp_object != cell_tag.topology:
+        raise ValueError("Topology of cell tag is not the mesh topology")
+    if cell_tag.dim != mesh.topology.dim:
+        raise ValueError(
+            f"The dimension of the input meshtag is {cell_tag.dim}, expected {mesh.topology.dim}"
+        )
 
     cell_map = mesh.topology.index_map(mesh.topology.dim)
 
