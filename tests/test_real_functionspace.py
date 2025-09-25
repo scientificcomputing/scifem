@@ -36,7 +36,11 @@ def test_real_function_space_mass(L, H, cell_type, dtype):
         assert len(A.data) == 1
         if cell_map.local_range[0] == 0:
             assert np.isclose(A.data[0], L * H, atol=tol)
-
+    else:
+        assert len(A.data) == 0
+        assert len(V.dofmap.list.flatten()) == 0
+        assert V.dofmap.index_map.size_local == 0
+        assert V.dofmap.index_map.num_ghosts == 1
 
 @pytest.mark.parametrize("dtype", [np.float64, np.float32])
 @pytest.mark.parametrize(
