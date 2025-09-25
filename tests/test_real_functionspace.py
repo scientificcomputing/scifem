@@ -42,6 +42,7 @@ def test_real_function_space_mass(L, H, cell_type, dtype):
         assert V.dofmap.index_map.size_local == 0
         assert V.dofmap.index_map.num_ghosts == 1
 
+
 @pytest.mark.parametrize("dtype", [np.float64, np.float32])
 @pytest.mark.parametrize(
     "cell_type", [dolfinx.mesh.CellType.tetrahedron, dolfinx.mesh.CellType.hexahedron]
