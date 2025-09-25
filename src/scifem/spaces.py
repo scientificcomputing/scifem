@@ -47,7 +47,8 @@ def create_space_of_simple_functions(
 
     This is a space that represents piecewise constant functions of `N` patches,
     where `N` is the number of input `tags`.
-    Each patch is defined by the cells in `cell_tag` which is marked with the corresponding tag value.
+    Each patch is defined by the cells in `cell_tag` which is marked with the
+    corresponding tag value.
 
     Note:
         All cells are expected to have a tag in `tags`.
