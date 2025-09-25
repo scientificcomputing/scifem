@@ -68,16 +68,28 @@ create_real_functionspace(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
       basix::element::lagrange_variant::unset,
       basix::element::dpc_variant::unset, true);
 
-  // NOTE: Optimize input source/dest later as we know this a priori
-  std::int32_t num_dofs = (dolfinx::MPI::rank(MPI_COMM_WORLD) == 0) ? 1 : 0;
-  std::int32_t num_ghosts = (dolfinx::MPI::rank(MPI_COMM_WORLD) != 0) ? 1 : 0;
+  // We select the process that owns cell 0 to have all dofs and all other
+  // processes ghost them
+  std::shared_ptr<const dolfinx::common::IndexMap> cell_map
+      = mesh->topology()->index_map(mesh->topology()->dim());
+  const int is_owner
+      = (cell_map->local_range()[0] == 0) and cell_map->size_local() > 0;
+
+  std::int32_t num_dofs = (is_owner) ? 1 : 0;
+  std::int32_t num_ghosts = (is_owner) ? 0 : 1;
   std::vector<std::int64_t> ghosts(num_ghosts, 0);
   ghosts.reserve(1);
-  std::vector<int> owners(num_ghosts, 0);
+
+  int rank = dolfinx::MPI::rank(mesh->comm());
+  std::array<int, 2> send_owner_pair = {is_owner, rank};
+  std::array<int, 2> recv_owner_pair;
+  MPI_Allreduce(&send_owner_pair, &recv_owner_pair, 1, MPI_2INT, MPI_MAXLOC,
+                mesh->comm());
+  std::vector<int> owners(num_ghosts, recv_owner_pair[1]);
   owners.reserve(1);
   std::shared_ptr<const dolfinx::common::IndexMap> imap
       = std::make_shared<const dolfinx::common::IndexMap>(
-          MPI_COMM_WORLD, num_dofs, ghosts, owners);
+          mesh->comm(), num_dofs, ghosts, owners);
   std::size_t value_size = std::accumulate(
       value_shape.begin(), value_shape.end(), 1, std::multiplies{});
   int index_map_bs = value_size;

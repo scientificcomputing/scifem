@@ -31,10 +31,16 @@ def test_real_function_space_mass(L, H, cell_type, dtype):
     A = dolfinx.fem.assemble_matrix(dolfinx.fem.form(a, dtype=dtype), bcs=[])
     A.scatter_reverse()
     tol = 100 * np.finfo(dtype).eps
-
-    assert len(A.data) == 1
-    if MPI.COMM_WORLD.rank == 0:
-        assert np.isclose(A.data[0], L * H, atol=tol)
+    cell_map = mesh.topology.index_map(mesh.topology.dim)
+    if cell_map.size_local + cell_map.num_ghosts > 0:
+        assert len(A.data) == 1
+        if cell_map.local_range[0] == 0:
+            assert np.isclose(A.data[0], L * H, atol=tol)
+    else:
+        assert len(A.data) == 0
+        assert len(V.dofmap.list.flatten()) == 0
+        assert V.dofmap.index_map.size_local == 0
+        assert V.dofmap.index_map.num_ghosts == 1
 
 
 @pytest.mark.parametrize("dtype", [np.float64, np.float32])
