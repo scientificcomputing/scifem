@@ -1,6 +1,6 @@
 from mpi4py import MPI
 import dolfinx
-from scifem import create_material_space, assemble_scalar
+from scifem import create_space_of_simple_functions, assemble_scalar
 import pytest
 import numpy as np
 import ufl
@@ -50,7 +50,7 @@ def test_material_space(value_shape: tuple[int], cell_type: str):
     values[dolfinx.mesh.locate_entities(mesh, mesh.topology.dim, top)] = tags[2]
     ct = dolfinx.mesh.meshtags(mesh, mesh.topology.dim, all_cells, values)
 
-    V = create_material_space(mesh, ct, tags, value_shape=value_shape)
+    V = create_space_of_simple_functions(mesh, ct, tags, value_shape=value_shape)
     assert V.dofmap.index_map.size_global == len(tags)
     assert V.dofmap.index_map.size_local + V.dofmap.index_map.num_ghosts == len(tags)
     assert (V.dofmap.index_map.size_local == 0) or (V.dofmap.index_map.num_ghosts == 0)
