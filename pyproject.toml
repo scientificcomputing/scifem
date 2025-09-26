@@ -33,7 +33,7 @@ testpaths = ["tests"]
 
 [tool.scikit-build]
 minimum-version = "0.5"
-cmake.minimum-version = "3.19.0"
+cmake.minimum-version = "3.21.0"
 
 
 [tool.mypy]
