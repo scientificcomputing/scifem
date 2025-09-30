@@ -62,8 +62,8 @@ if dolfinx.has_petsc4py:
         This modifies the vector b such that
 
         .. math::
-            b_{free} = b - alpha a[i] (u_bc[i] - x[i])
-            b_{bc} = u_bc[i]
+            b_{free} = b - \\alpha a[i] (u_{bc}[i] - x[i])
+            b_{bc} = u_{bc}[i]
 
         where :math:`b_{free}` is the free part of the vector, :math:`b_{bc}` is the part that has
         boundary conditions applied.
