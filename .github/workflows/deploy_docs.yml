@@ -28,7 +28,7 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    steps:      
+    steps:
       - name: Download docs artifact
         # docs artifact is uploaded by build-docs job
         uses: actions/download-artifact@v5
