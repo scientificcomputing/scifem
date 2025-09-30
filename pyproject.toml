@@ -21,7 +21,13 @@ repository = "https://github.com/scientificcomputing/scifem.git"
 [project.optional-dependencies]
 h5py = ["h5py"]
 adios2 = ["adios2"]
-docs = ["jupyter-book", "jupytext", "pyvista[jupyter]", "sphinxcontrib-bibtex"]
+docs = [
+    "jupyter-book",
+    "jupytext",
+    "pyvista[jupyter]",
+    "sphinxcontrib-bibtex",
+    "sphinx-codeautolink",
+]
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
 test = ["pytest", "petsc4py", "h5py", "scifem[biomed]"]
 biomed = ["nibabel"]
