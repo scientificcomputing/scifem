@@ -10,7 +10,7 @@
 # ## Mathematical formulation
 #  The problem at hand is:
 # Find $u \in H^1(\Omega)$ such that
-# 
+#
 # $$
 # \begin{align}
 # -\Delta u &= f \quad \text{in } \Omega, \\
@@ -30,7 +30,7 @@
 #   - \int_\Omega f u \mathrm{d}x - \int_{\partial \Omega} g u \mathrm{d}s,
 # \end{align}
 # $$
-# 
+#
 # such that
 #
 # $$
@@ -38,15 +38,15 @@
 #   \int_\Omega u = h.
 # \end{align}
 # $$
-# 
+#
 # We introduce a Lagrange multiplier $\lambda$ to enforce the constraint:
-# 
+#
 # $$
 # \begin{align}
 #   \mathop{\mathrm{arg\,min}}_{u \in H^1(\Omega), \lambda\in \mathbb{R}}~\mathcal{L}(u, \lambda) =
 #   \mathop{\mathrm{arg\,min}}_{u \in H^1(\Omega), \lambda\in \mathbb{R}} J(u) + \lambda (\int_\Omega u \mathrm{d}x-h).
 # \end{align}
-# $$ 
+# $$
 #
 # We then compute the optimality conditions for the problem above
 #
@@ -91,7 +91,7 @@ import pyvista
 # We start by creating the domain using {py:mod}`dolfinx` and derive the source terms
 # $f$, $g$ and $h$ from our manufactured solution using {py:mod}`ufl`.
 # For this example we will use the following exact solution
-# 
+#
 # $$
 # \begin{align}
 #   u_{exact}(x, y) = 0.3y^2 + \sin(2\pi x).
