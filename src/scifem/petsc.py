@@ -59,14 +59,23 @@ if dolfinx.has_petsc4py:
         """Apply lifting to a vector and set boundary conditions.
 
         Convenience function to apply lifting and set boundary conditions for multiple matrix types.
-        This modifies the vector b such that
+        This modifies the vector `b` such that
 
         .. math::
-            b_{free} = b - \\alpha a[i] (u_{bc}[i] - x[i])
-            b_{bc} = u_{bc}[i]
+            b =
+            \\begin{pmatrix}
+              b_{free} \\\\
+              b_{bc}
+            \\end{pmatrix} =
+            \\begin{pmatrix}
+              b_{free} - \\alpha \\sum_{i=0}^n a[i] (u_{bc}[i] - x[i])\\\\
+              u_{bc}[0]\\\\
+              \\vdots\\\\
+              u_{bc}[n]
+            \\end{pmatrix}.
 
         where :math:`b_{free}` is the free part of the vector, :math:`b_{bc}` is the part that has
-        boundary conditions applied.
+        boundary conditions applied, :math:`u_{bc}[i]` is the value of the ith boundary condition.
 
         Args:
             b: The vector to apply lifting to.
