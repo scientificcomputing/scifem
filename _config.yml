@@ -30,6 +30,13 @@ parse:
 
 
 sphinx:
+  extra_extensions:
+  - 'sphinx.ext.autodoc'
+  - 'sphinx.ext.napoleon'
+  - 'sphinx.ext.viewcode'
+  - 'sphinxcontrib.bibtex'
+  - 'sphinx.ext.intersphinx'
+  - "sphinx_codeautolink"
 
   config:
     html_last_updated_fmt: "%b %d, %Y"
@@ -40,11 +47,18 @@ sphinx:
         .py:
             - jupytext.reads
             - fmt: py
+    codeautolink_concat_default: True
+    intersphinx_mapping:
+      basix : [https://docs.fenicsproject.org/basix/main/python/, null]
+      ffcx : [https://docs.fenicsproject.org/ffcx/main/, null]
+      ufl : [https://docs.fenicsproject.org/ufl/main/, null]
+      dolfinx : [https://docs.fenicsproject.org/dolfinx/main/python, null]
+      petsc4py: [https://petsc.org/release/petsc4py, null]
+      mpi4py: [https://mpi4py.readthedocs.io/en/stable, null]
+      numpy: [https://numpy.org/doc/stable/, null]
+      pyvista: [https://docs.pyvista.org/, null]
+      packaging: [https://packaging.pypa.io/en/stable/, null]
 
-  extra_extensions:
-  - 'sphinx.ext.autodoc'
-  - 'sphinx.ext.napoleon'
-  - 'sphinx.ext.viewcode'
-  - 'sphinxcontrib.bibtex'
+
 
 exclude_patterns: [".pytest_cache/*" ,"tests", venv, .vcode, .ruff_cache, .github, .git]

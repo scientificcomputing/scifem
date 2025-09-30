@@ -16,7 +16,10 @@ from scifem import transfer_meshtags_to_submesh
 from mpi4py import MPI
 import gmsh
 import dolfinx
-import numpy as np
+try:
+    from dolfinx.io import gmsh as gmshio
+except ImportError:
+    import dolfinx.io.gmshio as gmshio
 
 # We start by embedding an ellipsoid within another ellipsoid using GMSH.
 # For more details about creating this mesh in GMSH,
@@ -57,8 +60,14 @@ gmsh.model.mesh.optimize("Netgen")
 
 # Next, we read this mesh and corresponding markers into DOLFINx
 
-circular_mesh, cell_marker, facet_marker = dolfinx.io.gmshio.model_to_mesh(
-    gmsh.model, MPI.COMM_WORLD, 0, gdim=2)
+mesh_data = gmshio.model_to_mesh(
+gmsh.model, MPI.COMM_WORLD, 0, gdim=2)
+if hasattr(mesh_data, "mesh"):
+    circular_mesh = mesh_data.mesh
+    cell_marker = mesh_data.cell_tags
+    facet_marker = mesh_data.facet_tags
+else:
+    circular_mesh, cell_marker, facet_marker = mesh_data
 
 # We visualize the mesh and its markers
 
