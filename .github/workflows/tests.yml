@@ -7,17 +7,17 @@ on:
 
 jobs:
   test-code:
-    name: Test on ${{ matrix.container }}
+    name: Test on ${{ matrix.label }}
     runs-on: ubuntu-24.04
-    container: ${{ matrix.container }}
+    container: ghcr.io/fenics/dolfinx/dolfinx:${{ matrix.label }}
     env:
       DEB_PYTHON_INSTALL_LAYOUT: deb_system
     strategy:
       fail-fast: false
       matrix:
-        container: [
-          "ghcr.io/fenics/dolfinx/dolfinx:stable",
-          "ghcr.io/fenics/dolfinx/dolfinx:nightly"
+        label: [
+          "stable",
+          "nightly"
         ]
 
 
@@ -39,7 +39,3 @@ jobs:
       - name: Run tests in parallel
         run: mpiexec -n 4 python3 -m pytest -v  -m "not serial"
 
-      - name: Run demos
-        run: |
-          python3 -m pip install .[docs] --no-build-isolation
-          python3 -m jupyter book build .
