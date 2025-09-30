@@ -38,3 +38,6 @@ jobs:
 
       - name: Run tests in parallel
         run: mpiexec -n 4 python3 -m pytest -v  -m "not serial"
+
+      - name: Run demos
+        run: python3 -m jupyter book build .

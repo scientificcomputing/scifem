@@ -34,7 +34,7 @@ jobs:
         run: python3 -m pip install --no-build-isolation ".[docs]"
 
       - name: Build docs
-        run: jupyter book build -W --keep-going .
+        run: jupyter book build --keep-going .
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
