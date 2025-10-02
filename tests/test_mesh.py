@@ -148,7 +148,7 @@ def test_submesh_meshtags(edim):
             np.arange(num_parent_entities, dtype=np.int32),
             entity_communicator.array.astype(np.int32),
         )
-        sub_tag, sub_entity_to_parent = scifem.mesh.transfer_meshtags_to_submesh(
+        sub_tag, sub_entity_to_parent = scifem.transfer_meshtags_to_submesh(
             parent_tag, submesh, vertex_to_parent, entity_to_parent
         )
         submesh.topology.create_connectivity(i, edim)
@@ -199,7 +199,7 @@ def test_submesh_creator(codim, tdim, ghost_mode):
 
     # Constructor we are testing
     etag = dolfinx.mesh.meshtags(mesh, edim, entities[: emap.size_local], values[: emap.size_local])
-    submesh, cell_map, vertex_map, node_map, sub_etag = scifem.mesh.extract_submesh(
+    submesh, cell_map, vertex_map, node_map, sub_etag = scifem.extract_submesh(
         mesh, etag, (first_val, second_val)
     )
 
@@ -385,7 +385,7 @@ def test_compute_interface_data(cell_type: dolfinx.mesh.CellType, Nx: int):
     mesh.topology.create_connectivity(tdim - 1, tdim)
     interface_facets = dolfinx.mesh.locate_entities(mesh, tdim - 1, interface)
 
-    interface_data = scifem.mesh.compute_interface_data(cell_tags, interface_facets)
+    interface_data = scifem.compute_interface_data(cell_tags, interface_facets)
 
     assert np.isin(interface_data[:, 0], cell_tags.find(val_small)).all()
     assert np.isin(interface_data[:, 2], cell_tags.find(val_big)).all()

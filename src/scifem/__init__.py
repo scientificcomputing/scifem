@@ -11,8 +11,10 @@ from . import xdmf
 from .solvers import BlockedNewtonSolver, NewtonSolver
 from .spaces import create_real_functionspace, create_space_of_simple_functions
 from .mesh import (
+    compute_interface_data,
     compute_subdomain_exterior_facets,
     create_entity_markers,
+    extract_submesh,
     find_interface,
     transfer_meshtags_to_submesh,
     reverse_mark_entities,
@@ -23,9 +25,10 @@ __all__ = [
     "PointSource",
     "assemble_scalar",
     "create_space_of_simple_functions",
-    "xdmf",
+    "compute_interface_data",
     "compute_subdomain_exterior_facets",
     "create_real_functionspace",
+    "extract_submesh",
     "find_interface",
     "assemble_scalar",
     "PointSource",
