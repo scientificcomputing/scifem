@@ -1,8 +1,8 @@
 [build-system]
 requires = [
-    "scikit-build-core[pyproject]>=0.4.3",
+    "scikit-build-core[pyproject]>=0.11.0", # Ensuring license field is correctly parsed]
     "nanobind>=1.3.2",
-    "setuptools>=77.0.3",                  # Ensuring license field is correctly parsed]
+    "setuptools>=77.0.3",                   # Ensuring license field is correctly parsed]
 ]
 build-backend = "scikit_build_core.build"
 
