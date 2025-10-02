@@ -8,7 +8,7 @@ version = "0.11.1"
 description = "Scientific tools for finite element methods"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
 authors = [
     { email = "dokken@simula.no", name = "Jørgen S. Dokken" },
     { email = "henriknf@simula.no", name = "Henrik N.T. Finsberg" },
@@ -31,7 +31,7 @@ docs = [
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
 test = ["pytest", "petsc4py", "h5py", "scifem[biomed]"]
 biomed = ["nibabel"]
-all = ["scifem[docs,dev,test,audio2,h5py,biomed]"]
+all = ["scifem[docs,dev,test,adios2,h5py,biomed]"]
 petsc = ["petsc4py"]
 
 [tool.pytest.ini_options]

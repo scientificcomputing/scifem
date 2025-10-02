@@ -127,7 +127,7 @@ def test_submesh_meshtags(edim):
     num_entities_local = emap.size_local
     subset_entities = np.arange(0, num_entities_local, 2, dtype=np.int32)
     # Include ghosts entities
-    subset_cells = scifem.mesh.reverse_mark_entities(emap, subset_entities)
+    subset_cells = scifem.reverse_mark_entities(emap, subset_entities)
 
     submesh, entity_to_parent, vertex_to_parent, _ = dolfinx.mesh.create_submesh(
         mesh, edim, subset_cells
@@ -267,7 +267,7 @@ def test_find_interface(tdim, ghost_mode, dtype):
     values[dolfinx.mesh.locate_entities(mesh, tdim, half_entities)] = 2
     cell_tags = dolfinx.mesh.meshtags(mesh, tdim, all_cells, values)
 
-    interface = scifem.mesh.find_interface(cell_tags, (1,), (2,))
+    interface = scifem.find_interface(cell_tags, (1,), (2,))
 
     def ref_interface(x):
         return np.isclose(x[0], 0.5)
@@ -304,12 +304,12 @@ def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
     # Exterior facets for domain 1 are the original exterior facets + those at the interface
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     owned_exterior_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
-    exterior_facet_indices = scifem.mesh.reverse_mark_entities(
+    exterior_facet_indices = scifem.reverse_mark_entities(
         mesh.topology.index_map(tdim - 1), owned_exterior_facets
     )
 
     # Compute reference exterior facets by interface computations
-    interface = scifem.mesh.find_interface(cell_tags, (1,), (2,))
+    interface = scifem.find_interface(cell_tags, (1,), (2,))
 
     ref_ext_facets_1 = np.unique(np.concatenate([exterior_facet_indices, interface])).astype(
         np.int32
