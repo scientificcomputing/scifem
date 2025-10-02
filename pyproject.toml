@@ -33,7 +33,7 @@ docs = [
     "sphinx-codeautolink",
 ]
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
-test = ["pytest", "petsc4py", "h5py", "scifem[biomed]"]
+test = ["pkgconfig", "pytest", "petsc4py", "h5py", "scifem[biomed]"]
 biomed = ["nibabel"]
 all = ["scifem[docs,dev,test,adios2,h5py,biomed]"]
 petsc = ["petsc4py"]
