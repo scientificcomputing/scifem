@@ -127,7 +127,7 @@ def test_submesh_meshtags(edim):
     num_entities_local = emap.size_local
     subset_entities = np.arange(0, num_entities_local, 2, dtype=np.int32)
     # Include ghosts entities
-    subset_cells = scifem.mesh.reverse_mark_entities(emap, subset_entities)
+    subset_cells = scifem.reverse_mark_entities(emap, subset_entities)
 
     submesh, entity_to_parent, vertex_to_parent, _ = dolfinx.mesh.create_submesh(
         mesh, edim, subset_cells
@@ -148,7 +148,7 @@ def test_submesh_meshtags(edim):
             np.arange(num_parent_entities, dtype=np.int32),
             entity_communicator.array.astype(np.int32),
         )
-        sub_tag, sub_entity_to_parent = scifem.mesh.transfer_meshtags_to_submesh(
+        sub_tag, sub_entity_to_parent = scifem.transfer_meshtags_to_submesh(
             parent_tag, submesh, vertex_to_parent, entity_to_parent
         )
         submesh.topology.create_connectivity(i, edim)
@@ -199,7 +199,7 @@ def test_submesh_creator(codim, tdim, ghost_mode):
 
     # Constructor we are testing
     etag = dolfinx.mesh.meshtags(mesh, edim, entities[: emap.size_local], values[: emap.size_local])
-    submesh, cell_map, vertex_map, node_map, sub_etag = scifem.mesh.extract_submesh(
+    submesh, cell_map, vertex_map, node_map, sub_etag = scifem.extract_submesh(
         mesh, etag, (first_val, second_val)
     )
 
@@ -267,7 +267,7 @@ def test_find_interface(tdim, ghost_mode, dtype):
     values[dolfinx.mesh.locate_entities(mesh, tdim, half_entities)] = 2
     cell_tags = dolfinx.mesh.meshtags(mesh, tdim, all_cells, values)
 
-    interface = scifem.mesh.find_interface(cell_tags, (1,), (2,))
+    interface = scifem.find_interface(cell_tags, (1,), (2,))
 
     def ref_interface(x):
         return np.isclose(x[0], 0.5)
@@ -299,17 +299,17 @@ def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
     values[dolfinx.mesh.locate_entities(mesh, tdim, center)] = 2
     cell_tags = dolfinx.mesh.meshtags(mesh, tdim, all_cells, values)
 
-    ext_facets_1 = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (1,))
+    ext_facets_1 = scifem.compute_subdomain_exterior_facets(mesh, cell_tags, (1,))
 
     # Exterior facets for domain 1 are the original exterior facets + those at the interface
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     owned_exterior_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
-    exterior_facet_indices = scifem.mesh.reverse_mark_entities(
+    exterior_facet_indices = scifem.reverse_mark_entities(
         mesh.topology.index_map(tdim - 1), owned_exterior_facets
     )
 
     # Compute reference exterior facets by interface computations
-    interface = scifem.mesh.find_interface(cell_tags, (1,), (2,))
+    interface = scifem.find_interface(cell_tags, (1,), (2,))
 
     ref_ext_facets_1 = np.unique(np.concatenate([exterior_facet_indices, interface])).astype(
         np.int32
@@ -317,11 +317,11 @@ def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
     np.testing.assert_allclose(ext_facets_1, ref_ext_facets_1)
 
     # Exterior facets are only those at the interface
-    ext_facets_2 = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (2,))
+    ext_facets_2 = scifem.compute_subdomain_exterior_facets(mesh, cell_tags, (2,))
     np.testing.assert_allclose(ext_facets_2, interface)
 
     # Exterior facets are only exterior
-    ext_facets = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (1, 2))
+    ext_facets = scifem.compute_subdomain_exterior_facets(mesh, cell_tags, (1, 2))
     np.testing.assert_allclose(ext_facets, exterior_facet_indices)
 
 
@@ -385,7 +385,7 @@ def test_compute_interface_data(cell_type: dolfinx.mesh.CellType, Nx: int):
     mesh.topology.create_connectivity(tdim - 1, tdim)
     interface_facets = dolfinx.mesh.locate_entities(mesh, tdim - 1, interface)
 
-    interface_data = scifem.mesh.compute_interface_data(cell_tags, interface_facets)
+    interface_data = scifem.compute_interface_data(cell_tags, interface_facets)
 
     assert np.isin(interface_data[:, 0], cell_tags.find(val_small)).all()
     assert np.isin(interface_data[:, 2], cell_tags.find(val_big)).all()

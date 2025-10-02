@@ -13,12 +13,12 @@ def interpolate_function_onto_facet_dofs(
     facets: npt.NDArray[np.int32],
 ) -> dolfinx.fem.Function:
     """
-    Create a function $u_h\in Q$ such that $u_h=\text{expr}$ for all dofs belonging
+    Create a function :math:`u_h\\in Q` such that :math:`u_h=\\text{expr}` for all dofs belonging
     to a subset of ``facets``. All other dofs are set to zero.
 
     Note:
         The resulting function  is only correct in the "normal" direction,
-        i.e. :math:`u_{bc}\cdot n = expr`, while the tangential component is uncontrolled.
+        i.e. :math:`u_{bc}\\cdot n = expr`, while the tangential component is uncontrolled.
         This makes it hard to visualize the function when outputting it to file, either
         through interpolation to an appropriate DG space, or to a point-cloud.
 

@@ -10,15 +10,26 @@ from .bcs import interpolate_function_onto_facet_dofs
 from . import xdmf
 from .solvers import BlockedNewtonSolver, NewtonSolver
 from .spaces import create_real_functionspace, create_space_of_simple_functions
-from .mesh import create_entity_markers, transfer_meshtags_to_submesh
+from .mesh import (
+    compute_interface_data,
+    compute_subdomain_exterior_facets,
+    create_entity_markers,
+    extract_submesh,
+    find_interface,
+    transfer_meshtags_to_submesh,
+    reverse_mark_entities,
+)
 from .eval import evaluate_function
 
 __all__ = [
     "PointSource",
     "assemble_scalar",
     "create_space_of_simple_functions",
-    "xdmf",
+    "compute_interface_data",
+    "compute_subdomain_exterior_facets",
     "create_real_functionspace",
+    "extract_submesh",
+    "find_interface",
     "assemble_scalar",
     "PointSource",
     "xdmf",
@@ -29,6 +40,7 @@ __all__ = [
     "BlockedNewtonSolver",
     "transfer_meshtags_to_submesh",
     "evaluate_function",
+    "reverse_mark_entities",
     "norm",
     "interpolate_function_onto_facet_dofs",
 ]

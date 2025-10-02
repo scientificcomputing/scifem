@@ -39,7 +39,9 @@ jobs:
         run: apt-get update && apt-get install -y libgl1-mesa-dev xvfb
 
       - name: Install dependencies
-        run: python3 -m pip install --no-build-isolation ".[docs]"
+        run: |
+          python3 -m pip install -r build-requirements.txt
+          python3 -m pip install --check-build-dependencies --no-build-isolation ".[docs]"
 
       - name: Build docs
         run: jupyter book build --keep-going .
