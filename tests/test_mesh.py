@@ -299,7 +299,7 @@ def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
     values[dolfinx.mesh.locate_entities(mesh, tdim, center)] = 2
     cell_tags = dolfinx.mesh.meshtags(mesh, tdim, all_cells, values)
 
-    ext_facets_1 = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (1,))
+    ext_facets_1 = scifem.compute_subdomain_exterior_facets(mesh, cell_tags, (1,))
 
     # Exterior facets for domain 1 are the original exterior facets + those at the interface
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
@@ -317,11 +317,11 @@ def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
     np.testing.assert_allclose(ext_facets_1, ref_ext_facets_1)
 
     # Exterior facets are only those at the interface
-    ext_facets_2 = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (2,))
+    ext_facets_2 = scifem.compute_subdomain_exterior_facets(mesh, cell_tags, (2,))
     np.testing.assert_allclose(ext_facets_2, interface)
 
     # Exterior facets are only exterior
-    ext_facets = scifem.mesh.compute_subdomain_exterior_facets(mesh, cell_tags, (1, 2))
+    ext_facets = scifem.compute_subdomain_exterior_facets(mesh, cell_tags, (1, 2))
     np.testing.assert_allclose(ext_facets, exterior_facet_indices)
 
 
