@@ -5,7 +5,16 @@ import pytest
 import ufl
 import numpy as np
 
-@pytest.mark.parametrize("cell_type", [dolfinx.mesh.CellType.triangle, dolfinx.mesh.CellType.quadrilateral, dolfinx.mesh.CellType.tetrahedron, dolfinx.mesh.CellType.hexahedron])
+
+@pytest.mark.parametrize(
+    "cell_type",
+    [
+        dolfinx.mesh.CellType.triangle,
+        dolfinx.mesh.CellType.quadrilateral,
+        dolfinx.mesh.CellType.tetrahedron,
+        dolfinx.mesh.CellType.hexahedron,
+    ],
+)
 @pytest.mark.parametrize("use_petsc", [True, False])
 @pytest.mark.parametrize("degree", [1, 3, 5])
 def test_interpolation_matrix(use_petsc, cell_type, degree):
@@ -24,22 +33,23 @@ def test_interpolation_matrix(use_petsc, cell_type, degree):
     Q = dolfinx.fem.functionspace(mesh, ("Lagrange", degree))
 
     u = dolfinx.fem.Function(V)
-    u.interpolate(lambda x: x[0]**degree + x[1] if tdim == 2 else x[0] + x[1] + x[2]**degree)
-
+    u.interpolate(lambda x: x[0] ** degree + x[1] if tdim == 2 else x[0] + x[1] + x[2] ** degree)
 
     q = dolfinx.fem.Function(Q)
     expr = ufl.TrialFunction(V)
     if use_petsc:
         A = scifem.interpolation.petsc_interpolation_matrix(expr, Q)
         A.mult(u.x.petsc_vec, q.x.petsc_vec)
+        A.destroy()
     else:
         A = scifem.interpolation.interpolation_matrix(expr, Q)
-        A.mult(u.x, q.x)
-        q.x.scatter_forward()
-        mesh.comm.barrier()
-        print(A.data)
-        print(u.x.array, q.x.array)
-       
+        # Built in matrices has to use a special input vector, with additional ghosts.
+        _x = dolfinx.la.vector(A.index_map(1), A.block_size[1])
+        num_owned_dofs = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
+        _x.array[:num_owned_dofs] = u.x.array[:num_owned_dofs]
+        _x.scatter_forward()
+        A.mult(_x, q.x)
+
     q.x.scatter_forward()
 
     # Z = dolfinx.fem.interpolation_matrix(V, Q)
@@ -57,4 +67,4 @@ def test_interpolation_matrix(use_petsc, cell_type, degree):
 
     np.testing.assert_allclose(q.x.array, q_ref.x.array, rtol=1e-12, atol=1e-13)
 
-    print(q.x.array)    
+    # print(q.x.array)

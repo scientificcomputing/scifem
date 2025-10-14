@@ -92,7 +92,9 @@ def prepare_interpolation_data(
         cell_perm = mesh.topology.get_cell_permutation_info()[:num_cells]
 
         permuted_matrix = interpolated_matrix.flatten().copy()
-        Q.element.Tt_inv_apply(permuted_matrix, cell_perm, V.dofmap.bs * V.dofmap.dof_layout.num_dofs)
+        Q.element.Tt_inv_apply(
+            permuted_matrix, cell_perm, V.dofmap.bs * V.dofmap.dof_layout.num_dofs
+        )
     else:
         permuted_matrix = interpolated_matrix.flatten()
     return permuted_matrix.reshape(interpolated_matrix.shape)
@@ -139,13 +141,16 @@ def interpolation_matrix(
             A.add(A_local.flatten(), rows, cols)
             dofs_visited[rows] = 1
 
-    A = dolfinx.fem.create_matrix(a)#, dolfinx.la.BlockMode.expanded)
+    A = dolfinx.fem.create_matrix(a)  # , dolfinx.la.BlockMode.expanded)
 
     row_dofmap = unroll_dofmap(Q.dofmap.list, Q.dofmap.bs)  # (num_cells, num_rows)
     col_dofmap = unroll_dofmap(V.dofmap.list, V.dofmap.bs)  # (num_cells, num_cols)
 
     num_cells = Q.mesh.topology.index_map(Q.mesh.topology.dim).size_local
-    dofs_visited = np.zeros((Q.dofmap.index_map.size_local+Q.dofmap.index_map.num_ghosts) * Q.dofmap.index_map_bs, dtype=np.int8)
+    dofs_visited = np.zeros(
+        (Q.dofmap.index_map.size_local + Q.dofmap.index_map.num_ghosts) * Q.dofmap.index_map_bs,
+        dtype=np.int8,
+    )
     num_rows_local = Q.dofmap.index_map.size_local * Q.dofmap.bs
     scatter(A, num_cells, dofs_visited, num_rows_local, interpolation_data, row_dofmap, col_dofmap)
     A.scatter_reverse()
@@ -199,8 +204,13 @@ if dolfinx.has_petsc4py:
         row_dofmap = unroll_dofmap(Q.dofmap.list, Q.dofmap.bs)  # (num_cells, num_rows)
         col_dofmap = unroll_dofmap(V.dofmap.list, V.dofmap.bs)  # (num_cells, num_cols)
         num_cells = Q.mesh.topology.index_map(Q.mesh.topology.dim).size_local
-        dofs_visited = np.zeros((Q.dofmap.index_map.size_local+Q.dofmap.index_map.num_ghosts) * Q.dofmap.index_map_bs, dtype=np.int8)
+        dofs_visited = np.zeros(
+            (Q.dofmap.index_map.size_local + Q.dofmap.index_map.num_ghosts) * Q.dofmap.index_map_bs,
+            dtype=np.int8,
+        )
         num_rows_local = Q.dofmap.index_map.size_local * Q.dofmap.bs
-        scatter(A, num_cells, dofs_visited, num_rows_local, interpolation_data, row_dofmap, col_dofmap)
+        scatter(
+            A, num_cells, dofs_visited, num_rows_local, interpolation_data, row_dofmap, col_dofmap
+        )
         A.assemble()
         return A
