@@ -6,6 +6,9 @@ import ufl
 import numpy as np
 
 
+@pytest.mark.skipif(
+    np.issubdtype(dolfinx.default_scalar_type, np.complexfloating), reason="No complex support"
+)
 @pytest.mark.parametrize(
     "cell_type",
     [
@@ -60,6 +63,9 @@ def test_interpolation_matrix(use_petsc, cell_type, degree):
     np.testing.assert_allclose(q.x.array, q_ref.x.array, rtol=1e-12, atol=1e-13)
 
 
+@pytest.mark.skipif(
+    np.issubdtype(dolfinx.default_scalar_type, np.complexfloating), reason="No complex support"
+)
 @pytest.mark.skipif(
     not hasattr(dolfinx.fem, "discrete_gradient"),
     reason="Cannot verify without discrete gradient from DOLFINx",
@@ -136,6 +142,9 @@ def test_discrete_gradient(degree, use_petsc, cell_type):
     np.testing.assert_allclose(w.x.array, w_ref.x.array, rtol=1e-11, atol=1e-12)
 
 
+@pytest.mark.skipif(
+    np.issubdtype(dolfinx.default_scalar_type, np.complexfloating), reason="No complex support"
+)
 @pytest.mark.skipif(
     not hasattr(dolfinx.fem, "discrete_curl"),
     reason="Cannot verify without discrete curl from DOLFINx",
