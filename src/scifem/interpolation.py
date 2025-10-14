@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 from .utils import unroll_dofmap
 
-__all__ = ["interpolation_matrix"]
+__all__ = ["interpolation_matrix", "prepare_interpolation_data"]
 
 if dolfinx.has_petsc4py:
     from petsc4py import PETSc
@@ -15,6 +15,23 @@ if dolfinx.has_petsc4py:
 def prepare_interpolation_data(
     expr: ufl.core.expr.Expr, Q: dolfinx.fem.FunctionSpace
 ) -> npt.NDArray[np.inexact]:
+    """Convenience function for preparing data required for assembling the interpolation matrix
+
+    .. math::
+        \\begin{align*}
+        \\Lambda: V &\\rightarrow Q \\\\
+        \\Lambda u &= \\sum_{i=0}^{N_Q-1}\\sum_{j=0}^{N_V-1} \\phi_i l_i(expr(\\psi_j))u_j
+        \\end{align*}
+
+    where :math:`l_j` is the dual basis of the space :math:`Q` with basis functions :math:`\\phi_j`,
+    and :math:`\\psi_j` are the basis functions of the space :math:`V`.
+
+    Args:
+        expr: The UFL expression containing a trial function from space `V`
+        Q: Output interpolation space
+    Returns:
+        Interpolation data per cell, as an numpy array.
+    """
     try:
         q_points = Q.element.interpolation_points()
     except TypeError:
@@ -103,14 +120,25 @@ def prepare_interpolation_data(
 def interpolation_matrix(
     expr: ufl.core.expr.Expr, Q: dolfinx.fem.FunctionSpace
 ) -> dolfinx.la.MatrixCSR:
-    """
-    Create the interpolation matrix of a UFL expression (with trial function from space `V`)
-    to `Q` for `u` in `V`.
+    """Create the interpolation matrix :math:`\\Lambda` of a
+    :py:class:`UFL-expression<ufl.core.expr.Expr>` such that
+
+    .. math::
+        \\begin{align*}
+        \\Lambda: V &\\rightarrow Q \\\\
+        \\Lambda u &= \\sum_{i=0}^{N_Q-1}\\sum_{j=0}^{N_V-1} \\phi_i l_i(expr(\\psi_j))u_j
+        \\end{align*}
+
+    where :math:`l_j` is the dual basis of the space :math:`Q` with
+    basis functions :math:`\\phi_j`, and :math:`\\psi_j` are the basis functions of the
+    space :math:`V`.
+
     Args:
         expr: The UFL expression
         Q: Output interpolation space
+
     Returns:
-        Interpolation matrix
+        Interpolation matrix as a :py:class:`MatrixCSR<dolfinx.la.MatrixCSR>`.
     """
 
     arguments = ufl.algorithms.extract_arguments(expr)
@@ -162,16 +190,26 @@ if dolfinx.has_petsc4py:
     def petsc_interpolation_matrix(
         expr: ufl.core.expr.Expr, Q: dolfinx.fem.FunctionSpace, use_petsc: bool = False
     ) -> PETSc.Mat:
-        """
-        Create the interpolation matrix of a UFL expression (with trial function from space `V`)
-        to `Q` for `u` in `V`.
+        """Create the interpolation matrix :math:`\\Lambda` of a
+        :py:class:`UFL-expression<ufl.core.expr.Expr>` such that
+
+        .. math::
+            \\begin{align*}
+            \\Lambda: V &\\rightarrow Q \\\\
+            \\Lambda u &= \\sum_{i=0}^{N_Q-1}\\sum_{j=0}^{N_V-1} \\phi_i l_i(expr(\\psi_j))u_j
+            \\end{align*}
+
+        where :math:`l_j` is the dual basis of the space :math:`Q` with basis
+        functions :math:`\\phi_j`, and :math:`\\psi_j` are the basis functions
+        of the space :math:`V`.
+
         Args:
             expr: The UFL expression
             Q: Output interpolation space
-        Returns:
-            Interpolation matrix
-        """
 
+        Returns:
+            Interpolation matrix as a :py:class:`PETSc.Mat<petsc4py.PETSc.Mat>`.
+        """
         arguments = ufl.algorithms.extract_arguments(expr)
         assert len(arguments) == 1
         V = arguments[0].ufl_function_space()
