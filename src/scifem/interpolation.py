@@ -32,6 +32,9 @@ def prepare_interpolation_data(
     Returns:
         Interpolation data per cell, as an numpy array.
     """
+    if np.issubdtype(dolfinx.default_scalar_type, np.complexfloating):
+        raise NotImplementedError("No complex support")
+
     try:
         q_points = Q.element.interpolation_points()
     except TypeError:
