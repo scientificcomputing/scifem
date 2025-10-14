@@ -48,6 +48,8 @@ def test_interpolation_matrix(use_petsc, cell_type, degree):
         num_owned_dofs = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
         _x.array[:num_owned_dofs] = u.x.array[:num_owned_dofs]
         _x.scatter_forward()
+        if not hasattr(dolfinx.la.MatrixCSR, "mult"):
+            pytest.skip("MatrixCSR has no mult method")
         A.mult(_x, q.x)
 
     q.x.scatter_forward()
@@ -97,7 +99,12 @@ def test_discrete_gradient(degree, use_petsc, cell_type):
     G_ref = dolfinx.fem.discrete_gradient(V, W)
 
     # Built in matrices has to use a special input vector, with additional ghosts.
-    _x = dolfinx.la.vector(G_ref.index_map(1), G_ref.block_size[1])
+    try:
+        _x = dolfinx.la.vector(G_ref.index_map(1), G_ref.block_size[1])
+    except AttributeError:
+        # Bug in DOLFINx 0.9.0
+        _x = dolfinx.la.vector(G_ref.index_map(1), G_ref.bs[1])
+
     num_owned_dofs = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
     _x.array[:num_owned_dofs] = u.x.array[:num_owned_dofs]
     _x.scatter_forward()
@@ -107,12 +114,23 @@ def test_discrete_gradient(degree, use_petsc, cell_type):
         A.mult(u.x.petsc_vec, w.x.petsc_vec)
         A.destroy()
     else:
+        if not hasattr(dolfinx.la.MatrixCSR, "mult"):
+            pytest.skip("MatrixCSR has no mult method")
         A = scifem.interpolation.interpolation_matrix(expr, W)
         A.mult(_x, w.x)
     w.x.scatter_forward()
 
     w_ref = dolfinx.fem.Function(W)
-    G_ref.mult(_x, w_ref.x)
+    if not hasattr(dolfinx.la.MatrixCSR, "mult"):
+        # Fallback to PETSc discrete gradient on 0.9
+        pytest.mark.skipif(not dolfinx.has_petsc4py, reason="Cannot verify without petsc4py")
+        import dolfinx.fem.petsc as _petsc
+
+        G_ref = _petsc.discrete_gradient(V, W)
+        G_ref.assemble()
+        G_ref.mult(u.x.petsc_vec, w_ref.x.petsc_vec)
+    else:
+        G_ref.mult(_x, w_ref.x)
     w_ref.x.scatter_forward()
 
     np.testing.assert_allclose(w.x.array, w_ref.x.array, rtol=1e-11, atol=1e-12)
@@ -165,6 +183,8 @@ def test_discrete_curl(degree, use_petsc, cell_type):
         A.mult(u.x.petsc_vec, w.x.petsc_vec)
         A.destroy()
     else:
+        if not hasattr(dolfinx.la.MatrixCSR, "mult"):
+            pytest.skip("MatrixCSR has no mult method")
         A = scifem.interpolation.interpolation_matrix(expr, W)
         A.mult(_x, w.x)
     w.x.scatter_forward()
