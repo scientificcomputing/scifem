@@ -120,7 +120,7 @@ def interpolation_matrix(
     interpolation_data = prepare_interpolation_data(expr, Q)
 
     q = ufl.TestFunction(Q)
-    a = dolfinx.fem.form(ufl.inner(arguments[0], q) * ufl.dx)
+    a = dolfinx.fem.form(ufl.inner(expr, q) * ufl.dx)
 
     def scatter(
         A: dolfinx.la.MatrixCSR,
@@ -179,7 +179,7 @@ if dolfinx.has_petsc4py:
         interpolation_data = prepare_interpolation_data(expr, Q)
 
         q = ufl.TestFunction(Q)
-        a = dolfinx.fem.form(ufl.inner(arguments[0], q) * ufl.dx)
+        a = dolfinx.fem.form(ufl.inner(expr, q) * ufl.dx)
         A = dolfinx.fem.petsc.create_matrix(a)
 
         def scatter(
