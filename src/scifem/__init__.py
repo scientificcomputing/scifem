@@ -20,6 +20,8 @@ from .mesh import (
     reverse_mark_entities,
 )
 from .eval import evaluate_function
+from .interpolation import interpolation_matrix, prepare_interpolation_data
+
 
 __all__ = [
     "PointSource",
@@ -43,7 +45,15 @@ __all__ = [
     "reverse_mark_entities",
     "norm",
     "interpolate_function_onto_facet_dofs",
+    "interpolation_matrix",
+    "prepare_interpolation_data",
 ]
+
+
+if dolfinx.has_petsc4py:
+    from .interpolation import petsc_interpolation_matrix  # type: ignore
+
+    __all__ += ["petsc_interpolation_matrix"]
 
 
 def vertex_to_dofmap(V: dolfinx.fem.FunctionSpace) -> npt.NDArray[np.int32]:

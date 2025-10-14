@@ -18,6 +18,7 @@ The package is still in its early stages and many functionalities are still miss
 - Maps between degrees of freedom and vertices: `vertex_to_dofmap` and `dof_to_vertex`
 - Blocked Newton Solver
 - Function evaluation at specified points
+- Interpolation matrices from any `ufl.core.expr.Expr` into a compatible space.
 
 ## Installation
 
