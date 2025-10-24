@@ -9,6 +9,7 @@ import numpy.typing as npt
 from typing import Protocol
 from packaging.version import Version
 
+
 __all__ = [
     "create_entity_markers",
     "transfer_meshtags_to_submesh",
@@ -326,7 +327,9 @@ def compute_subdomain_exterior_facets(
 
 
 def compute_interface_data(
-    cell_tags: dolfinx.mesh.MeshTags, facet_indices: npt.NDArray[np.int32]
+    cell_tags: dolfinx.mesh.MeshTags,
+    facet_indices: npt.NDArray[np.int32],
+    include_ghosts: bool = True,
 ) -> npt.NDArray[np.int32]:
     """
     Compute interior facet integrals that are consistently ordered according to the `cell_tags`,
@@ -348,12 +351,44 @@ def compute_interface_data(
     else:
         fdim = cell_tags.dim - 1
         integration_args = (fdim,)
-    idata = dolfinx.cpp.fem.compute_integration_domains(
-        dolfinx.fem.IntegralType.interior_facet,
-        cell_tags.topology,
-        facet_indices,
-        *integration_args,
-    )
+    if include_ghosts:
+        if len(facet_indices) == 0:
+            return np.empty((0, 4), dtype=np.int32)
+        f_to_c = cell_tags.topology.connectivity(cell_tags.topology.dim - 1, cell_tags.topology.dim)
+        c_to_f = cell_tags.topology.connectivity(cell_tags.topology.dim, cell_tags.topology.dim - 1)
+
+        # Extract the cells connected to each facet.
+        # Assumption is that there can only be two cells per facet, and should always be
+        # two cells per facet.
+        num_cells_per_facet = f_to_c.offsets[facet_indices + 1] - f_to_c.offsets[facet_indices]
+        assert np.all(num_cells_per_facet == 2), "All facets must be interior facets."
+        facet_pos = np.vstack([f_to_c.offsets[facet_indices], f_to_c.offsets[facet_indices] + 1]).T
+        cells = f_to_c.array[facet_pos].flatten()
+        # Extract facets connected to all cells
+        # Assumption is that all cells have the same number of facets
+        num_facets_per_cell = c_to_f.offsets[1:] - c_to_f.offsets[:-1]
+        assert all(
+            num_facets_per_cell[cells.flatten()] == num_facets_per_cell[cells.flatten()[0]]
+        ), "Cells must have facets."
+        facets = np.vstack(
+            [
+                c_to_f.array[c_to_f.offsets[cells.flatten()] + i]
+                for i in range(num_facets_per_cell[cells.flatten()[0]])
+            ]
+        ).T
+        # Repeat facet indices twice to be able to do vectorized match
+        rep_fi = np.repeat(facet_indices, 2)
+        indicator = facets == rep_fi[:, None]
+        _row, local_pos = np.nonzero(indicator)
+        assert np.unique(_row).shape[0] == len(_row)
+        idata = np.vstack([cells, local_pos]).T.reshape(-1, 4)
+    else:
+        idata = dolfinx.cpp.fem.compute_integration_domains(
+            dolfinx.fem.IntegralType.interior_facet,
+            cell_tags.topology,
+            facet_indices,
+            *integration_args,
+        )
     ordered_idata = idata.reshape(-1, 4).copy()
     switch = cell_tags.values[ordered_idata[:, 0]] > cell_tags.values[ordered_idata[:, 2]]
     if True in switch:
