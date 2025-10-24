@@ -1,4 +1,5 @@
 from mpi4py import MPI
+from packaging.version import Version
 import dolfinx
 import scifem.interpolation
 import pytest
@@ -194,3 +195,121 @@ def test_discrete_curl(degree, use_petsc, cell_type):
     w_ref.x.scatter_forward()
 
     np.testing.assert_allclose(w.x.array, w_ref.x.array, rtol=1e-10, atol=1e-11)
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3])
+@pytest.mark.parametrize("family", ["Lagrange"])
+@pytest.mark.skipif(
+    Version(dolfinx.__version__) < Version("0.10.0"), reason="Requires DOLFINx version >0.10.0"
+)
+def test_interpolate_to_interface_submesh(family, degree):
+    # Create a unit square
+    comm = MPI.COMM_WORLD
+    domain = dolfinx.mesh.create_unit_square(
+        comm, 48, 48, ghost_mode=dolfinx.mesh.GhostMode.shared_facet
+    )
+
+    # Split unit square in two subdomains
+    cell_map = domain.topology.index_map(domain.topology.dim)
+    num_cells_local = cell_map.size_local + cell_map.num_ghosts
+    markers = np.full(num_cells_local, 1, dtype=np.int32)
+    markers[
+        dolfinx.mesh.locate_entities(domain, domain.topology.dim, lambda x: x[0] <= 0.5 + 1e-14)
+    ] = 2
+    ct = dolfinx.mesh.meshtags(
+        domain, domain.topology.dim, np.arange(num_cells_local, dtype=np.int32), markers
+    )
+
+    # Create submesh for each subdomain
+    omega_e, e_to_parent, _, _, _ = scifem.mesh.extract_submesh(domain, ct, (1,))
+    omega_i, i_to_parent, _, _, _ = scifem.mesh.extract_submesh(domain, ct, (2,))
+
+    # Compute submesh for the interface between omega_e and omega_i
+    interface_facets = scifem.mesh.find_interface(ct, (1,), (2,))
+    ft = dolfinx.mesh.meshtags(
+        domain,
+        domain.topology.dim - 1,
+        interface_facets,
+        np.full(interface_facets.shape, 1, dtype=np.int32),
+    )
+    ft.name = "facettag"
+
+    gamma, gamma_to_parent, _, _, _ = scifem.mesh.extract_submesh(domain, ft, 1)
+
+    num_facets_local = (
+        gamma.topology.index_map(gamma.topology.dim).size_local
+        + gamma.topology.index_map(gamma.topology.dim).num_ghosts
+    )
+    gamma_to_parent_map = gamma_to_parent.sub_topology_to_topology(
+        np.arange(num_facets_local, dtype=np.int32), inverse=False
+    )
+
+    # Create functions on each subdomain
+    def fe(x):
+        return x[0] + x[1] ** degree
+
+    def fi(x):
+        return np.sin(x[0]) + np.cos(x[1])
+
+    Ve = dolfinx.fem.functionspace(omega_e, (family, degree))
+    ue = dolfinx.fem.Function(Ve)
+    ue.interpolate(fe)
+    ue.x.scatter_forward()
+    Vi = dolfinx.fem.functionspace(omega_i, (family, degree))
+    ui = dolfinx.fem.Function(Vi)
+    ui.interpolate(fi)
+    ui.x.scatter_forward()
+
+    # Compute ordered integration entities on the interface
+    interface_integration_entities = scifem.compute_interface_data(
+        ct, facet_indices=gamma_to_parent_map, include_ghosts=True
+    )
+    mapped_entities = interface_integration_entities.copy()
+
+    # For each submesh, get the relevant integration entities
+    parent_to_e = e_to_parent.sub_topology_to_topology(
+        np.arange(num_cells_local, dtype=np.int32), inverse=True
+    )
+    parent_to_i = i_to_parent.sub_topology_to_topology(
+        np.arange(num_cells_local, dtype=np.int32), inverse=True
+    )
+    mapped_entities[:, 0] = parent_to_e[interface_integration_entities[:, 0]]
+    mapped_entities[:, 2] = parent_to_i[interface_integration_entities[:, 2]]
+    assert np.all(mapped_entities[:, 0] >= 0)
+    assert np.all(mapped_entities[:, 2] >= 0)
+
+    # Create two functions on the interface submesh
+    Q = dolfinx.fem.functionspace(gamma, (family, degree))
+    qe = dolfinx.fem.Function(Q)
+    qe.name = "qe"
+    qi = dolfinx.fem.Function(Q)
+    qi.name = "qi"
+
+    # Interpolate volume functions (on submesh) onto all cells of the interface submesh
+    scifem.interpolation.interpolate_to_surface_submesh(
+        ue, qe, np.arange(len(gamma_to_parent_map), dtype=np.int32), mapped_entities[:, :2]
+    )
+    qe.x.scatter_forward()
+    scifem.interpolation.interpolate_to_surface_submesh(
+        ui, qi, np.arange(len(gamma_to_parent_map), dtype=np.int32), mapped_entities[:, 2:]
+    )
+    qi.x.scatter_forward()
+
+    # Compute the difference between the two interpolated functions
+    I = dolfinx.fem.Function(Q)
+    I.x.array[:] = qe.x.array - qi.x.array
+    I.name = "i"
+
+    with dolfinx.io.VTXWriter(domain.comm, "interface.bp", [qe, qi, I]) as vtx:
+        vtx.write(0.0)
+
+    reference = dolfinx.fem.Function(Q)
+    reference.interpolate(lambda x: fe(x) - fi(x))
+
+    qe_ref = dolfinx.fem.Function(Q)
+    qe_ref.interpolate(fe)
+    qi_ref = dolfinx.fem.Function(Q)
+    qi_ref.interpolate(fi)
+    np.testing.assert_allclose(qe.x.array, qe_ref.x.array)
+    np.testing.assert_allclose(qi.x.array, qi_ref.x.array)
+    np.testing.assert_allclose(I.x.array, reference.x.array, rtol=1e-14, atol=1e-14)
