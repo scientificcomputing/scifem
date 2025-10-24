@@ -232,7 +232,6 @@ def test_interpolate_to_interface_submesh(family, degree):
         interface_facets,
         np.full(interface_facets.shape, 1, dtype=np.int32),
     )
-    ft.name = "facettag"
 
     gamma, gamma_to_parent, _, _, _ = scifem.mesh.extract_submesh(domain, ft, 1)
 
@@ -280,10 +279,8 @@ def test_interpolate_to_interface_submesh(family, degree):
 
     # Create two functions on the interface submesh
     Q = dolfinx.fem.functionspace(gamma, (family, degree))
-    qe = dolfinx.fem.Function(Q)
-    qe.name = "qe"
-    qi = dolfinx.fem.Function(Q)
-    qi.name = "qi"
+    qe = dolfinx.fem.Function(Q, name="qe")
+    qi = dolfinx.fem.Function(Q, name="qi")
 
     # Interpolate volume functions (on submesh) onto all cells of the interface submesh
     scifem.interpolation.interpolate_to_surface_submesh(
@@ -296,12 +293,8 @@ def test_interpolate_to_interface_submesh(family, degree):
     qi.x.scatter_forward()
 
     # Compute the difference between the two interpolated functions
-    I = dolfinx.fem.Function(Q)
+    I = dolfinx.fem.Function(Q, name="i")
     I.x.array[:] = qe.x.array - qi.x.array
-    I.name = "i"
-
-    with dolfinx.io.VTXWriter(domain.comm, "interface.bp", [qe, qi, I]) as vtx:
-        vtx.write(0.0)
 
     reference = dolfinx.fem.Function(Q)
     reference.interpolate(lambda x: fe(x) - fi(x))
