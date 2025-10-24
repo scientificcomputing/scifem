@@ -42,7 +42,7 @@ def test_XDMFFile_2D_dolfinx(cell_type, degree, value_shape, backend, use_ctx_ma
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10, cell_type, dtype=np.float64)
 
     el = basix.ufl.quadrature_element(
-        scheme="default", degree=degree, cell=mesh.ufl_cell().cellname(), value_shape=value_shape
+        scheme="default", degree=degree, cell=mesh.basix_cell(), value_shape=value_shape
     )
     V = dolfinx.fem.functionspace(mesh, el)
     u = dolfinx.fem.Function(V, dtype=stype)
@@ -111,7 +111,7 @@ def test_XDMFFile_2D_numpy(cell_type, degree, value_shape, backend, tmp_path):
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10, cell_type, dtype=np.float64)
 
     el = basix.ufl.quadrature_element(
-        scheme="default", degree=degree, cell=mesh.ufl_cell().cellname(), value_shape=value_shape
+        scheme="default", degree=degree, cell=mesh.basix_cell(), value_shape=value_shape
     )
     V = dolfinx.fem.functionspace(mesh, el)
     u = dolfinx.fem.Function(V, dtype=stype)
@@ -175,7 +175,7 @@ def test_XDMFFile_3D(cell_type, degree, value_shape, backend, use_ctx_manager, t
     mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 2, 3, 5, cell_type, dtype=np.float64)
 
     el = basix.ufl.quadrature_element(
-        scheme="default", degree=degree, cell=mesh.ufl_cell().cellname(), value_shape=value_shape
+        scheme="default", degree=degree, cell=mesh.basix_cell(), value_shape=value_shape
     )
     V = dolfinx.fem.functionspace(mesh, el)
     u = dolfinx.fem.Function(V, dtype=stype)
@@ -237,7 +237,7 @@ def test_create_ponitcloud_2D(cell_type, degree, value_shape, tmp_path):
     mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10, cell_type, dtype=np.float64)
 
     el = basix.ufl.quadrature_element(
-        scheme="default", degree=degree, cell=mesh.ufl_cell().cellname(), value_shape=value_shape
+        scheme="default", degree=degree, cell=mesh.basix_cell(), value_shape=value_shape
     )
     V = dolfinx.fem.functionspace(mesh, el)
     u = dolfinx.fem.Function(V)
@@ -268,7 +268,7 @@ def test_create_pointcloud_3D(cell_type, degree, value_shape, tmp_path):
     mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 2, 3, 5, cell_type, dtype=np.float64)
 
     el = basix.ufl.quadrature_element(
-        scheme="default", degree=degree, cell=mesh.ufl_cell().cellname(), value_shape=value_shape
+        scheme="default", degree=degree, cell=mesh.basix_cell(), value_shape=value_shape
     )
     V = dolfinx.fem.functionspace(mesh, el)
     u = dolfinx.fem.Function(V)
@@ -315,7 +315,7 @@ def test_h5py_fallback_3D(cell_type, degree, value_shape, tmp_path):
     mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 2, 3, 5, cell_type, dtype=np.float64)
 
     el = basix.ufl.quadrature_element(
-        scheme="default", degree=degree, cell=mesh.ufl_cell().cellname(), value_shape=value_shape
+        scheme="default", degree=degree, cell=mesh.basix_cell(), value_shape=value_shape
     )
     V = dolfinx.fem.functionspace(mesh, el)
     u = dolfinx.fem.Function(V)
