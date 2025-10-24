@@ -195,14 +195,9 @@ def extract_submesh(
     # Accumulate all entities, including ghosts, for the specfic set of tagged entities
     edim = entity_tag.dim
     mesh.topology.create_connectivity(edim, mesh.topology.dim)
-    emap = mesh.topology.index_map(entity_tag.dim)
-    marker = dolfinx.la.vector(emap)
     tags_as_arr = np.asarray(tags, dtype=entity_tag.values.dtype)
     all_tagged_indices = np.isin(entity_tag.values, tags_as_arr)
-    marker.array[entity_tag.indices[all_tagged_indices]] = 1
-    marker.scatter_reverse(dolfinx.la.InsertMode.add)
-    marker.scatter_forward()
-    entities = np.flatnonzero(marker.array)
+    entities = entity_tag.indices[all_tagged_indices]
     # Extract submesh
     submesh, cell_map, vertex_map, node_map = dolfinx.mesh.create_submesh(mesh, edim, entities)
 
@@ -261,7 +256,14 @@ def find_interface(
 
     # Compute intersecting facets
     interface_facets = np.intersect1d(facets0, facets1)
-    return reverse_mark_entities(facet_map, interface_facets)
+
+    reverse_mark_entities(facet_map, interface_facets)
+
+    topology.create_connectivity(tdim - 1, tdim)
+    f_to_c = topology.connectivity(tdim - 1, tdim)
+    num_cells_per_facet = f_to_c.offsets[interface_facets + 1] - f_to_c.offsets[interface_facets]
+    is_interface = interface_facets[num_cells_per_facet == 2]
+    return is_interface
 
 
 def compute_subdomain_exterior_facets(
