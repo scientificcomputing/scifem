@@ -38,7 +38,7 @@ if(DOLFINX_FOUND)
   message(STATUS "Found DOLFINx at ${DOLFINX_DIR}")
 endif()
 
-find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+find_package(Python COMPONENTS Interpreter Development.Module ${SKBUILD_SABI_COMPONENT} REQUIRED)
 
 # Detect the installed nanobind package and import it into CMake
 execute_process(
@@ -47,12 +47,30 @@ execute_process(
 list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
 find_package(nanobind CONFIG REQUIRED)
 
+
+if(NOT "${SKBUILD_SABI_VERSION}" STREQUAL "")
+  set(NANOBIND_SABI "STABLE_ABI")
+endif()
+
 # We are now ready to compile the actual extension module
 nanobind_add_module(
   _scifem
-  STABLE_ABI
+  ${NANOBIND_SABI}
   src/scifem.cpp
 )
+
+if(NANOBIND_SABI)
+  # mpi4py and petsc4py use generated Cython headers so tell
+  # them that the limited API is in use.
+  target_compile_definitions(_scifem PRIVATE MPI4PY_LIMITED_API=1)
+  # Needing to set CYTHON_COMPILING_IN_LIMITED_API is a bug in
+  # Cython-generated API headers, should become unnecessary with
+  # mpi4py/petsc4py releases published using Cython >= 3.1.4
+  # https://github.com/cython/cython/issues/7108
+  target_compile_definitions(_scifem PRIVATE CYTHON_COMPILING_IN_LIMITED_API=1)
+endif()
+
+
 target_link_libraries(_scifem PRIVATE dolfinx)
 
 set_target_properties(_scifem PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
