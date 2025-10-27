@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO)
 
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10, dolfinx.mesh.CellType.triangle, dtype=np.float64)
 el = basix.ufl.quadrature_element(
-    scheme="default", degree=3, cell=mesh.ufl_cell().cellname(), value_shape=()
+    scheme="default", degree=3, cell=mesh.basix_cell(), value_shape=()
 )
 V = dolfinx.fem.functionspace(mesh, el)
 u = dolfinx.fem.Function(V)
