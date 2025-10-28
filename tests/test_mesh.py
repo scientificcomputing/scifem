@@ -191,21 +191,23 @@ def test_submesh_creator(codim, tdim, ghost_mode):
     mesh.topology.create_entities(edim)
     emap = mesh.topology.index_map(edim)
 
-    # Only include entities on this process to check if `extract_mesh` correctly accumulates them.
-    entities = np.arange(emap.size_local + emap.num_ghosts, dtype=np.int32)
-    values = np.full_like(entities, 1, dtype=np.int32)
-    values[dolfinx.mesh.locate_entities(mesh, edim, first_marker)] = first_val
-    values[dolfinx.mesh.locate_entities(mesh, edim, second_marker)] = second_val
+    # Extract submesh no longer accumulates entities, so we mark the by hand
+    indicator = dolfinx.la.vector(emap, 1, dtype=np.int32)
+    indicator.array[:] = 0
+    indicator.array[dolfinx.mesh.locate_entities(mesh, edim, first_marker)] = first_val
+    indicator.array[dolfinx.mesh.locate_entities(mesh, edim, second_marker)] = second_val
+    indicator.scatter_reverse(dolfinx.la.InsertMode.insert)
+    indicator.scatter_forward()
 
     # Constructor we are testing
-    etag = dolfinx.mesh.meshtags(mesh, edim, entities[: emap.size_local], values[: emap.size_local])
+    etag = dolfinx.mesh.meshtags(mesh, edim, np.arange(emap.size_local + emap.num_ghosts, dtype=np.int32), indicator.array)
     submesh, cell_map, vertex_map, node_map, sub_etag = scifem.extract_submesh(
         mesh, etag, (first_val, second_val)
     )
 
     submap_array = scifem.mesh.get_entity_map(cell_map)
     parent_indices = submap_array[sub_etag.indices]
-    np.testing.assert_allclose(sub_etag.values, values[parent_indices])
+    np.testing.assert_allclose(sub_etag.values, indicator.array[parent_indices])
 
     # Create with standard constructor (reference)
     e_comm = dolfinx.la.vector(emap, 1)
@@ -273,7 +275,13 @@ def test_find_interface(tdim, ghost_mode, dtype):
         return np.isclose(x[0], 0.5)
 
     ref_interface_facets = dolfinx.mesh.locate_entities(mesh, tdim - 1, ref_interface)
-    np.testing.assert_allclose(interface, ref_interface_facets)
+    mesh.topology.create_connectivity(tdim - 1, tdim)
+    f_to_c = mesh.topology.connectivity(tdim - 1, tdim)
+    ref_twosided_facets = []
+    for f in ref_interface_facets:
+        if len(f_to_c.links(f)) == 2:
+            ref_twosided_facets.append(f)
+    np.testing.assert_allclose(interface, ref_twosided_facets)
 
 
 @pytest.mark.parametrize("dtype", [np.float64, np.float32])
