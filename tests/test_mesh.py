@@ -296,7 +296,7 @@ def test_find_interface(tdim, ghost_mode, dtype):
 def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
     comm = MPI.COMM_WORLD
     mesh = dolfinx.mesh.create_unit_cube(
-        comm, 10, 5, 7, cell_type=cell_type, ghost_mode=ghost_mode, dtype=dtype
+        comm, 13, 7, 11, cell_type=cell_type, ghost_mode=ghost_mode, dtype=dtype
     )
 
     def center(x):
@@ -305,35 +305,139 @@ def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
     tdim = mesh.topology.dim
     cell_map = mesh.topology.index_map(tdim)
     all_cells = np.arange(cell_map.size_local + cell_map.num_ghosts, dtype=np.int32)
-    values = np.full_like(all_cells, 1, dtype=np.int32)
-    values[dolfinx.mesh.locate_entities(mesh, tdim, center)] = 2
+    value_map = dolfinx.la.vector(cell_map, 1, dtype=np.int32)
+    value_map.array[:] = 0
+    value_map.array[dolfinx.mesh.locate_entities(mesh, tdim, center)] = 1
+    value_map.scatter_reverse(dolfinx.la.InsertMode.add)
+    value_map.scatter_forward()
+
+    values = np.ones_like(all_cells, dtype=np.int32)
+    values[value_map.array > 0] = 2
+
     cell_tags = dolfinx.mesh.meshtags(mesh, tdim, all_cells, values)
 
+    def boundary_check(mesh, facets, cell_tags, values):
+        is_in_subdomain = np.isin(cell_tags.values, np.asarray(values))
+        mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+        num_facets_local = mesh.topology.index_map(mesh.topology.dim - 1).size_local
+        f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+        cell_map = mesh.topology.index_map(mesh.topology.dim)
+        owned_facets_in_subdomain = []
+        owned_facets_on_outside = []
+        ghosted_facets_in_subdomain = []
+        ghosted_facets_on_outside = []
+
+        facet_map = mesh.topology.index_map(mesh.topology.dim - 1)
+
+        for facet in facets:
+            cells = f_to_c.links(facet)
+            if len(cells) != 1:
+                assert np.sum(is_in_subdomain[cells]) == 1
+            elif len(cells) == 1:
+                if facet < num_facets_local:
+                    # If connected to only one cell, we send it to the other process
+                    # that has it to verify that it is a boundary facet
+                    if is_in_subdomain[cells[0]]:
+                        owned_facets_in_subdomain.append(facet)
+                    else:
+                        owned_facets_on_outside.append(facet)
+                else:
+                    if is_in_subdomain[cells[0]]:
+                        ghosted_facets_in_subdomain.append(facet)
+                    else:
+                        ghosted_facets_on_outside.append(facet)
+        # Receive facets from other process that is on subdomain on that process
+        facet_vector = dolfinx.la.vector(
+            mesh.topology.index_map(mesh.topology.dim - 1), 1, dtype=np.int32
+        )
+        facet_vector.array[:] = 0
+        facet_vector.array[ghosted_facets_in_subdomain] = 1
+        facet_vector.scatter_reverse(dolfinx.la.InsertMode.add)
+
+        exterior_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
+        all_local_exterior_facets = scifem.reverse_mark_entities(facet_map, exterior_facets)
+
+        facets_inside_subdomain = np.flatnonzero(facet_vector.array[:num_facets_local]).astype(
+            np.int32
+        )
+        mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
+        for facet in facets_inside_subdomain:
+            cells = f_to_c.links(facet)
+            if facet in all_local_exterior_facets:
+                assert is_in_subdomain[cells[0]]
+                continue
+            if len(cells) == 1:
+                assert cells[0] < cell_map.size_local
+                assert not is_in_subdomain[cells[0]]
+            else:
+                assert len(cells) == 2
+                assert np.sum(is_in_subdomain[cells]) == 1
+
+        facet_vector.array[:] = 0
+        facet_vector.array[ghosted_facets_on_outside] = 1
+        facet_vector.scatter_reverse(dolfinx.la.InsertMode.add)
+        facets_outside_subdomain = np.flatnonzero(facet_vector.array[:num_facets_local]).astype(
+            np.int32
+        )
+        for facet in facets_outside_subdomain:
+            cells = f_to_c.links(facet)
+            if facet in all_local_exterior_facets:
+                assert is_in_subdomain[cells[0]]
+                continue
+            if len(cells) == 1:
+                assert cells[0] < cell_map.size_local
+                assert is_in_subdomain[cells[0]]
+            else:
+                assert len(cells) == 2
+                assert np.sum(is_in_subdomain[cells]) == 1
+
+        facet_vector.array[:] = 0
+        facet_vector.array[owned_facets_in_subdomain] = 1
+        facet_vector.scatter_forward()
+        facets_inside_subdomain = np.flatnonzero(facet_vector.array[num_facets_local:]).astype(
+            np.int32
+        )
+        for facet in facets_inside_subdomain:
+            cells = f_to_c.links(num_facets_local + facet)
+            if num_facets_local + facet in all_local_exterior_facets:
+                assert is_in_subdomain[cells[0]]
+                continue
+
+            if len(cells) == 1:
+                assert cells[0] <= cell_map.size_local
+                assert not is_in_subdomain[cells[0]]
+            else:
+                assert len(cells) == 2
+                assert np.sum(is_in_subdomain[cells]) == 1
+
+        facet_vector.array[:] = 0
+        facet_vector.array[owned_facets_on_outside] = 1
+        facet_vector.scatter_forward()
+        facets_outside_subdomain = np.flatnonzero(facet_vector.array[num_facets_local:]).astype(
+            np.int32
+        )
+        for facet in facets_outside_subdomain:
+            cells = f_to_c.links(num_facets_local + facet)
+            if num_facets_local + facet in all_local_exterior_facets:
+                assert is_in_subdomain[cells[0]]
+                continue
+            if len(cells) == 1:
+                assert cells[0] <= cell_map.size_local
+                assert is_in_subdomain[cells[0]]
+            else:
+                assert len(cells) == 2
+                assert np.sum(is_in_subdomain[cells]) == 1
+
     ext_facets_1 = scifem.compute_subdomain_exterior_facets(mesh, cell_tags, (1,))
-
-    # Exterior facets for domain 1 are the original exterior facets + those at the interface
-    mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
-    owned_exterior_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
-    exterior_facet_indices = scifem.reverse_mark_entities(
-        mesh.topology.index_map(tdim - 1), owned_exterior_facets
-    )
-
-    # Compute reference exterior facets by interface computations
-    twosided_interface = scifem.find_interface(cell_tags, (1,), (2,))
-    interface = scifem.reverse_mark_entities(mesh.topology.index_map(tdim - 1), twosided_interface)
-
-    ref_ext_facets_1 = np.unique(np.concatenate([exterior_facet_indices, interface])).astype(
-        np.int32
-    )
-    np.testing.assert_allclose(ext_facets_1, ref_ext_facets_1)
+    boundary_check(mesh, ext_facets_1, cell_tags, (1,))
 
     # Exterior facets are only those at the interface
     ext_facets_2 = scifem.compute_subdomain_exterior_facets(mesh, cell_tags, (2,))
-    np.testing.assert_allclose(ext_facets_2, interface)
+    boundary_check(mesh, ext_facets_2, cell_tags, (2,))
 
     # Exterior facets are only exterior
     ext_facets = scifem.compute_subdomain_exterior_facets(mesh, cell_tags, (1, 2))
-    np.testing.assert_allclose(ext_facets, exterior_facet_indices)
+    boundary_check(mesh, ext_facets, cell_tags, (1, 2))
 
 
 @pytest.mark.parametrize(
