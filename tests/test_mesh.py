@@ -200,7 +200,9 @@ def test_submesh_creator(codim, tdim, ghost_mode):
     indicator.scatter_forward()
 
     # Constructor we are testing
-    etag = dolfinx.mesh.meshtags(mesh, edim, np.arange(emap.size_local + emap.num_ghosts, dtype=np.int32), indicator.array)
+    etag = dolfinx.mesh.meshtags(
+        mesh, edim, np.arange(emap.size_local + emap.num_ghosts, dtype=np.int32), indicator.array
+    )
     submesh, cell_map, vertex_map, node_map, sub_etag = scifem.extract_submesh(
         mesh, etag, (first_val, second_val)
     )
@@ -317,7 +319,8 @@ def test_exterior_boundary_subdomain(dtype, ghost_mode, cell_type):
     )
 
     # Compute reference exterior facets by interface computations
-    interface = scifem.find_interface(cell_tags, (1,), (2,))
+    twosided_interface = scifem.find_interface(cell_tags, (1,), (2,))
+    interface = scifem.reverse_mark_entities(mesh.topology.index_map(tdim - 1), twosided_interface)
 
     ref_ext_facets_1 = np.unique(np.concatenate([exterior_facet_indices, interface])).astype(
         np.int32

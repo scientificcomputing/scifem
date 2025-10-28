@@ -329,7 +329,7 @@ def compute_subdomain_exterior_facets(
 def compute_interface_data(
     cell_tags: dolfinx.mesh.MeshTags,
     facet_indices: npt.NDArray[np.int32],
-    include_ghosts: bool = True,
+    include_ghosts: bool = False,
 ) -> npt.NDArray[np.int32]:
     """
     Compute interior facet integrals that are consistently ordered according to the `cell_tags`,
@@ -341,6 +341,8 @@ def compute_interface_data(
         cell_tags: MeshTags that must contain an integer marker for all cells adjacent
             to the `facet_indices`
         facet_indices: List of facets (local index) that are on the interface.
+        include_ghosts: If `True` integration entities will include facets that are ghosts on
+        the current process. This is for instance useful for interpolation on interior facets.
     Returns:
         The integration data.
     """
