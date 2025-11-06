@@ -28,7 +28,7 @@ repository = "https://github.com/scientificcomputing/scifem.git"
 h5py = ["h5py"]
 adios2 = ["adios2"]
 docs = [
-    "jupyter-book",
+    "jupyter-book<2.0",
     "jupytext",
     "pyvista[jupyter]",
     "sphinxcontrib-bibtex",
