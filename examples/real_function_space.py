@@ -6,62 +6,99 @@
 #
 # In this example we will show how to use the "real" function space to solve
 # a singular Poisson problem.
-# The problem at hand is:
+#
+# ## Mathematical formulation
+#  The problem at hand is:
 # Find $u \in H^1(\Omega)$ such that
+#
+# $$
 # \begin{align}
 # -\Delta u &= f \quad \text{in } \Omega, \\
 # \frac{\partial u}{\partial n} &= g \quad \text{on } \partial \Omega, \\
 # \int_\Omega u &= h.
 # \end{align}
+# $$
 #
-# ## Lagrange multiplier
+# ### Lagrange multiplier
 # We start by considering the equivalent optimization problem:
 # Find $u \in H^1(\Omega)$ such that
+#
+# $$
 # \begin{align}
-# \min_{u \in H^1(\Omega)} J(u) = \min_{u \in H^1(\Omega)} \frac{1}{2}\int_\Omega \vert \nabla u \cdot \nabla u \vert \mathrm{d}x - \int_\Omega f u \mathrm{d}x - \int_{\partial \Omega} g u \mathrm{d}s,
+#   \mathop{\mathrm{arg\,min}}_{u \in H^1(\Omega)}~J(u) =
+#   \mathop{\mathrm{arg\,min}}_{u \in H^1(\Omega)}~\frac{1}{2}\int_\Omega \vert \nabla u \cdot \nabla u \vert \mathrm{d}x
+#   - \int_\Omega f u \mathrm{d}x - \int_{\partial \Omega} g u \mathrm{d}s,
 # \end{align}
+# $$
+#
 # such that
+#
+# $$
 # \begin{align}
-# \int_\Omega u = h.
+#   \int_\Omega u = h.
 # \end{align}
+# $$
+#
 # We introduce a Lagrange multiplier $\lambda$ to enforce the constraint:
+#
+# $$
 # \begin{align}
-# \min_{u \in H^1(\Omega), \lambda\in \mathbb{R}} \mathcal{L}(u, \lambda) = \min_{u \in H^1(\Omega), \lambda\in \mathbb{R}} J(u) + \lambda (\int_\Omega u \mathrm{d}x-h).
+#   \mathop{\mathrm{arg\,min}}_{u \in H^1(\Omega), \lambda\in \mathbb{R}}~\mathcal{L}(u, \lambda) =
+#   \mathop{\mathrm{arg\,min}}_{u \in H^1(\Omega), \lambda\in \mathbb{R}} J(u) + \lambda (\int_\Omega u \mathrm{d}x-h).
 # \end{align}
+# $$
+#
 # We then compute the optimality conditions for the problem above
+#
+# $$
 # \begin{align}
 # \frac{\partial \mathcal{L}}{\partial u}[\delta u] &= \int_\Omega \nabla u \cdot \nabla \delta u \mathrm{d}x + \lambda\int \delta u \mathrm{d}x - \int_\Omega f \delta u ~\mathrm{d}x - \int_{\partial \Omega} g \delta u~\mathrm{d}s = 0, \\
 # \frac{\partial \mathcal{L}}{\partial \lambda}[\delta \lambda] &=\delta \lambda (\int_\Omega u \mathrm{d}x -h)= 0.
 # \end{align}
+# $$
+#
 # We write the weak formulation:
 #
 # $$
 # \begin{align}
-# \int_\Omega \nabla u \cdot \nabla \delta u~\mathrm{d}x + \int_\Omega \lambda \delta u~\mathrm{d}x = \int_\Omega f \delta u~\mathrm{d}x + \int_{\partial \Omega} g v \mathrm{d}s\\
-# \int_\Omega u \delta \lambda  \mathrm{d}x = h \delta \lambda .
+# \int_\Omega \nabla u \cdot \nabla \delta u~\mathrm{d}x + \int_\Omega \lambda \delta u~\mathrm{d}x &= \int_\Omega f \delta u~\mathrm{d}x + \int_{\partial \Omega} g v \mathrm{d}s\\
+# \int_\Omega u \delta \lambda  \mathrm{d}x &= h \delta \lambda .
 # \end{align}
 # $$
 #
 # where we have moved $\delta\lambda$ into the integral as it is a spatial constant.
 
 # ## Implementation
-# We start by creating the domain and derive the source terms $f$, $g$ and $h$ from our manufactured solution
-# For this example we will use the following exact solution
-# \begin{align}
-# u_{exact}(x, y) = 0.3y^2 + \sin(2\pi x).
-# \end{align}
+# We start by import the necessary modules
+# ```{admonition} Clickable functions/classes
+# Note that for the modules imported in this example, you can click on the function/class
+# name to be redirected to the corresponding documentation page.
+# ```
 
+# +
 from packaging.version import Version
 from mpi4py import MPI
 from petsc4py import PETSc
-from dolfinx.cpp.la.petsc import scatter_local_vectors, get_local_vectors
 import dolfinx.fem.petsc
 
 import numpy as np
 from scifem import create_real_functionspace, assemble_scalar
-from scifem.petsc import apply_lifting_and_set_bc, zero_petsc_vector
+from scifem.petsc import apply_lifting_and_set_bc
 import ufl
+import pyvista
+# -
 
+# We start by creating the domain using {py:mod}`dolfinx` and derive the source terms
+# $f$, $g$ and $h$ from our manufactured solution using {py:mod}`ufl`.
+# For this example we will use the following exact solution
+#
+# $$
+# \begin{align}
+#   u_{exact}(x, y) = 0.3y^2 + \sin(2\pi x).
+# \end{align}
+# $$
+
+# +
 M = 20
 mesh = dolfinx.mesh.create_unit_square(
     MPI.COMM_WORLD, M, M, dolfinx.mesh.CellType.triangle, dtype=np.float64
@@ -79,11 +116,22 @@ g = ufl.dot(ufl.grad(u_exact(x)), n)
 f = -ufl.div(ufl.grad(u_exact(x)))
 h = assemble_scalar(u_exact(x) * ufl.dx)
 
-# We then create the Lagrange multiplier space
+# -
+
+# ### Creating the real function space and mixed space
+# We then create the Lagrange multiplier space using {py:func}`scifem.create_real_functionspace`.
+# This creates a {py:class}`dolfinx.fem.FunctionSpace` with a single degree of freedom (constant) over the whole domain.
 
 R = create_real_functionspace(mesh)
 
 # Next, we can create a mixed-function space for our problem
+#
+# ```{admonition} Note on DOLFINx versions
+# The API for creating blocked problems in DOLFINx has vastly improved over the last few versions.
+# It is recommended to use DOLFINx v0.9.0 or later, where one can use {py:class}`ufl.MixedFunctionSpace`
+# to create a mixed-space of `M` number of spaces. One can then use {py:func}`ufl.TrialFunctions`
+# and {py:func}`ufl.TestFunctions` as one would do with a {py:func}`basix.ufl.mixed_element`.
+# ```
 
 if dolfinx.__version__ == "0.8.0":
     u = ufl.TrialFunction(V)
@@ -97,8 +145,10 @@ elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
 else:
     raise RuntimeError("Unsupported version of dolfinx")
 
+# ### Defining and assembling the variational problem
 # We can now define the variational problem
 
+# +
 zero = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(0.0))
 
 a00 = ufl.inner(ufl.grad(u), ufl.grad(du)) * ufl.dx
@@ -111,17 +161,18 @@ a = [[a00, a01], [a10, None]]
 L = [L0, L1]
 a_compiled = dolfinx.fem.form(a)
 L_compiled = dolfinx.fem.form(L)
+# -
 
 # Note that we have defined the variational form in a block form, and
 # that we have not included $h$ in the variational form. We will enforce this
 # once we have assembled the right hand side vector.
-
-# We can now assemble the matrix and vector
+# We can now assemble the matrix and vector usig {py:func}`dolfinx.fem.petsc.assemble_matrix`
+# and {py:func}`dolfinx.fem.petsc.assemble_vector`.
 
 try:
     A = dolfinx.fem.petsc.assemble_matrix_block(a_compiled)
 except AttributeError:
-    A = dolfinx.fem.petsc.assemble_matrix(a_compiled, kind="mpi")
+    A = dolfinx.fem.petsc.assemble_matrix(a_compiled)
 A.assemble()
 
 
@@ -143,7 +194,7 @@ except AttributeError:
 # We start by enforcing the multiplier constraint $h$ by modifying the right hand side vector.
 # On the main branch, this is greatly simplified
 
-
+# +
 uh = dolfinx.fem.Function(V, name="u")
 
 if main_assembly:
@@ -161,6 +212,7 @@ if main_assembly:
     # We destroy the temporary work vector after usage
     b_real_space.destroy()
 else:
+    from dolfinx.cpp.la.petsc import scatter_local_vectors, get_local_vectors
     if Version(dolfinx.__version__) < Version("0.9.0"):
         maps = [(V.dofmap.index_map, V.dofmap.index_map_bs), (R.dofmap.index_map, R.dofmap.index_map_bs)]
     else:
@@ -174,8 +226,12 @@ else:
             maps,
         )
     b.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+# -
 
-# We can now solve the linear system
+# ### Solving the linear system
+# We can now solve the linear system using {py:mod}`petsc4py`.
+
+# +
 ksp = PETSc.KSP().create(mesh.comm)
 ksp.setOperators(A)
 ksp.setType("preonly")
@@ -190,6 +246,7 @@ else:
 
 ksp.solve(b, xh)
 xh.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+# -
 
 # Finally, we extract the solution u from the blocked system and compute the error
 
@@ -208,16 +265,20 @@ xh.destroy()
 A.destroy()
 ksp.destroy()
 
-diff = uh - u_exact(x)
-error = dolfinx.fem.form(ufl.inner(diff, diff) * ufl.dx)
+# ### Post-processing
+# Finally, we compare our approximate solution with the exact solution
+# by computing the $L^2(\Omega)$ error.
+# We use the convenience function {py:func}`scifem.assemble_scalar` to compute the error.
 
+
+diff = uh - u_exact(x)
+error = ufl.inner(diff, diff) * ufl.dx
 print(f"L2 error: {np.sqrt(assemble_scalar(error)):.2e}")
 
 # We can now plot the solution
 
+# +
 vtk_mesh = dolfinx.plot.vtk_mesh(V)
-
-import pyvista
 
 pyvista.start_xvfb(1.0)
 grid = pyvista.UnstructuredGrid(*vtk_mesh)
@@ -229,3 +290,4 @@ plotter.add_mesh(grid, style="wireframe")
 plotter.add_mesh(warped)
 if not pyvista.OFF_SCREEN:
     plotter.show()
+# -

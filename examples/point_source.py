@@ -26,6 +26,7 @@
 # \end{align}
 # $$
 
+# +
 from mpi4py import MPI
 from petsc4py import PETSc
 
@@ -33,6 +34,7 @@ import dolfinx
 import ufl
 import numpy as np
 import scifem
+# -
 
 # We start by creating the mesh and function space.
 # To illustrate the usage the point source function, we will

@@ -1,0 +1,5 @@
+scikit-build-core[pyproject]>=0.11.0
+nanobind>=1.3.2
+setuptools>=77.0.3
+packaging>=24.2
+pkgconfig

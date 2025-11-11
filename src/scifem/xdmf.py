@@ -724,10 +724,10 @@ class BaseXDMFFile(abc.ABC):
         logger.debug("Closing ADIOS2 file")
         try:
             self._outfile.Close()
-        except ValueError:
-            pass
-        else:
             assert self._adios.RemoveIO("Point cloud writer")
+        except ValueError:
+            # File is allready closed
+            logger.debug("ADIOS2 file already closed")
 
     def close(self) -> None:
         """Close the XDMF file."""
@@ -808,6 +808,9 @@ class BaseXDMFFile(abc.ABC):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def __del__(self):
         self.close()
 
     def write(self, time: float) -> None:

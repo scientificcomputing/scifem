@@ -176,7 +176,9 @@ def test_lifting_helper(kind, alpha):
     else:
         lifting_bcs = bcs
 
-    b = dolfinx.fem.petsc.create_vector(L_compiled, kind=kind)
+    b = dolfinx.fem.petsc.create_vector(
+        dolfinx.fem.forms.extract_function_spaces(L_compiled), kind=kind
+    )
     scifem.petsc.zero_petsc_vector(b)
     scifem.petsc.apply_lifting_and_set_bc(b, a_compiled, lifting_bcs, alpha=alpha)
 
@@ -187,7 +189,9 @@ def test_lifting_helper(kind, alpha):
     dolfinx.fem.petsc.assemble_matrix(A, a_compiled)
     A.assemble()
 
-    g_ = dolfinx.fem.petsc.create_vector(L_compiled, kind=kind)
+    g_ = dolfinx.fem.petsc.create_vector(
+        dolfinx.fem.forms.extract_function_spaces(L_compiled), kind=kind
+    )
     scifem.petsc.zero_petsc_vector(g_)
 
     if kind is not None:
@@ -196,7 +200,9 @@ def test_lifting_helper(kind, alpha):
         bcs0 = bcs
     dolfinx.fem.petsc.set_bc(g_, bcs0)
 
-    b_ref = dolfinx.fem.petsc.create_vector(L_compiled, kind=kind)
+    b_ref = dolfinx.fem.petsc.create_vector(
+        dolfinx.fem.forms.extract_function_spaces(L_compiled), kind=kind
+    )
     A.mult(g_, b_ref)
     b_ref.scale(-alpha)
     dolfinx.fem.petsc.set_bc(b_ref, bcs0, alpha=alpha)

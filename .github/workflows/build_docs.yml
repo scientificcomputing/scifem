@@ -13,8 +13,16 @@ env:
 jobs:
 
   build:
+    name: Test on ${{ matrix.label }}
     runs-on: ubuntu-24.04
-    container: ghcr.io/fenics/dolfinx/lab:v0.9.0
+    container: ghcr.io/fenics/dolfinx/dolfinx:${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [
+          "stable",
+          "nightly"
+        ]
     env:
       PUBLISH_DIR: ./_build/html
       DISPLAY: ":99.0"
@@ -25,18 +33,21 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies for pyvista
         run: apt-get update && apt-get install -y libgl1-mesa-dev xvfb
 
       - name: Install dependencies
-        run: python3 -m pip install --no-build-isolation ".[docs]"
+        run: |
+          python3 -m pip install -r build-requirements.txt
+          python3 -m pip install --check-build-dependencies --no-build-isolation ".[docs]"
 
       - name: Build docs
-        run: jupyter book build -W --keep-going .
+        run: jupyter book build --keep-going .
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-artifact@v5
         with:
           path: ${{ env.PUBLISH_DIR }}
+          name: ${{ matrix.label }}-docs
