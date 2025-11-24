@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install dependencies for pyvista
         run: apt-get update && apt-get install -y libgl1-mesa-dev xvfb
