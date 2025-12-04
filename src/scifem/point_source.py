@@ -27,6 +27,7 @@ class PointSource:
         V: dolfinx.fem.FunctionSpace,
         points: npt.NDArray[np.float32] | npt.NDArray[np.float64],
         magnitude: np.floating | np.complexfloating = dolfinx.default_scalar_type(1),
+        tol: np.floating | None = None,
     ) -> None:
         """Initialize a point source.
 
@@ -35,6 +36,7 @@ class PointSource:
             points: The points where the point source is located.
                 Input shape: ``(num_points, 3)``
             magnitude: The magnitudes of the point sources.
+            tol: Tolerance for point location. If `None` 100 times machine epsilon is used.
 
         Note:
             Points should only be defined on one process. If they are sent in
@@ -57,19 +59,24 @@ class PointSource:
         self._basis_values = np.empty(
             (0, num_dofs), dtype=self._function_space.mesh.geometry.x.dtype
         )
-
+        self._tol = (
+            float(1e2 * np.finfo(self._input_points.dtype).eps) if tol is None else float(tol)
+        )
         self.recompute_sources()
         self.compute_cell_contributions()
 
-    def recompute_sources(self):
+    def recompute_sources(self, tol: float | None = None):
         """Recompute the what cells the point sources collide with.
 
         This function should be called if the mesh geometry has been modified.
+
+        Args:
+            tol: Tolerance for point location. If `None`, the tolerance from initialization is used.
         """
 
         # Determine what process owns a point and what cells it lies within
         mesh = self._function_space.mesh
-        tol = float(1e2 * np.finfo(self._input_points.dtype).eps)
+        tol = self._tol if tol is None else tol
         if dolfinx.__version__ == "0.8.0":
             src_ranks, _, self._points, self._cells = (
                 dolfinx.cpp.geometry.determine_point_ownership(
