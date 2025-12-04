@@ -9,7 +9,6 @@ from mpi4py import MPI
 from petsc4py import PETSc
 
 import dolfinx
-import dolfinx.fem.petsc
 import numpy as np
 import numpy.typing as npt
 import ufl
@@ -20,7 +19,21 @@ __all__ = ["PointSource"]
 
 
 class PointSource:
-    """Class for defining a point source in a given function space."""
+    """Class for defining a point source in a given function space.
+    Args:
+        V: The function space the point source is defined in.
+        points: The points where the point source is located.
+            Input shape: ``(num_points, 3)``
+        magnitude: The magnitudes of the point sources.
+        tol: Tolerance for point location. If `None` 100 times machine epsilon is used.
+
+    Note:
+        Points should only be defined on one process. If they are sent in
+        from multiple processes, multiple point sources will be created.
+
+    Note:
+        If the point source is outside the mesh, a ``ValueError`` will be raised.
+    """
 
     def __init__(
         self,
@@ -29,22 +42,6 @@ class PointSource:
         magnitude: np.floating | np.complexfloating = dolfinx.default_scalar_type(1),
         tol: np.floating | None = None,
     ) -> None:
-        """Initialize a point source.
-
-        Args:
-            V: The function space the point source is defined in.
-            points: The points where the point source is located.
-                Input shape: ``(num_points, 3)``
-            magnitude: The magnitudes of the point sources.
-            tol: Tolerance for point location. If `None` 100 times machine epsilon is used.
-
-        Note:
-            Points should only be defined on one process. If they are sent in
-            from multiple processes, multiple point sources will be created.
-
-        Note:
-            If the point source is outside the mesh, a ``ValueError`` will be raised.
-        """
         self._function_space = V
         if V.dofmap.bs > 1 and dolfinx.__version__ == "0.8.0":
             raise NotImplementedError(
