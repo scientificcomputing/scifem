@@ -133,7 +133,7 @@ R = create_real_functionspace(mesh)
 # and {py:func}`ufl.TestFunctions` as one would do with a {py:func}`basix.ufl.mixed_element`.
 # ```
 
-if dolfinx.__version__ == "0.8.0":
+if Version(dolfinx.__version__) == Version("0.8.0"):
     u = ufl.TrialFunction(V)
     lmbda = ufl.TrialFunction(R)
     du = ufl.TestFunction(V)
@@ -169,24 +169,24 @@ L_compiled = dolfinx.fem.form(L)
 # We can now assemble the matrix and vector usig {py:func}`dolfinx.fem.petsc.assemble_matrix`
 # and {py:func}`dolfinx.fem.petsc.assemble_vector`.
 
-try:
+if Version(dolfinx.__version__) < Version("0.10.0"):
     A = dolfinx.fem.petsc.assemble_matrix_block(a_compiled)
-except AttributeError:
+else:
     A = dolfinx.fem.petsc.assemble_matrix(a_compiled)
 A.assemble()
 
 
-# On the main branch of DOLFINx, the `assemble_vector` function for blocked spaces has been rewritten to reflect how
+# In DOLFINx>=v0.10.0, the `assemble_vector` function for blocked spaces has been rewritten to reflect how
 # it works for standard assembly and `nest` assembly. This means that lifting is applied manually.
 # In this case, with no Dirichlet BC, we could skip those steps.
 # However, for clarity we include them here.
 
 bcs = []
-main_assembly = False
-try:
+
+
+if Version(dolfinx.__version__) < Version("0.10.0"):
     b = dolfinx.fem.petsc.assemble_vector_block(L_compiled, a_compiled, bcs=bcs)
-except AttributeError:
-    main_assembly = True
+else:
     b = dolfinx.fem.petsc.assemble_vector(L_compiled, kind="mpi")
     apply_lifting_and_set_bc(b, a_compiled, bcs=bcs)
 
@@ -197,7 +197,7 @@ except AttributeError:
 # +
 uh = dolfinx.fem.Function(V, name="u")
 
-if main_assembly:
+if Version(dolfinx.__version__) >= Version("0.10.0"):
     # We start by inserting the value in the real space
     rh = dolfinx.fem.Function(R)
     rh.x.array[0] = h
@@ -239,7 +239,7 @@ pc = ksp.getPC()
 pc.setType("lu")
 pc.setFactorSolverType("mumps")
 
-if main_assembly:
+if Version(dolfinx.__version__) >= Version("0.10.0"):
     xh = b.duplicate()
 else:
     xh = dolfinx.fem.petsc.create_vector_block(L_compiled)
@@ -251,7 +251,7 @@ xh.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 # Finally, we extract the solution u from the blocked system and compute the error
 
 uh = dolfinx.fem.Function(V, name="u")
-if main_assembly:
+if Version(dolfinx.__version__) >= Version("0.10.0"):
     dolfinx.fem.petsc.assign(xh, [uh, rh])
 else:
     x_local = get_local_vectors(xh, maps)
@@ -280,7 +280,6 @@ print(f"L2 error: {np.sqrt(assemble_scalar(error)):.2e}")
 # +
 vtk_mesh = dolfinx.plot.vtk_mesh(V)
 
-pyvista.start_xvfb(1.0)
 grid = pyvista.UnstructuredGrid(*vtk_mesh)
 grid.point_data["u"] = uh.x.array.real
 

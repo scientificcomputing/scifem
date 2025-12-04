@@ -30,7 +30,7 @@ adios2 = ["adios2"]
 docs = [
     "jupyter-book<2.0",
     "jupytext",
-    "pyvista[jupyter]",
+    "pyvista[all]>=0.45.0",
     "sphinxcontrib-bibtex",
     "sphinx-codeautolink",
 ]

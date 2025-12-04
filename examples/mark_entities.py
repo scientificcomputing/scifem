@@ -44,7 +44,6 @@ cell_tag = create_entity_markers(mesh, mesh.topology.dim, [(1, left), (3, right)
 
 import pyvista
 
-pyvista.start_xvfb()
 vtk_grid = dolfinx.plot.vtk_mesh(mesh, cell_tag.dim, cell_tag.indices)
 grid = pyvista.UnstructuredGrid(*vtk_grid)
 grid.cell_data["Marker"] = cell_tag.values

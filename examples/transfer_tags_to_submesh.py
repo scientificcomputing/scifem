@@ -73,9 +73,6 @@ else:
 
 # + tags=["hide-input"]
 
-if sys.platform == "linux" and (os.getenv("CI") or pyvista.OFF_SCREEN):
-    pyvista.start_xvfb(0.05)
-
 
 def plot_mesh(mesh: dolfinx.mesh.Mesh, values=None):
     """

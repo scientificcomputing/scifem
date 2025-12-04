@@ -11,7 +11,6 @@ env:
   DISPLAY: ":99.0"
 
 jobs:
-
   build:
     name: Test on ${{ matrix.label }}
     runs-on: ubuntu-24.04
@@ -19,15 +18,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        label: [
-          "stable",
-          "nightly"
-        ]
+        label: ["stable", "nightly"]
     env:
       PUBLISH_DIR: ./_build/html
-      DISPLAY: ":99.0"
-      PYVISTA_TRAME_SERVER_PROXY_PREFIX: "/proxy/"
-      PYVISTA_TRAME_SERVER_PROXY_ENABLED: "True"
       PYVISTA_OFF_SCREEN: false
       PYVISTA_JUPYTER_BACKEND: "html"
 
@@ -36,7 +29,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install dependencies for pyvista
-        run: apt-get update && apt-get install -y libgl1-mesa-dev xvfb
+        run: apt-get update && apt-get install -y libgl1-mesa-dev mesa-utils
 
       - name: Install dependencies
         run: |

@@ -174,7 +174,6 @@ solver.solve()
 # Finally, we can visualize the solution using `pyvista`
 
 import pyvista
-pyvista.start_xvfb()
 p = pyvista.Plotter()
 topology, cell_types, geometry = dolfinx.plot.vtk_mesh(V)
 grid = pyvista.UnstructuredGrid(topology, cell_types, geometry)
