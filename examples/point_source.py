@@ -122,7 +122,6 @@ uh.x.scatter_forward()
 
 import pyvista
 
-pyvista.start_xvfb()
 topology, cell_types, geometry = dolfinx.plot.vtk_mesh(V)
 values = np.zeros((geometry.shape[0], 3), dtype=np.float64)
 values[:, :len(uh)] = uh.x.array.real.reshape((geometry.shape[0], len(uh)))

@@ -41,7 +41,6 @@ u.interpolate(lambda x: np.sin(np.pi * x[0]) * np.sin(np.pi * x[1]))
 
 import pyvista
 
-pyvista.start_xvfb()
 plotter = pyvista.Plotter()
 plotter.add_points(
     V.tabulate_dof_coordinates(),
