@@ -52,7 +52,7 @@ class PointSource:
             )
         if points.ndim == 1:
             points = points.reshape(1, -3)
-        elif points.ndim == 2 and points.shape[1]!= 3:
+        elif points.ndim == 2 and points.shape[1] != 3:
             raise ValueError(f"Points should have shape (num_points, 3), got {points.shape}")
 
         self._input_points = points
