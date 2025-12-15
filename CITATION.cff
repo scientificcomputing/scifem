@@ -1,17 +1,17 @@
-abstract: '<p>Testing bump my version, no significant changes.</p>
+abstract: "<p>Testing bump my version, no significant changes.</p>
 
-  <p><strong>Full Changelog</strong>: https://github.com/scientificcomputing/scifem/compare/v0.2.0...v0.2.2</p>'
+  <p><strong>Full Changelog</strong>: https://github.com/scientificcomputing/scifem/compare/v0.15.1...v0.15.0</p>"
 authors:
-- affiliation: Simula Research Laboratoy
-  family-names: Henrik Finsberg
-- affiliation: Simula Research Laboratory
-  family-names: "Jørgen Schartum Dokken"
+  - affiliation: Simula Research Laboratoy
+    family-names: Henrik Finsberg
+  - affiliation: Simula Research Laboratory
+    family-names: "Jørgen Schartum Dokken"
 cff-version: 1.2.0
-date-released: '2024-09-18'
-doi: 10.5281/zenodo.13784791
+date-released: "2025-12-15"
+doi: 10.5281/zenodo.13784777
 license:
-- cc-by-4.0
-repository-code: https://github.com/scientificcomputing/scifem/tree/v0.2.2
-title: 'scientificcomputing/scifem: v0.2.2'
+  - cc-by-4.0
+repository-code: https://github.com/scientificcomputing/scifem/tree/v0.15.1
+title: "scientificcomputing/scifem: v0.15.1"
 type: software
-version: v0.2.2
+version: v0.15.1
