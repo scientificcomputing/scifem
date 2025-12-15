@@ -1,6 +1,6 @@
 abstract: "<p>Testing bump my version, no significant changes.</p>
 
-  <p><strong>Full Changelog</strong>: https://github.com/scientificcomputing/scifem/compare/v0.15.1...v0.15.0</p>"
+  <p><strong>Full Changelog</strong>: https://github.com/scientificcomputing/scifem/compare/v0.15.2...v0.15.1</p>"
 authors:
   - affiliation: Simula Research Laboratoy
     family-names: Henrik Finsberg
@@ -9,9 +9,8 @@ authors:
 cff-version: 1.2.0
 date-released: "2025-12-15"
 doi: 10.5281/zenodo.13784777
-license:
-  - cc-by-4.0
-repository-code: https://github.com/scientificcomputing/scifem/tree/v0.15.1
-title: "scientificcomputing/scifem: v0.15.1"
+license: MIT
+repository-code: https://github.com/scientificcomputing/scifem/tree/v0.15.2
+title: "scientificcomputing/scifem: v0.15.2"
 type: software
-version: v0.15.1
+version: v0.15.2
