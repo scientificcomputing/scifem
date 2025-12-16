@@ -145,3 +145,9 @@ current_version = "0.15.2"
 filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
+
+
+[[tool.bumpversion.files]]
+filename = "CITATION.cff"
+search = 'version: v{current_version}'
+replace = 'version: v{new_version}'
