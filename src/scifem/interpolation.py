@@ -55,8 +55,6 @@ def prepare_interpolation_data(
     array_evaluated = compiled_expr.eval(mesh, np.arange(num_cells, dtype=np.int32))
     assert np.prod(Q.value_shape) == np.prod(expr.ufl_shape)
 
-    im = Q.element.basix_element.interpolation_matrix
-
     # Get data as (num_cells*num_points,1, expr_shape, num_test_basis_functions*test_block_size)
     expr_size = int(np.prod(expr.ufl_shape))
     array_evaluated = array_evaluated.reshape(
@@ -73,19 +71,29 @@ def prepare_interpolation_data(
         num_cells * num_points, mesh.geometry.dim, mesh.topology.dim
     )
 
-    Q_vs = Q.element.basix_element.value_size
+    try:
+        Q_vs = Q.element.basix_element.value_size
+    except RuntimeError:
+        Q_vs = 1  # If we do not have a basix element, assume value size is 1
+
     new_array = np.zeros(
         (num_cells * num_points, Q.dofmap.bs * Q_vs, V.dofmap.bs * V.dofmap.dof_layout.num_dofs),
         dtype=np.float64,
     )
-    for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
-        for q in range(Q.dofmap.bs):
-            new_array[:, q * Q_vs : (q + 1) * Q_vs, i] = Q.element.basix_element.pull_back(
-                array_evaluated[:, :, q * Q_vs : (q + 1) * Q_vs, i], jacs, detJs, Ks
-            ).reshape(num_cells * num_points, Q_vs)
-    new_array = new_array.reshape(
-        num_cells, num_points, Q.dofmap.bs * Q_vs, V.dofmap.bs * V.dofmap.dof_layout.num_dofs
-    )
+    if not isinstance(Q.ufl_element().pullback, ufl.pullback.IdentityPullback):
+        for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
+            for q in range(Q.dofmap.bs):
+                new_array[:, q * Q_vs : (q + 1) * Q_vs, i] = Q.element.basix_element.pull_back(
+                    array_evaluated[:, :, q * Q_vs : (q + 1) * Q_vs, i], jacs, detJs, Ks
+                ).reshape(num_cells * num_points, Q_vs)
+        new_array = new_array.reshape(
+            num_cells, num_points, Q.dofmap.bs * Q_vs, V.dofmap.bs * V.dofmap.dof_layout.num_dofs
+        )
+    else:
+        new_array = array_evaluated.reshape(
+            num_cells, num_points, Q.dofmap.bs * Q_vs, V.dofmap.bs * V.dofmap.dof_layout.num_dofs
+        )
+
     interpolated_matrix = np.zeros(
         (
             num_cells,
@@ -94,6 +102,11 @@ def prepare_interpolation_data(
         ),
         dtype=np.float64,
     )
+
+    if Q.element.interpolation_ident:
+        im = np.eye(Q.element.interpolation_points.shape[0])
+    else:
+        im = Q.element.basix_element.interpolation_matrix
 
     for c in range(num_cells):
         for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
