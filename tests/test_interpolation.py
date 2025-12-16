@@ -5,6 +5,7 @@ import scifem.interpolation
 import pytest
 import ufl
 import numpy as np
+import basix.ufl
 
 
 @pytest.mark.skipif(
@@ -20,8 +21,10 @@ import numpy as np
     ],
 )
 @pytest.mark.parametrize("use_petsc", [True, False])
-@pytest.mark.parametrize("degree", [1, 3, 5])
-def test_interpolation_matrix(use_petsc, cell_type, degree):
+@pytest.mark.parametrize("degree", [2, 4])
+@pytest.mark.parametrize("out_family", ["Lagrange", "DG", "Quadrature"])
+@pytest.mark.parametrize("value_shape", [(), (2,), (2, 3)])
+def test_interpolation_matrix(use_petsc, cell_type, degree, out_family, value_shape):
     if use_petsc:
         pytest.importorskip("petsc4py")
 
@@ -33,14 +36,24 @@ def test_interpolation_matrix(use_petsc, cell_type, degree):
     else:
         raise ValueError("Unsupported cell type")
 
-    V = dolfinx.fem.functionspace(mesh, ("DG", degree))
-    Q = dolfinx.fem.functionspace(mesh, ("Lagrange", degree))
+    V = dolfinx.fem.functionspace(mesh, ("DG", degree, value_shape))
+    if out_family == "Quadrature":
+        el = basix.ufl.quadrature_element(mesh.basix_cell(), degree=degree, value_shape=value_shape)
+    else:
+        el = (out_family, degree, value_shape)
+    Q = dolfinx.fem.functionspace(mesh, el)
+
+    def f(x):
+        scalar_val = x[0] ** degree + x[1] if tdim == 2 else x[0] + x[1] + x[2] ** degree
+        vs = int(np.prod(value_shape))
+        return np.tile(scalar_val, vs).reshape(vs, -1)
 
     u = dolfinx.fem.Function(V)
-    u.interpolate(lambda x: x[0] ** degree + x[1] if tdim == 2 else x[0] + x[1] + x[2] ** degree)
+    u.interpolate(f)
 
     q = dolfinx.fem.Function(Q)
     expr = ufl.TrialFunction(V)
+
     if use_petsc:
         A = scifem.interpolation.petsc_interpolation_matrix(expr, Q)
         A.mult(u.x.petsc_vec, q.x.petsc_vec)
@@ -59,7 +72,15 @@ def test_interpolation_matrix(use_petsc, cell_type, degree):
     q.x.scatter_forward()
 
     q_ref = dolfinx.fem.Function(Q)
-    q_ref.interpolate(u)
+    if out_family == "Quadrature":
+        try:
+            ip = Q.element.interpolation_points()
+        except TypeError:
+            ip = Q.element.interpolation_points
+        u_expr = dolfinx.fem.Expression(u, ip)
+        q_ref.interpolate(u_expr)
+    else:
+        q_ref.interpolate(u)
 
     np.testing.assert_allclose(q.x.array, q_ref.x.array, rtol=1e-12, atol=1e-13)
 
