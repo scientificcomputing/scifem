@@ -60,16 +60,6 @@ def prepare_interpolation_data(
     array_evaluated = array_evaluated.reshape(
         num_cells * q_points.shape[0], 1, expr_size, V.dofmap.bs * V.dofmap.dof_layout.num_dofs
     )
-    jacobian = dolfinx.fem.Expression(ufl.Jacobian(mesh), q_points)
-    detJ = dolfinx.fem.Expression(ufl.JacobianDeterminant(mesh), q_points)
-    K = dolfinx.fem.Expression(ufl.JacobianInverse(mesh), q_points)
-    jacs = jacobian.eval(mesh, np.arange(num_cells, dtype=np.int32)).reshape(
-        num_cells * num_points, mesh.geometry.dim, mesh.topology.dim
-    )
-    detJs = detJ.eval(mesh, np.arange(num_cells, dtype=np.int32)).flatten()
-    Ks = K.eval(mesh, np.arange(num_cells, dtype=np.int32)).reshape(
-        num_cells * num_points, mesh.geometry.dim, mesh.topology.dim
-    )
 
     try:
         Q_vs = Q.element.basix_element.value_size
@@ -81,6 +71,17 @@ def prepare_interpolation_data(
         dtype=np.float64,
     )
     if not isinstance(Q.ufl_element().pullback, ufl.pullback.IdentityPullback):
+        jacobian = dolfinx.fem.Expression(ufl.Jacobian(mesh), q_points)
+        detJ = dolfinx.fem.Expression(ufl.JacobianDeterminant(mesh), q_points)
+        K = dolfinx.fem.Expression(ufl.JacobianInverse(mesh), q_points)
+        jacs = jacobian.eval(mesh, np.arange(num_cells, dtype=np.int32)).reshape(
+            num_cells * num_points, mesh.geometry.dim, mesh.topology.dim
+        )
+        detJs = detJ.eval(mesh, np.arange(num_cells, dtype=np.int32)).flatten()
+        Ks = K.eval(mesh, np.arange(num_cells, dtype=np.int32)).reshape(
+            num_cells * num_points, mesh.geometry.dim, mesh.topology.dim
+        )
+
         for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
             for q in range(Q.dofmap.bs):
                 new_array[:, q * Q_vs : (q + 1) * Q_vs, i] = Q.element.basix_element.pull_back(
