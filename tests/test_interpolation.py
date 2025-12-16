@@ -46,7 +46,10 @@ def test_interpolation_matrix(use_petsc, cell_type, degree, out_family, value_sh
     def f(x):
         scalar_val = x[0] ** degree + x[1] if tdim == 2 else x[0] + x[1] + x[2] ** degree
         vs = int(np.prod(value_shape))
-        return np.tile(scalar_val, vs).reshape(vs, -1)
+        f_rep = np.tile(scalar_val, vs).reshape(vs, -1)
+        for i in range(vs):
+            f_rep[i] += np.pi * (i+1)
+        return f_rep
 
     u = dolfinx.fem.Function(V)
     u.interpolate(f)
