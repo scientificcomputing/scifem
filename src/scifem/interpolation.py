@@ -104,22 +104,30 @@ def prepare_interpolation_data(
     )
 
     if Q.element.interpolation_ident:
-        im = np.eye(Q.element.interpolation_points.shape[0])
-    else:
-        im = Q.element.basix_element.interpolation_matrix
+        # Smart vectorized version with identity mapping
+        if Q.dofmap.bs == 1:
+            interpolated_matrix = new_array.transpose(0, 2, 1, 3).reshape(new_array.shape[0], new_array.shape[1] * new_array.shape[2], new_array.shape[3])
+        else:
+            i_scalar = new_array.transpose(0, 2, 1, 3)
+            interpolated_matrix = np.zeros((new_array.shape[0], new_array.shape[1] * new_array.shape[2], new_array.shape[3]))
+            for q in range(Q.dofmap.bs):
+                interpolated_matrix[:, q::Q.dofmap.bs, :] = i_scalar[:, q, :, :]
 
-    for c in range(num_cells):
-        for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
-            tmp_array = np.zeros((int(num_points), Q.dofmap.bs * Q_vs), dtype=np.float64)
-            for p in range(num_points):
-                tmp_array[p] = new_array[c, p, :, i]
-            if Q.dofmap.bs == 1:
-                interpolated_matrix[c, :, i] = (im @ tmp_array.T.flatten()).flatten()
-            else:
-                for q in range(Q.dofmap.bs):
-                    interpolated_matrix[c, q :: Q.dofmap.bs, i] = (
-                        im @ tmp_array.T[q].flatten()
-                    ).flatten()
+    else:
+        # Tedious non-identity version
+        im = Q.element.basix_element.interpolation_matrix
+        for c in range(num_cells):
+            for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
+                tmp_array = np.zeros((int(num_points), Q.dofmap.bs * Q_vs), dtype=np.float64)
+                for p in range(num_points):
+                    tmp_array[p] = new_array[c, p, :, i]
+                if Q.dofmap.bs == 1:
+                    interpolated_matrix[c, :, i] = (im @ tmp_array.T.flatten()).flatten()
+                else:
+                    for q in range(Q.dofmap.bs):
+                        interpolated_matrix[c, q :: Q.dofmap.bs, i] = (
+                            im @ tmp_array.T[q].flatten()
+                        ).flatten()
     # Apply dof transformation to each column (using Piopla maps)
     mesh.topology.create_entity_permutations()
     if Q.element.needs_dof_transformations:
