@@ -106,12 +106,16 @@ def prepare_interpolation_data(
     if Q.element.interpolation_ident:
         # Smart vectorized version with identity mapping
         if Q.dofmap.bs == 1:
-            interpolated_matrix = new_array.transpose(0, 2, 1, 3).reshape(new_array.shape[0], new_array.shape[1] * new_array.shape[2], new_array.shape[3])
+            interpolated_matrix = new_array.transpose(0, 2, 1, 3).reshape(
+                new_array.shape[0], new_array.shape[1] * new_array.shape[2], new_array.shape[3]
+            )
         else:
             i_scalar = new_array.transpose(0, 2, 1, 3)
-            interpolated_matrix = np.zeros((new_array.shape[0], new_array.shape[1] * new_array.shape[2], new_array.shape[3]))
+            interpolated_matrix = np.zeros(
+                (new_array.shape[0], new_array.shape[1] * new_array.shape[2], new_array.shape[3])
+            )
             for q in range(Q.dofmap.bs):
-                interpolated_matrix[:, q::Q.dofmap.bs, :] = i_scalar[:, q, :, :]
+                interpolated_matrix[:, q :: Q.dofmap.bs, :] = i_scalar[:, q, :, :]
 
     else:
         # Tedious non-identity version
