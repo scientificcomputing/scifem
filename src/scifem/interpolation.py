@@ -61,15 +61,26 @@ def prepare_interpolation_data(
         num_cells * q_points.shape[0], 1, expr_size, V.dofmap.bs * V.dofmap.dof_layout.num_dofs
     )
 
+    # Check if we are dealing with a quadrature element or not.
+    # They do not have a complete DOLFINx API, which makes them tricky to use.
     try:
-        Q_vs = Q.element.basix_element.value_size
+        basix_el = Q.element.basix_element
+        Q_vs = basix_el.value_size
+        pull_back = basix_el.pull_back
+        im = basix_el.interpolation_matrix
     except RuntimeError:
         Q_vs = 1  # If we do not have a basix element, assume value size is 1
+        assert isinstance(Q.ufl_element().pullback, ufl.pullback.IdentityPullback)
+        pull_back = lambda x: None
+        assert Q.element.interpolation_ident
+        im = None
 
     new_array = np.zeros(
         (num_cells * num_points, Q.dofmap.bs * Q_vs, V.dofmap.bs * V.dofmap.dof_layout.num_dofs),
         dtype=np.float64,
     )
+
+    # Check if pullback is identity, then we can skip this step
     if not isinstance(Q.ufl_element().pullback, ufl.pullback.IdentityPullback):
         jacobian = dolfinx.fem.Expression(ufl.Jacobian(mesh), q_points)
         detJ = dolfinx.fem.Expression(ufl.JacobianDeterminant(mesh), q_points)
@@ -84,7 +95,7 @@ def prepare_interpolation_data(
 
         for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
             for q in range(Q.dofmap.bs):
-                new_array[:, q * Q_vs : (q + 1) * Q_vs, i] = Q.element.basix_element.pull_back(
+                new_array[:, q * Q_vs : (q + 1) * Q_vs, i] = pull_back(
                     array_evaluated[:, :, q * Q_vs : (q + 1) * Q_vs, i], jacs, detJs, Ks
                 ).reshape(num_cells * num_points, Q_vs)
         new_array = new_array.reshape(
@@ -103,7 +114,8 @@ def prepare_interpolation_data(
         ),
         dtype=np.float64,
     )
-
+    # Check if interpolation matrix of dual operator is identity, then we can use a vectorized
+    # version of this step
     if Q.element.interpolation_ident:
         # Smart vectorized version with identity mapping
         if Q.dofmap.bs == 1:
@@ -120,7 +132,6 @@ def prepare_interpolation_data(
 
     else:
         # Tedious non-identity version
-        im = Q.element.basix_element.interpolation_matrix
         for c in range(num_cells):
             for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
                 tmp_array = np.zeros((int(num_points), Q.dofmap.bs * Q_vs), dtype=np.float64)
