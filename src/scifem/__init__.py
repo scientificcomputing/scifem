@@ -26,7 +26,7 @@ from .interpolation import interpolation_matrix, prepare_interpolation_data
 meta = metadata("scifem")
 __version__ = meta["Version"]
 __author__ = meta.get("Author", "")
-__license__ = meta["License"]
+__license__ = meta.get("License", "MIT")
 __email__ = meta["Author-email"]
 __program_name__ = meta["Name"]
 
