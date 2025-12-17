@@ -1,16 +1,16 @@
-abstract: "<p>Testing bump my version, no significant changes.</p>
+abstract: "<p>Major improvements for interpolation matrix.</p>
 
-  <p><strong>Full Changelog</strong>: https://github.com/scientificcomputing/scifem/compare/v0.15.2...v0.15.1</p>"
+  <p><strong>Full Changelog</strong>: https://github.com/scientificcomputing/scifem/compare/v0.15.6...v0.15.2</p>"
 authors:
   - affiliation: Simula Research Laboratoy
     family-names: Henrik Finsberg
   - affiliation: Simula Research Laboratory
     family-names: "Jørgen Schartum Dokken"
 cff-version: 1.2.0
-date-released: "2025-12-15"
+date-released: "2025-12-17"
 doi: 10.5281/zenodo.13784777
 license: MIT
-repository-code: https://github.com/scientificcomputing/scifem/tree/v0.15.2
-title: "scientificcomputing/scifem: v0.15.2"
+repository-code: https://github.com/scientificcomputing/scifem/tree/v0.16.0
+title: "scientificcomputing/scifem: v0.16.0"
 type: software
-version: v0.15.2
+version: v0.16.0
