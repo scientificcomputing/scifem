@@ -1,4 +1,5 @@
 from __future__ import annotations
+from importlib.metadata import metadata
 
 import dolfinx
 import numpy as np
@@ -22,8 +23,20 @@ from .mesh import (
 from .eval import evaluate_function
 from .interpolation import interpolation_matrix, prepare_interpolation_data
 
+meta = metadata("scifem")
+__version__ = meta["Version"]
+__author__ = meta.get("Author", "")
+__license__ = meta.get("License", "MIT")
+__email__ = meta["Author-email"]
+__program_name__ = meta["Name"]
 
 __all__ = [
+    "meta",
+    "__version__",
+    "__author__",
+    "__license__",
+    "__email__",
+    "__program_name__",
     "PointSource",
     "assemble_scalar",
     "create_space_of_simple_functions",

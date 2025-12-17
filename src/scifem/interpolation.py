@@ -14,7 +14,9 @@ if dolfinx.has_petsc4py:
 
 
 def prepare_interpolation_data(
-    expr: ufl.core.expr.Expr, Q: dolfinx.fem.FunctionSpace
+    expr: ufl.core.expr.Expr,
+    Q: dolfinx.fem.FunctionSpace,
+    interpolation_entities: npt.NDArray[np.int32] | None = None,
 ) -> npt.NDArray[np.inexact]:
     """Convenience function for preparing data required for assembling the interpolation matrix
 
@@ -30,29 +32,60 @@ def prepare_interpolation_data(
     Args:
         expr: The UFL expression containing a trial function from space `V`
         Q: Output interpolation space
+        interpolation_entities: Entities of the domain of the input space `V` that one
+            should evaluate the `expr` at. If not provided, it is assumed that
+            we are integrating over all cells in `V` and that `Q` is defined on the same grid.
     Returns:
         Interpolation data per cell, as an numpy array.
     """
     if np.issubdtype(dolfinx.default_scalar_type, np.complexfloating):
         raise NotImplementedError("No complex support")
 
+    # Extract argument from expr (in V)
+    arguments = ufl.algorithms.extract_arguments(expr)
+    assert len(arguments) == 1
+    V = arguments[0].ufl_function_space()
+
+    mesh = V.mesh
+
+    if Q.mesh.topology.dim == V.mesh.topology.dim:
+        if interpolation_entities is None:
+            tdim = mesh.topology.dim
+            num_cells = mesh.topology.index_map(tdim).size_local
+            interpolation_entities = np.arange(num_cells, dtype=np.int32)
+        else:
+            if (ndim := interpolation_entities.ndim) != 1:
+                raise ValueError(
+                    f"Interpolation entities has wrong input shape, should be 1D, got {ndim}"
+                )
+            num_cells = len(interpolation_entities)
+    elif Q.mesh.topology.dim == V.mesh.topology.dim - 1:
+        if interpolation_entities is None:
+            raise ValueError(
+                "For integration onto a submesh of codim 1,"
+                + "the integration entities has to be provided"
+            )
+        else:
+            if (ndim := interpolation_entities.ndim) != 2:
+                raise ValueError(
+                    f"Interpolation entities has wrong input shape, should be 2D, got {ndim}"
+                )
+            num_cells = interpolation_entities.shape[0]
+    else:
+        raise RuntimeError("Only codim-1 interpolation matrices can be defined")
+
+    # Extract quadrature points for expression (in Q space)
     try:
         q_points = Q.element.interpolation_points()
     except TypeError:
         q_points = Q.element.interpolation_points
 
-    arguments = ufl.algorithms.extract_arguments(expr)
-    assert len(arguments) == 1
-    V = arguments[0].ufl_function_space()
-
+    # Compile expression
     num_points = q_points.shape[0]
     compiled_expr = dolfinx.fem.Expression(expr, q_points)
-    mesh = Q.mesh
-    tdim = mesh.topology.dim
-    num_cells = mesh.topology.index_map(tdim).size_local
-    #
+
     # (num_cells, num_points, num_dofs*bs, expr_value_size)
-    array_evaluated = compiled_expr.eval(mesh, np.arange(num_cells, dtype=np.int32))
+    array_evaluated = compiled_expr.eval(mesh, interpolation_entities)
     assert np.prod(Q.value_shape) == np.prod(expr.ufl_shape)
 
     # Get data as (num_cells*num_points,1, expr_shape, num_test_basis_functions*test_block_size)
