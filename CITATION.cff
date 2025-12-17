@@ -1,6 +1,6 @@
 abstract: "<p>Major improvements for interpolation matrix.</p>
 
-  <p><strong>Full Changelog</strong>: https://github.com/scientificcomputing/scifem/compare/v0.15.6...v0.15.2</p>"
+  <p><strong>Full Changelog</strong>: https://github.com/scientificcomputing/scifem/compare/v0.16.0...v0.15.2</p>"
 authors:
   - affiliation: Simula Research Laboratoy
     family-names: Henrik Finsberg
