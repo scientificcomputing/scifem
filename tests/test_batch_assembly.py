@@ -25,9 +25,11 @@ F = ufl.inner(u, v) * ufl.dx \
     +ufl.inner(u, v) * ufl.ds \
     + ufl.inner(u, v) * ufl.ds(subdomain_data=ft, subdomain_id=(1,2))
 
-# Work on exterior facets tomorrow
-def create_batched_form(F: ufl.Form, num_batches: int, entity_maps:list[dolfinx.mesh.EntityMap]=None) -> list[dolfinx.fem.Form]:
-    integrals = F.integrals()
+
+def extract_integration_domains(form: ufl.Form)->tuple[ufl.Form, dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
+    """Extract integration domains from form and replace everywhere integrals with a unique tag index."""
+
+    integrals = form.integrals()
     new_integrals = []
 
     # Given old form, extract tagged entities at this point   
@@ -36,8 +38,6 @@ def create_batched_form(F: ufl.Form, num_batches: int, entity_maps:list[dolfinx.
     for integral in integrals:
         itg_type = integral.integral_type()
         integral_types.add(itg_type)
-        itg_domain = integral.ufl_domain()
-        #itg_data = old_subdomain_data[itg_domain][itg_type]
         itg_id = integral.subdomain_id()
         if itg_id != "everywhere":
             if isinstance(itg_id, int):
@@ -108,6 +108,19 @@ def create_batched_form(F: ufl.Form, num_batches: int, entity_maps:list[dolfinx.
                 entities = np.arange(num_entities_local)
             integration_entities = dolfinx.cpp.fem.compute_integration_domains(dfx_type, topology, entities)
             integral_data[dfx_type].append((everywhere_tag, integration_entities))
+
+
+# def create_idata_batches(idata: dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]], max_batches:int = 10, min_batch_size: int = 10) -> list[dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
+#     batched_integral_data = []
+#     for itg_type, (tag, )
+#     breakpoint()
+
+
+# Work on exterior facets tomorrow
+def create_batched_form(F: ufl.Form, num_batches: int, entity_maps:list[dolfinx.mesh.EntityMap]=None) -> list[dolfinx.fem.Form]:
+    new_form, integral_data = extract_integration_domains(F)
+    batched_integral_data = create_idata_batches(integral_data)
+    breakpoint()
     function_spaces = [arg.ufl_function_space() for arg in new_form.arguments()]
     coefficient_map = {coeff:coeff for coeff in new_form.coefficients()}
     constant_map = {const: const for const in new_form.constants()}
