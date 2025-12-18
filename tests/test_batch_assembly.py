@@ -20,10 +20,10 @@ ft = dolfinx.mesh.meshtags(mesh, mesh.topology.dim-1, facets, np.ones_like(facet
 
 v = ufl.TestFunction(V)
 
-F = ufl.inner(u, v) * ufl.dx \
-    + ufl.inner(u, v) * ufl.dx(subdomain_data=ct, subdomain_id=4)\
-    +ufl.inner(u, v) * ufl.ds \
-    + ufl.inner(u, v) * ufl.ds(subdomain_data=ft, subdomain_id=(1,2))
+F = ufl.inner(u, v) * ufl.dx #\
+    #+ ufl.inner(u, v) * ufl.dx(subdomain_data=ct, subdomain_id=4)\
+    #+ufl.inner(u, v) * ufl.ds \
+    #+ ufl.inner(u, v) * ufl.ds(subdomain_data=ft, subdomain_id=(1,2))
 
 
 def extract_integration_domains(form: ufl.Form)->tuple[ufl.Form, dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
@@ -111,17 +111,17 @@ def extract_integration_domains(form: ufl.Form)->tuple[ufl.Form, dict[dolfinx.fe
         return new_form, integral_data
 
 def create_idata_batches(idata: dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]], max_batches:int = 10, min_batch_size: int = 10) -> list[dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
-    batched_integral_data = []
-    for itg_type, (tag, integration_entities) in idata.items():
+    # batched_integral_data = []
+    # for itg_type, (tag, integration_entities) in idata.items():
 
-        breakpoint()
-
+    #     breakpoint()
+    pass
 
 # Work on exterior facets tomorrow
 def create_batched_form(F: ufl.Form, num_batches: int, entity_maps:list[dolfinx.mesh.EntityMap]=None) -> list[dolfinx.fem.Form]:
     new_form, integral_data = extract_integration_domains(F)
-    batched_integral_data = create_idata_batches(integral_data)
-    breakpoint()
+    # batched_integral_data = create_idata_batches(integral_data)
+    # breakpoint()
     function_spaces = [arg.ufl_function_space() for arg in new_form.arguments()]
     coefficient_map = {coeff:coeff for coeff in new_form.coefficients()}
     constant_map = {const: const for const in new_form.constants()}
