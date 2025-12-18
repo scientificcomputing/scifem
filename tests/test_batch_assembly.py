@@ -1,29 +1,11 @@
+
+
 from mpi4py import MPI
+from petsc4py import PETSc
 import dolfinx.fem.petsc
 import ufl
 import numpy as np
-
-mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 5, 5)
-num_cells_local = mesh.topology.index_map(mesh.topology.dim).size_local
-ct = dolfinx.mesh.meshtags(mesh, mesh.topology.dim, np.arange(num_cells_local, dtype=np.int32), np.ones(num_cells_local, dtype=np.int32))
-V = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
-u = dolfinx.fem.Function(V)
-u.interpolate(lambda x: x[0] + x[1]**2)
-
-mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
-num_facets_local = mesh.topology.index_map(mesh.topology.dim-1).size_local
-def marker(x):
-    return x[0]<x[1]
-facets = dolfinx.mesh.locate_entities(mesh, mesh.topology.dim-1, marker)
-ft = dolfinx.mesh.meshtags(mesh, mesh.topology.dim-1, facets, np.ones_like(facets))
-
-
-v = ufl.TestFunction(V)
-
-F= ufl.inner(u, v) * ufl.dx(subdomain_data=ct, subdomain_id=4)\
-   +ufl.inner(u, v) * ufl.dx \
-    +ufl.inner(u, v) * ufl.ds \
-    + ufl.inner(u, v) * ufl.ds(subdomain_data=ft, subdomain_id=(1,2))
+import time
 
 def extract_integration_domains(form: ufl.Form)->tuple[ufl.Form, dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
     """Extract integration domains from form and replace everywhere integrals with a unique tag index."""
@@ -109,26 +91,21 @@ def extract_integration_domains(form: ufl.Form)->tuple[ufl.Form, dict[dolfinx.fe
             integral_data[dfx_type].append((everywhere_tag, integration_entities))
     return new_form, integral_data
 
-def compute_stride_distribution(M, max_batches, min_batch_size):
+def compute_stride_distribution(M, max_batches):
     stride_offset = np.zeros(max_batches + 1, dtype=np.int32)
     if M == 0:
         return stride_offset
     data_per_stride = np.zeros(max_batches)
-    if M < min_batch_size:
-        data_per_stride[0] = M
-        stride_offset[1:] = np.cumsum(data_per_stride)
-        return stride_offset
 
-    num_batches = min(M // min_batch_size, max_batches)
-    remainders = M % num_batches
-    data_per_stride[:num_batches] = M // num_batches
+    data_per_batch = M // max_batches
+    remainders = M % max_batches
+    data_per_stride[:max_batches] = data_per_batch
     data_per_stride[:remainders] += 1
- 
     assert int(np.sum(data_per_stride)) == M
     stride_offset[1:] = np.cumsum(data_per_stride)
     return stride_offset.astype(np.int32)
 
-def create_idata_batches(idata: dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]], num_batches:int = 10, min_batch_size: int = 10) -> list[dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
+def create_idata_batches(idata: dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]], num_batches:int = 10) -> list[dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
     batched_integral_data = [{itg_type: [] for itg_type in idata.keys()} for _ in range(num_batches)]
     estride = {dolfinx.fem.IntegralType.cell: 1,
                dolfinx.fem.IntegralType.exterior_facet: 2,
@@ -139,16 +116,15 @@ def create_idata_batches(idata: dict[dolfinx.fem.IntegralType, list[tuple[int, n
         for (tag, itg_entities) in integration_entities:
             assert len(itg_entities)% estride[itg_type] == 0
             num_entities = len(itg_entities)//estride[itg_type]
-            stride_dist = compute_stride_distribution(num_entities, num_batches, min_batch_size)*int(estride[itg_type])
+            stride_dist = compute_stride_distribution(num_entities, num_batches)*int(estride[itg_type])
             for i in range(num_batches):
                 batched_integral_data[i][itg_type].append((tag, itg_entities[stride_dist[i]:stride_dist[i+1]]))
     return batched_integral_data
 
 
-# Work on exterior facets tomorrow
-def create_batched_form(F: ufl.Form, num_batches: int, min_batch_size: int, entity_maps:list[dolfinx.mesh.EntityMap]=None) -> list[dolfinx.fem.Form]:
+def create_batched_form(F: ufl.Form, num_batches: int, entity_maps:list[dolfinx.mesh.EntityMap]=None) -> list[dolfinx.fem.Form]:
     new_form, integral_data = extract_integration_domains(F)
-    batched_integral_data = create_idata_batches(integral_data, num_batches=num_batches, min_batch_size=min_batch_size)
+    batched_integral_data = create_idata_batches(integral_data, num_batches=num_batches)
     function_spaces = [arg.ufl_function_space() for arg in new_form.arguments()]
     coefficient_map = {coeff:coeff for coeff in new_form.coefficients()}
     constant_map = {const: const for const in new_form.constants()}
@@ -162,16 +138,46 @@ def create_batched_form(F: ufl.Form, num_batches: int, min_batch_size: int, enti
 
     return F_batched
 
-F_c = dolfinx.fem.form(F)
-Fs = create_batched_form(F, 10, 10)
+if __name__ == "__main__":
+    M = 400
+    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 200, 200)
+    num_cells_local = mesh.topology.index_map(mesh.topology.dim).size_local
+    ct = dolfinx.mesh.meshtags(mesh, mesh.topology.dim, np.arange(num_cells_local, dtype=np.int32), np.ones(num_cells_local, dtype=np.int32))
+    V = dolfinx.fem.functionspace(mesh, ("Lagrange", 8))
+    u = dolfinx.fem.Function(V)
+    u.interpolate(lambda x: x[0] + x[1]**2)
+
+    mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
+    num_facets_local = mesh.topology.index_map(mesh.topology.dim-1).size_local
+    def marker(x):
+        return x[0]<x[1]
+    facets = dolfinx.mesh.locate_entities(mesh, mesh.topology.dim-1, marker)
+    ft = dolfinx.mesh.meshtags(mesh, mesh.topology.dim-1, facets, np.ones_like(facets))
 
 
+    v = ufl.TestFunction(V)
+
+    F= ufl.inner(u, v) * ufl.dx(subdomain_data=ct, subdomain_id=4)\
+    +ufl.inner(u, v) * ufl.dx \
+        +ufl.inner(u, v) * ufl.ds \
+        + ufl.inner(u, v) * ufl.ds(subdomain_data=ft, subdomain_id=(1,2))
 
 
-b = dolfinx.fem.petsc.assemble_vector(F_c)
+    start = time.perf_counter()
+    num_batches = 1000
+    Fs = create_batched_form(F, num_batches=num_batches)    
+    b_batched = dolfinx.fem.petsc.create_vector(V)
+    for Fi in Fs:
+        dolfinx.fem.petsc.assemble_vector(b_batched, Fi)
+    b_batched.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+    end = time.perf_counter()
 
-b_batched = dolfinx.fem.petsc.create_vector(V)
-for Fi in Fs:
-    dolfinx.fem.petsc.assemble_vector(b_batched, Fi)
+    MPI.COMM_WORLD.Barrier()
+    start_ref = time.perf_counter()
+    F_ref = dolfinx.fem.form(F)
+    b_ref = dolfinx.fem.petsc.assemble_vector(F_ref)
+    b_ref.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+    end_ref = time.perf_counter()
 
-np.testing.assert_allclose(b.array, b_batched.array)
+    print(f"Batched {end-start}, Ref {end_ref-start_ref}")
+    np.testing.assert_allclose(b_ref.array, b_batched.array)
