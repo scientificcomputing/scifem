@@ -108,12 +108,13 @@ def extract_integration_domains(form: ufl.Form)->tuple[ufl.Form, dict[dolfinx.fe
                 entities = np.arange(num_entities_local)
             integration_entities = dolfinx.cpp.fem.compute_integration_domains(dfx_type, topology, entities)
             integral_data[dfx_type].append((everywhere_tag, integration_entities))
+        return new_form, integral_data
 
+def create_idata_batches(idata: dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]], max_batches:int = 10, min_batch_size: int = 10) -> list[dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
+    batched_integral_data = []
+    for itg_type, (tag, integration_entities) in idata.items():
 
-# def create_idata_batches(idata: dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]], max_batches:int = 10, min_batch_size: int = 10) -> list[dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
-#     batched_integral_data = []
-#     for itg_type, (tag, )
-#     breakpoint()
+        breakpoint()
 
 
 # Work on exterior facets tomorrow
