@@ -1,4 +1,4 @@
-
+# NO VIBE CODING
 
 from mpi4py import MPI
 from petsc4py import PETSc
@@ -72,7 +72,7 @@ def extract_integration_domains(form: ufl.Form)->tuple[ufl.Form, dict[dolfinx.fe
                         entities = dolfinx.cpp.mesh.exterior_facet_indices(tag.topology)
                     else:
                         num_entities_local = tag.topology.index_map(edim).size_local
-                        entities = np.arange(num_entities_local)
+                        entities = np.arange(num_entities_local, dtype=np.int32)
                     integration_entities = dolfinx.cpp.fem.compute_integration_domains(dfx_type, tag.topology, entities)
                 else:
                     
@@ -164,7 +164,7 @@ if __name__ == "__main__":
 
 
     start = time.perf_counter()
-    num_batches = 1000
+    num_batches = 100
     Fs = create_batched_form(F, num_batches=num_batches)    
     b_batched = dolfinx.fem.petsc.create_vector(V)
     for Fi in Fs:
@@ -179,5 +179,19 @@ if __name__ == "__main__":
     b_ref.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
     end_ref = time.perf_counter()
 
+    coeffs = dolfinx.fem.pack_coefficients(F_ref)
+    max_mem = 0
+    for key, value in coeffs.items():
+        if value.nbytes > max_mem:
+            max_mem = value.nbytes
+
+    max_mem_b = 0
+    for i in range(num_batches):
+        batched_coeff = dolfinx.fem.pack_coefficients(Fs[i])
+        for key, value in batched_coeff.items():
+            if max_mem_b < value.nbytes:
+                max_mem_b = value.nbytes
+
+    print(max_mem, max_mem_b, max_mem/max_mem_b)
     print(f"Batched {end-start}, Ref {end_ref-start_ref}")
     np.testing.assert_allclose(b_ref.array, b_batched.array)
