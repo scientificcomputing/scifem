@@ -20,10 +20,10 @@ ft = dolfinx.mesh.meshtags(mesh, mesh.topology.dim-1, facets, np.ones_like(facet
 
 v = ufl.TestFunction(V)
 
-F = ufl.inner(u, v) * ufl.dx #\
-    #+ ufl.inner(u, v) * ufl.dx(subdomain_data=ct, subdomain_id=4)\
-    #+ufl.inner(u, v) * ufl.ds \
-    #+ ufl.inner(u, v) * ufl.ds(subdomain_data=ft, subdomain_id=(1,2))
+F= ufl.inner(u, v) * ufl.dx(subdomain_data=ct, subdomain_id=4)\
+   +ufl.inner(u, v) * ufl.dx \
+    +ufl.inner(u, v) * ufl.ds \
+    + ufl.inner(u, v) * ufl.ds(subdomain_data=ft, subdomain_id=(1,2))
 
 
 def extract_integration_domains(form: ufl.Form)->tuple[ufl.Form, dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
@@ -108,7 +108,8 @@ def extract_integration_domains(form: ufl.Form)->tuple[ufl.Form, dict[dolfinx.fe
                 entities = np.arange(num_entities_local)
             integration_entities = dolfinx.cpp.fem.compute_integration_domains(dfx_type, topology, entities)
             integral_data[dfx_type].append((everywhere_tag, integration_entities))
-        return new_form, integral_data
+
+    return new_form, integral_data
 
 def create_idata_batches(idata: dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]], max_batches:int = 10, min_batch_size: int = 10) -> list[dict[dolfinx.fem.IntegralType, list[tuple[int, np.ndarray]]]]:
     # batched_integral_data = []
