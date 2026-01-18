@@ -18,6 +18,12 @@ except ImportError:
     hash5py = False
 
 
+if h5py.h5.HDF5_VERSION_COMPILED_AGAINST == (2, 0, 0):
+    pytest.skip(
+        "h5py and adios2 built against HDF5 2.0.0 does not work properly", allow_module_level=True
+    )
+
+
 stype = PETSc.ScalarType
 rtype = PETSc.RealType
 _dolfinx_version = Version(dolfinx.__version__)
