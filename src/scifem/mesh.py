@@ -97,10 +97,8 @@ def create_entity_markers(
     num_entities_local = e_map.size_local + e_map.num_ghosts
     markers = np.full(num_entities_local, -1, dtype=np.int32)
 
-    locate_entities = (
-        lambda on_boundary: dolfinx.mesh.locate_entities_boundary
-        if on_boundary
-        else dolfinx.mesh.locate_entities
+    locate_entities = lambda on_boundary: (
+        dolfinx.mesh.locate_entities_boundary if on_boundary else dolfinx.mesh.locate_entities
     )
 
     # Concatenate and sort the arrays based on indices
