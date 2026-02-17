@@ -424,6 +424,7 @@ def create_geometry_function_space(
     if N is None:
         ufl_el = basix.ufl.blocked_element(sub_el, shape=(mesh.geometry.dim,))
         value_shape = (mesh.geometry.dim,)
+        N = value_shape[0]
     elif N == 1:
         ufl_el = sub_el
         value_shape = ()
@@ -442,13 +443,9 @@ def create_geometry_function_space(
     try:
         cpp_el = _fe_constructor(ufl_el.basix_element._e, block_shape=value_shape, symmetric=False)
     except TypeError:
-        cpp_el = _fe_constructor(
-            ufl_el.basix_element._e, block_size=value_shape[0], symmetric=False
-        )
+        cpp_el = _fe_constructor(ufl_el.basix_element._e, block_size=N, symmetric=False)
     dof_layout = dolfinx.cpp.fem.create_element_dof_layout(cpp_el, [])
-    cpp_dofmap = dolfinx.cpp.fem.DofMap(
-        dof_layout, geom_imap, value_shape[0], adj_list, value_shape[0]
-    )
+    cpp_dofmap = dolfinx.cpp.fem.DofMap(dof_layout, geom_imap, N, adj_list, N)
 
     # Create function space
     try:
