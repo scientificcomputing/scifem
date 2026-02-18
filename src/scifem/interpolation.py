@@ -386,5 +386,9 @@ def interpolate_to_surface_submesh(
     else:
         shaped_data = data.reshape(expr.value_size, -1)
 
-    u_surface._cpp_object.interpolate(shaped_data, submesh_facets)
+    if hasattr(u_surface._cpp_object, "interpolate_f"):
+        interpolate_func = u_surface._cpp_object.interpolate_f
+    else:
+        interpolate_func = u_surface._cpp_object.interpolate
+    interpolate_func(shaped_data, submesh_facets)
     u_surface.x.scatter_forward()

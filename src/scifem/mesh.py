@@ -8,7 +8,8 @@ import numpy as np
 import numpy.typing as npt
 from typing import Protocol
 from packaging.version import Version
-
+import basix
+import ufl
 
 __all__ = [
     "create_entity_markers",
@@ -19,6 +20,8 @@ __all__ = [
     "find_interface",
     "compute_interface_data",
     "compute_subdomain_exterior_facets",
+    "create_geometry_function_space",
+    "move",
 ]
 
 if typing.TYPE_CHECKING:
@@ -396,3 +399,85 @@ def compute_interface_data(
     if True in switch:
         ordered_idata[switch, :] = ordered_idata[switch][:, [2, 3, 0, 1]]
     return ordered_idata
+
+
+def create_geometry_function_space(
+    mesh: dolfinx.mesh.Mesh, N: int | None = None
+) -> dolfinx.fem.FunctionSpace:
+    """
+    Reconstruct a vector space with N components using
+    the geometry dofmap to ensure a 1-1 mapping between mesh nodes and DOFs.
+
+    Args:
+        mesh: The mesh to create the function space on.
+        N: The number of components. If not provided the geometrical dimension is chosen
+
+    """
+    geom_imap = mesh.geometry.index_map()
+    geom_dofmap = mesh.geometry.dofmap
+    ufl_domain = mesh.ufl_domain()
+    assert ufl_domain is not None
+    sub_el = ufl_domain.ufl_coordinate_element().sub_elements[0]
+    adj_list = dolfinx.cpp.graph.AdjacencyList_int32(geom_dofmap)
+
+    value_shape: tuple[int, ...]
+    if N is None:
+        ufl_el = basix.ufl.blocked_element(sub_el, shape=(mesh.geometry.dim,))
+        value_shape = (mesh.geometry.dim,)
+        N = value_shape[0]
+    elif N == 1:
+        ufl_el = sub_el
+        value_shape = ()
+    else:
+        ufl_el = basix.ufl.blocked_element(sub_el, shape=(N,))
+        value_shape = (N,)
+
+    if ufl_el.dtype == np.float32:
+        _fe_constructor = dolfinx.cpp.fem.FiniteElement_float32
+        _fem_constructor = dolfinx.cpp.fem.FunctionSpace_float32
+    elif ufl_el.dtype == np.float64:
+        _fe_constructor = dolfinx.cpp.fem.FiniteElement_float64
+        _fem_constructor = dolfinx.cpp.fem.FunctionSpace_float64
+    else:
+        raise RuntimeError(f"Unsupported type {ufl_el.dtype}")
+    try:
+        cpp_el = _fe_constructor(ufl_el.basix_element._e, block_shape=value_shape, symmetric=False)
+    except TypeError:
+        cpp_el = _fe_constructor(ufl_el.basix_element._e, block_size=N, symmetric=False)
+    dof_layout = dolfinx.cpp.fem.create_element_dof_layout(cpp_el, [])
+    cpp_dofmap = dolfinx.cpp.fem.DofMap(dof_layout, geom_imap, N, adj_list, N)
+
+    # Create function space
+    try:
+        cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap)
+    except TypeError:
+        cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap, value_shape=value_shape)
+
+    return dolfinx.fem.FunctionSpace(mesh, ufl_el, cpp_space)
+
+
+def move(
+    mesh: dolfinx.mesh.Mesh,
+    u: dolfinx.fem.Function
+    | ufl.core.expr.Expr
+    | typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.inexact]],
+):
+    """
+    Move the geometry nodes of a mesh given by the movement of a function u.
+
+    Args:
+        mesh: The mesh to move
+        u: The displacement as a :py:class:dolfinx.fem.Function`,
+            :py:class:`ufl.core.expr.Expr` or a lambda function.
+    """
+
+    V_geom = create_geometry_function_space(mesh)
+    u_geom = dolfinx.fem.Function(V_geom, dtype=mesh.geometry.x.dtype)
+    if isinstance(u, dolfinx.fem.Function):
+        u_geom.interpolate(u)
+    elif isinstance(u, ufl.core.expr.Expr):
+        u_compiled = dolfinx.fem.Expression(u, V_geom.element.interpolation_points)
+        u_geom.interpolate(u_compiled)
+    else:
+        u_geom.interpolate(u)
+    mesh.geometry.x[:, : mesh.geometry.dim] += u_geom.x.array[:].reshape(-1, mesh.geometry.dim)
