@@ -104,9 +104,11 @@ def interpolate_function_onto_facet_dofs(
         ] = values_per_entity.reshape(-1)
 
     qh = dolfinx.fem.Function(Q)
-    qh._cpp_object.interpolate(
-        values.reshape(-1, domain.geometry.dim).T.copy(), all_connected_cells
-    )
+    if hasattr(qh._cpp_object, "interpolate_f"):
+        interpolate_func = qh._cpp_object.interpolate_f
+    else:
+        interpolate_func = qh._cpp_object.interpolate
+    interpolate_func(values.reshape(-1, domain.geometry.dim).T.copy(), all_connected_cells)
     qh.x.scatter_forward()
 
     return qh
