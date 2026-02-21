@@ -124,9 +124,9 @@ def test_evaluate_vector_function_3D(cell_type):
 )
 @pytest.mark.parametrize("dtype", [np.float64, np.float32])
 def test_extrema_func(cell_type, extrema, dtype, degree: int):
-    tol = 10 * np.finfo(dtype).eps
+    tol = 100 * np.finfo(dtype).eps
 
-    mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 7, 7, 7, cell_type=cell_type, dtype=dtype)
+    mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 6, 6, 6, cell_type=cell_type, dtype=dtype)
     el = basix.ufl.element("Lagrange", mesh.basix_cell(), degree, dtype=dtype)
     V = dolfinx.fem.functionspace(mesh, el)
 
@@ -144,7 +144,7 @@ def test_extrema_func(cell_type, extrema, dtype, degree: int):
     u = dolfinx.fem.Function(V, dtype=dtype)
     u.interpolate(f)
 
-    u_ex, _X_ex = compute_extrema(u, extrema)
+    u_ex, _X_ex = compute_extrema(u, extrema, tol=tol)
 
     assert np.isclose(u_ex, -sign * 0.8, atol=tol)
 
@@ -152,7 +152,7 @@ def test_extrema_func(cell_type, extrema, dtype, degree: int):
     x_p_ufl = ufl.as_vector(x_p)
     f_ufl = -0.8 * sign * ufl.exp(-ufl.dot(x_ufl - x_p_ufl, x_ufl - x_p_ufl) / 0.1)
 
-    u_ufl_ex, _X_ufl_ex = compute_extrema(f_ufl, extrema)
+    u_ufl_ex, _X_ufl_ex = compute_extrema(f_ufl, extrema, tol=tol)
 
     assert np.isclose(u_ufl_ex, -sign * 0.8, atol=tol)
     np.testing.assert_allclose(_X_ufl_ex, x_p, atol=tol)

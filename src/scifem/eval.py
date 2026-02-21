@@ -120,6 +120,7 @@ def find_cell_extrema(
     jit_options: dict | None = None,
     method: str | None = None,
     options: dict | None = None,
+    tol: float | None = None,
 ) -> tuple[npt.NDArray[np.floating], np.floating]:
     """
     Find the extrema of a {py:class}`ufl.core.expr.Expr` within a cell.
@@ -131,6 +132,7 @@ def find_cell_extrema(
         x_0: The point to start the initial search at
         method: Optimization algorithm to use for local problem
         options: Options for optimization method
+        tol: Tolerance for scipy minimize
 
     Returns:
         The point (in physical space) of the extrema and the value at the extrema.
@@ -209,7 +211,9 @@ def find_cell_extrema(
         constraint = {"type": "ineq", "fun": lambda x: 1.0 - x[0] - x[1] - x[2]}
     else:
         raise RuntimeError(f"Unsupported {cell_type=}")
+
     # --- 3. Run Optimization ---
+    tol = tol if tol is not None else 100 * np.finfo(mesh.geometry.x.dtype).eps
     result = minimize(
         fun=eval_J,
         x0=x_ref.flatten(),
@@ -218,7 +222,7 @@ def find_cell_extrema(
         bounds=bounds,
         constraints=constraint,
         options=options or {},
-        tol=10 * np.finfo(mesh.geometry.x.dtype).eps,
+        tol=tol,
     )
 
     X_phys = mesh.geometry.cmap.push_forward(result.x.reshape(-1, mesh.topology.dim), mesh_nodes)[0]
@@ -250,6 +254,7 @@ def compute_extrema(
     x0: npt.NDArray[np.floating] | None = None,
     method: str | None = None,
     options: dict | None = None,
+    tol: float | None = None,
 ) -> tuple[np.floating, npt.NDArray[np.floating]]:
     """
     Find the extrema of an expression across its integration domain.
@@ -263,6 +268,10 @@ def compute_extrema(
         x0: Initial point in reference cell to start search at.
         method: Optimization algorithm to use for local problem
         options: Options for optimization method
+        tol: Tolerance for scipy minimize
+
+    Returns:
+        The value at the extrema and the physical point
     """
 
     # Extract DOLFINx mesh
@@ -308,7 +317,14 @@ def compute_extrema(
     local_X = None
     for cell in candidate_cells:
         X_c, extrema = find_cell_extrema(
-            u, cell, kind=kind, x0=x0, jit_options=jit_options, method=method, options=options
+            u,
+            cell,
+            kind=kind,
+            x0=x0,
+            jit_options=jit_options,
+            method=method,
+            options=options,
+            tol=tol,
         )
         if sign * extrema < local_min:
             local_min = sign * extrema
