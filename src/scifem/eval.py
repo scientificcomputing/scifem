@@ -10,12 +10,36 @@ from pathlib import Path
 import basix
 import ufl
 from scipy.optimize import minimize
+from ufl.algorithms.signature import compute_expression_signature
 
 T = typing.TypeVar("T", int, float)
 MinMaxFunc = typing.Callable[[typing.Sequence[T]], T]
 
 
 __all__ = ["evaluate_function", "find_cell_extrema", "compute_extrema"]
+
+
+def _compute_expression_signature(expr: ufl.core.expr.Expr) -> str:
+    coeffs = ufl.algorithms.extract_coefficients(expr)
+    consts = ufl.algorithms.analysis.extract_constants(expr)
+    args = ufl.algorithms.analysis.extract_arguments(expr)
+    assert len(args) == 0
+
+    rn = dict()
+    rn.update(dict((c, i) for i, c in enumerate(coeffs)))
+    rn.update(dict((c, i) for i, c in enumerate(consts)))
+
+    domains: list[ufl.AbstractDomain] = []
+    for coeff in coeffs:
+        domains.append(*ufl.domain.extract_domains(coeff))
+    for gc in ufl.algorithms.analysis.extract_type(expr, ufl.classes.GeometricQuantity):
+        domains.append(*ufl.domain.extract_domains(gc))
+    for const in consts:
+        domains.append(*ufl.domain.extract_domains(const))
+    domains = ufl.algorithms.analysis.unique_tuple(domains)
+    assert all([isinstance(domain, ufl.Mesh) for domain in domains])
+    rn.update(dict((d, i) for i, d in enumerate(domains)))
+    return compute_expression_signature(expr, rn)
 
 
 def evaluate_function(
@@ -267,8 +291,9 @@ def compute_extrema(
         x0 = np.average(vertices, axis=0)
 
     # Set Cache dir for expressions
+    u_sign = _compute_expression_signature(u)
     cache_dir = (
-        (Path.cwd() / f".scifem{str(u)}_extrema_cache_{mesh.comm.rank}").absolute().as_posix()
+        (Path.cwd() / f".scifem_extrema_cache_{mesh.comm.rank}_{u_sign}").absolute().as_posix()
     )
     if Path(cache_dir).exists():
         raise RuntimeError(f"Cache directory for extrema exists at {cache_dir}")
