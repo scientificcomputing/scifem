@@ -163,7 +163,7 @@ def find_cell_extrema(
                 x_ref.reshape(-1, mesh.topology.dim), mesh_nodes
             )[0]
             try:
-                u_eval = u.eval(_x_p, _cell)
+                u_eval = u.eval(_x_p, _cell)[0]
             except RuntimeError:  # NOTE: Nonlinear pullback might fail on low precision
                 u_expr = dolfinx.fem.Expression(
                     u,
@@ -172,12 +172,12 @@ def find_cell_extrema(
                     jit_options=jit_options,
                     dtype=mesh.geometry.x.dtype,
                 )
-                u_eval = u_expr.eval(mesh, _cell)
+                u_eval = u_expr.eval(mesh, _cell)[0][0]
         else:
             u_expr = dolfinx.fem.Expression(
                 u, x_ref, comm=MPI.COMM_SELF, jit_options=jit_options, dtype=mesh.geometry.x.dtype
             )
-            u_eval = u_expr.eval(mesh, _cell)
+            u_eval = u_expr.eval(mesh, _cell)[0]
         return np.float64(sign * u_eval)  # SLSQP only supports float64
 
     def eval_dJ(x_ref):
@@ -189,7 +189,7 @@ def find_cell_extrema(
             dtype=mesh.geometry.x.dtype,
         )
         u_grad_eval = u_grad_expr.eval(mesh, _cell)[0][0]
-        return np.float64(sign * u_grad_eval)  # SLSQP only supports float64
+        return (sign * u_grad_eval).astype(np.float64)  # SLSQP only supports float64
 
     # Bounds force x and y to be between 0 and 1
     bounds = [(0.0, 1.0) for _ in range(mesh.topology.dim)]
