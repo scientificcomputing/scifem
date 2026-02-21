@@ -2,6 +2,20 @@ from mpi4py import MPI
 import dolfinx
 import numpy as np
 import numpy.typing as npt
+import builtins
+import typing
+from pathlib import Path
+
+
+import basix
+import ufl
+from scipy.optimize import minimize
+
+T = typing.TypeVar("T", int, float)
+MinMaxFunc = typing.Callable[[typing.Sequence[T]], T]
+
+
+__all__ = ["evaluate_function", "find_cell_extrema", "compute_extrema"]
 
 
 def evaluate_function(
@@ -72,3 +86,217 @@ def evaluate_function(
         return u_out
     else:
         return values
+
+
+def find_cell_extrema(
+    u: ufl.core.expr.Expr,
+    cell: int,
+    kind: MinMaxFunc,
+    x0: npt.NDArray | None = None,
+    jit_options: dict | None = None,
+    method: str | None = None,
+    options: dict | None = None,
+) -> tuple[npt.NDArray[np.floating], np.floating]:
+    """
+    Find the extrema of a {py:class}`ufl.core.expr.Expr` within a cell.
+
+    Args:
+        u: The expression to find the extrema of.
+        cell: The local index of the cell to search in
+        kind: If we search for minima or maxima
+        x_0: The point to start the initial search at
+        method: Optimization algorithm to use for local problem
+        options: Options for optimization method
+
+    Returns:
+        The point (in physical space) of the extrema and the value at the extrema.
+    """
+    if kind is builtins.min:
+        sign = 1
+    elif kind is builtins.max:
+        sign = -1
+    else:
+        raise NotImplementedError(f"Unknown type of extrema ({kind}), expected {min} or {max}")
+
+    ud = u.ufl_domain()
+    assert ud is not None
+    mesh = dolfinx.mesh.Mesh(ud.ufl_cargo(), ud)
+
+    if x0 is None:
+        x_ref = np.zeros(mesh.topology.dim, dtype=mesh.geometry.x.dtype)
+    else:
+        x_ref = x0
+
+    _cell = np.array([cell], dtype=np.int32)
+    mesh_nodes = mesh.geometry.x[mesh.geometry.dofmap[cell], : mesh.geometry.dim]
+    _x_p = np.zeros(3)
+
+    def eval_J(x_ref):
+        if isinstance(u, dolfinx.fem.Function):
+            _x_p[: mesh.geometry.dim] = mesh.geometry.cmap.push_forward(
+                x_ref.reshape(-1, mesh.topology.dim), mesh_nodes
+            )[0]
+            try:
+                u_eval = u.eval(_x_p, _cell)
+            except RuntimeError:  # NOTE: Nonlinear pullback might fail on low precision
+                u_expr = dolfinx.fem.Expression(
+                    u,
+                    x_ref,
+                    comm=MPI.COMM_SELF,
+                    jit_options=jit_options,
+                    dtype=mesh.geometry.x.dtype,
+                )
+                u_eval = u_expr.eval(mesh, _cell)
+        else:
+            u_expr = dolfinx.fem.Expression(
+                u, x_ref, comm=MPI.COMM_SELF, jit_options=jit_options, dtype=mesh.geometry.x.dtype
+            )
+            u_eval = u_expr.eval(mesh, _cell)
+        return np.float64(sign * u_eval)  # SLSQP only supports float64
+
+    def eval_dJ(x_ref):
+        u_grad_expr = dolfinx.fem.Expression(
+            ufl.Jacobian(mesh).T * ufl.grad(u),
+            x_ref,
+            comm=MPI.COMM_SELF,
+            jit_options=jit_options,
+            dtype=mesh.geometry.x.dtype,
+        )
+        u_grad_eval = u_grad_expr.eval(mesh, _cell)[0][0]
+        return np.float64(sign * u_grad_eval)  # SLSQP only supports float64
+
+    # Bounds force x and y to be between 0 and 1
+    bounds = [(0.0, 1.0) for _ in range(mesh.topology.dim)]
+
+    # In SciPy, 'ineq' means the function must be >= 0.
+    # So, x + y <= 1 becomes 1 - x - y >= 0.
+    cell_type = mesh.topology.cell_type
+    if cell_type == dolfinx.mesh.CellType.triangle:
+        method = method or "SLSQP"
+        constraint = {"type": "ineq", "fun": lambda x: 1.0 - x[0] - x[1]}
+    elif (
+        cell_type == dolfinx.mesh.CellType.quadrilateral
+        or cell_type == dolfinx.mesh.CellType.hexahedron
+    ):
+        method = method or "L-BFGS-B"
+        constraint = {}
+    elif cell_type == dolfinx.mesh.CellType.tetrahedron:
+        method = method or "SLSQP"
+        constraint = {"type": "ineq", "fun": lambda x: 1.0 - x[0] - x[1] - x[2]}
+    else:
+        raise RuntimeError(f"Unsupported {cell_type=}")
+    # --- 3. Run Optimization ---
+    result = minimize(
+        fun=eval_J,
+        x0=x_ref.flatten(),
+        method=method,
+        jac=eval_dJ,
+        bounds=bounds,
+        constraints=constraint,
+        options=options or {},
+        tol=10 * np.finfo(mesh.geometry.x.dtype).eps,
+    )
+
+    X_phys = mesh.geometry.cmap.push_forward(result.x.reshape(-1, mesh.topology.dim), mesh_nodes)[0]
+    return X_phys, sign * result.fun
+
+
+def compute_LP_average(u: ufl.core.expr.Expr, p: int, domain: dolfinx.mesh.Mesh):
+    V = dolfinx.fem.functionspace(domain, ("DG", 0))
+    v = ufl.TestFunction(V)
+    L_p = dolfinx.fem.assemble_vector(
+        dolfinx.fem.form(u**p * ufl.conj(v) * ufl.dx, dtype=domain.geometry.x.dtype)
+    )
+    L_p.scatter_reverse(dolfinx.la.InsertMode.add)
+    L_p.scatter_forward()
+    cell_vol = dolfinx.fem.assemble_vector(
+        dolfinx.fem.form(ufl.conj(v) * ufl.dx, dtype=domain.geometry.x.dtype)
+    )
+    cell_vol.scatter_reverse(dolfinx.la.InsertMode.add)
+    cell_vol.scatter_forward()
+    avg = L_p.array / cell_vol.array
+    return avg
+
+
+def compute_extrema(
+    u: ufl.core.expr.Expr,
+    kind=MinMaxFunc,
+    p: int = 1,
+    num_candidates: int = 3,
+    x0: npt.NDArray[np.floating] | None = None,
+    method: str | None = None,
+    options: dict | None = None,
+) -> tuple[np.floating, npt.NDArray[np.floating]]:
+    """
+    Find the extrema of an expression across its integration domain.
+
+    Args:
+        u: The expression
+        p: Integer to compute the cell-wise L^p norm to speed up search.
+        kind: `min` or `max`.
+        num_candidates: The number of candidates with the largert average $L^p$
+            norm over a cell.
+        x0: Initial point in reference cell to start search at.
+        method: Optimization algorithm to use for local problem
+        options: Options for optimization method
+    """
+
+    # Extract DOLFINx mesh
+    ud = u.ufl_domain()
+    assert ud is not None
+    mesh = dolfinx.mesh.Mesh(ud.ufl_cargo(), ud)
+
+    if kind is builtins.max:
+        sign = -1
+    elif kind is builtins.min:
+        sign = 1
+    else:
+        raise ValueError("Unknown extrema {kind}, supports min and max only.")
+
+    # Compute cell candidates
+    local_avg = compute_LP_average(u, p, mesh)
+    order = np.argsort(local_avg)
+    if kind is builtins.max:
+        candidate_cells = order[-num_candidates:]
+    else:
+        candidate_cells = order[:num_candidates]
+
+    # Get reference point as midpoint
+    if x0 is None:
+        vertices = basix.geometry(mesh.basix_cell())
+        x0 = np.average(vertices, axis=0)
+
+    # Set Cache dir for expressions
+    cache_dir = (
+        (Path.cwd() / f".scifem{str(u)}_extrema_cache_{mesh.comm.rank}").absolute().as_posix()
+    )
+    if Path(cache_dir).exists():
+        raise RuntimeError(f"Cache directory for extrema exists at {cache_dir}")
+    jit_options = {
+        "cffi_extra_compile_args": ["-march=native", "-O3"],
+        "cffi_libraries": ["m"],
+        "cache_dir": cache_dir,
+    }
+
+    # Find local extrema
+    local_min = np.inf
+    local_X = None
+    for cell in candidate_cells:
+        X_c, extrema = find_cell_extrema(
+            u, cell, kind=kind, x0=x0, jit_options=jit_options, method=method, options=options
+        )
+        if sign * extrema < local_min:
+            local_min = sign * extrema
+            local_X = X_c
+
+    # Clean expression cache after loop
+    for item in Path(cache_dir).iterdir():
+        # Check if the item is a file
+        if item.is_file():
+            item.unlink()  # Delete the file
+    Path(cache_dir).rmdir()
+
+    # Find global extrema
+    val, rank = mesh.comm.allreduce((local_min, mesh.comm.rank), op=MPI.MINLOC)
+    X = mesh.comm.bcast(local_X, root=rank)
+    return sign * val, X
