@@ -177,7 +177,7 @@ def find_cell_extrema(
             u_expr = dolfinx.fem.Expression(
                 u, x_ref, comm=MPI.COMM_SELF, jit_options=jit_options, dtype=mesh.geometry.x.dtype
             )
-            u_eval = u_expr.eval(mesh, _cell)[0]
+            u_eval = u_expr.eval(mesh, _cell)[0][0]
         return np.float64(sign * u_eval)  # SLSQP only supports float64
 
     def eval_dJ(x_ref):
