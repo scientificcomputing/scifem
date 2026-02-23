@@ -504,3 +504,18 @@ def test_compute_interface_data(cell_type: dolfinx.mesh.CellType, Nx: int):
 
     assert np.isin(interface_data[:, 0], cell_tags.find(val_small)).all()
     assert np.isin(interface_data[:, 2], cell_tags.find(val_big)).all()
+
+
+def test_copy():
+    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 5, 5, dolfinx.mesh.CellType.triangle)
+
+    # Deepcopy mesh
+    new_mesh = scifem.mesh.copy(mesh)
+
+    # Perturb first geometry
+    mesh.geometry.x[:, 0] += 1
+
+    assert (new_mesh.geometry.x[:, 0] != mesh.geometry).all()
+
+    assert mesh.topology._cpp_object == new_mesh.topology._cpp_object
+    assert mesh.geometry._cpp_object != new_mesh.geometry._cpp_object

@@ -22,6 +22,7 @@ __all__ = [
     "compute_subdomain_exterior_facets",
     "create_geometry_function_space",
     "move",
+    "copy",
 ]
 
 if typing.TYPE_CHECKING:
@@ -479,3 +480,25 @@ def move(
     else:
         u_geom.interpolate(u)
     mesh.geometry.x[:, : mesh.geometry.dim] += u_geom.x.array[:].reshape(-1, mesh.geometry.dim)
+
+
+def copy(mesh: dolfinx.mesh.Mesh) -> dolfinx.mesh.Mesh:
+    """
+    Copy a mesh by copying its geometry.
+
+    Note:
+        The C++ topology object is shared between the two meshes.
+
+    Args:
+        mesh: The mesh.
+
+    Returns:
+        The new mesh
+    """
+
+    # Initialize C++ mesh
+    cpp_mesh = type(mesh._cpp_object)(
+        mesh.comm, mesh.topology._cpp_object, mesh.geometry._cpp_object
+    )
+    # Initialize Python wrapper with new symbolic numbering in the `ufl.Mesh`
+    return dolfinx.mesh.Mesh(cpp_mesh, ufl.Mesh(mesh.ufl_domain().ufl_coordinate_element()))
