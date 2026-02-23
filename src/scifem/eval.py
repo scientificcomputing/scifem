@@ -4,8 +4,7 @@ import numpy as np
 import numpy.typing as npt
 import builtins
 import typing
-from pathlib import Path
-
+import tempfile
 
 import basix
 import ufl
@@ -158,13 +157,19 @@ def find_cell_extrema(
     _x_p = np.zeros(3)
 
     def eval_J(x_ref):
+        # Evaluating basis functions through {py:func}`dolfinx.fem.Function.eval`
+        # is faster than generating an expression for the same thing
         if isinstance(u, dolfinx.fem.Function):
+            # This could in theory be made even faster by taking out some of the eval code
+            # However, quite a lot of work needs to be reimplemented for minimal gain
+            # to do so, so we rather push forward, then let eval pull back again.
             _x_p[: mesh.geometry.dim] = mesh.geometry.cmap.push_forward(
                 x_ref.reshape(-1, mesh.topology.dim), mesh_nodes
             )[0]
             try:
                 u_eval = u.eval(_x_p, _cell)[0]
-            except RuntimeError:  # NOTE: Nonlinear pullback might fail on low precision
+            except RuntimeError:
+                # Nonlinear pullback might fail on low precision
                 u_expr = dolfinx.fem.Expression(
                     u,
                     x_ref,
@@ -174,6 +179,7 @@ def find_cell_extrema(
                 )
                 u_eval = u_expr.eval(mesh, _cell)[0][0]
         else:
+            # Expression has to be used for any UFL-expression that is not a Function
             u_expr = dolfinx.fem.Expression(
                 u, x_ref, comm=MPI.COMM_SELF, jit_options=jit_options, dtype=mesh.geometry.x.dtype
             )
@@ -181,6 +187,8 @@ def find_cell_extrema(
         return np.float64(sign * u_eval)  # SLSQP only supports float64
 
     def eval_dJ(x_ref):
+        # Could be improved if we could take `ufl.classes.ReferenceGrad(u)`
+        # https://github.com/FEniCS/ufl/issues/450
         u_grad_expr = dolfinx.fem.Expression(
             ufl.Jacobian(mesh).T * ufl.grad(u),
             x_ref,
@@ -229,7 +237,25 @@ def find_cell_extrema(
     return X_phys, sign * result.fun
 
 
-def compute_LP_average(u: ufl.core.expr.Expr, p: int, domain: dolfinx.mesh.Mesh):
+def compute_LP_average(
+    u: ufl.core.expr.Expr, p: int, domain: dolfinx.mesh.Mesh
+) -> npt.NDArray[np.float32 | np.float64 | np.complex128 | np.complex64]:
+    """
+    Compute the :math:`L^p(\Omega)`-average of a scalar-valued
+    {py:class}`ufl-expression<ufl.core.expr.Expr>` over each cell in a
+    {py:class}`domain<dolfinx.mesh.Mesh>`
+
+    Args:
+        u: The UFL-expression to evaluate
+        p: The degree of the norm to use.
+        domain: The integration domain
+
+    Returns:
+        An array of the local average L^P norm per local cell on the process,
+        including ghosts.
+    """
+    if u.ufl_shape != ():
+        raise ValueError(f"u must be scalar-valued, got {u.ufl_shape}.")
     V = dolfinx.fem.functionspace(domain, ("DG", 0))
     v = ufl.TestFunction(V)
     L_p = dolfinx.fem.assemble_vector(
@@ -255,6 +281,7 @@ def compute_extrema(
     method: str | None = None,
     options: dict | None = None,
     tol: float | None = None,
+    jit_options: dict[str, typing.Any] | None = None,
 ) -> tuple[np.floating, npt.NDArray[np.floating]]:
     """
     Find the extrema of an expression across its integration domain.
@@ -299,43 +326,35 @@ def compute_extrema(
         vertices = basix.geometry(mesh.basix_cell())
         x0 = np.average(vertices, axis=0)
 
-    # Set Cache dir for expressions
-    u_sign = _compute_expression_signature(u)
-    cache_dir = (
-        (Path.cwd() / f".scifem_extrema_cache_{mesh.comm.rank}_{u_sign}").absolute().as_posix()
+    # Set max efficiency for temporary expression code.
+    jit_options = (
+        jit_options.copy()
+        if jit_options is not None
+        else {
+            "cffi_extra_compile_args": ["-march=native", "-O3"],
+            "cffi_libraries": ["m"],
+        }
     )
-    if Path(cache_dir).exists():
-        raise RuntimeError(f"Cache directory for extrema exists at {cache_dir}")
-    jit_options = {
-        "cffi_extra_compile_args": ["-march=native", "-O3"],
-        "cffi_libraries": ["m"],
-        "cache_dir": cache_dir,
-    }
-
-    # Find local extrema
-    local_min = np.inf
-    local_X = None
-    for cell in candidate_cells:
-        X_c, extrema = find_cell_extrema(
-            u,
-            cell,
-            kind=kind,
-            x0=x0,
-            jit_options=jit_options,
-            method=method,
-            options=options,
-            tol=tol,
-        )
-        if sign * extrema < local_min:
-            local_min = sign * extrema
-            local_X = X_c
-
-    # Clean expression cache after loop
-    for item in Path(cache_dir).iterdir():
-        # Check if the item is a file
-        if item.is_file():
-            item.unlink()  # Delete the file
-    Path(cache_dir).rmdir()
+    # Set temporary cache dir
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=False, delete=True) as cache_dir:
+        jit_options["cache_dir"] = cache_dir
+        # Find local extrema
+        local_min = np.inf
+        local_X = None
+        for cell in candidate_cells:
+            X_c, extrema = find_cell_extrema(
+                u,
+                cell,
+                kind=kind,
+                x0=x0,
+                jit_options=jit_options,
+                method=method,
+                options=options,
+                tol=tol,
+            )
+            if sign * extrema < local_min:
+                local_min = sign * extrema
+                local_X = X_c
 
     # Find global extrema
     val, rank = mesh.comm.allreduce((local_min, mesh.comm.rank), op=MPI.MINLOC)
