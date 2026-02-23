@@ -3,13 +3,22 @@
 # SPDX-License-Identifier: MIT
 
 from __future__ import annotations
+from typing import TYPE_CHECKING
 
 from packaging.version import Version
 from mpi4py import MPI
-from petsc4py import PETSc
+
+if TYPE_CHECKING:
+    from petsc4py import PETSc
+
+try:
+    from petsc4py import PETSc
+
+    _HAS_PETSC = True
+except ImportError:
+    _HAS_PETSC = False
 
 import dolfinx
-import dolfinx.fem.petsc
 import numpy as np
 import numpy.typing as npt
 import ufl
@@ -158,7 +167,7 @@ class PointSource:
         self._basis_values = basis_values
 
     def apply_to_vector(
-        self, b: dolfinx.fem.Function | dolfinx.la.Vector | PETSc.Vec, recompute: bool = False
+        self, b: dolfinx.fem.Function | dolfinx.la.Vector | "PETSc.Vec", recompute: bool = False
     ):
         """Apply the point sources to a vector.
 
@@ -187,9 +196,11 @@ class PointSource:
                 b.x.array[dofs] += values * self._magnitude
             elif isinstance(b, dolfinx.la.Vector):
                 b.array[dofs] += values * self._magnitude
-            elif isinstance(b, PETSc.Vec):
+            elif _HAS_PETSC and isinstance(b, PETSc.Vec):
                 b.setValuesLocal(
                     dofs,
                     values * self._magnitude,
                     addv=PETSc.InsertMode.ADD_VALUES,
                 )
+            else:
+                raise TypeError(f"Unsupported vector type {type(b)}.")
