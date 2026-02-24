@@ -66,7 +66,7 @@ from mpi4py import MPI
 import dolfinx
 from dolfinx import log
 from dolfinx.fem.petsc import NonlinearProblem
-from dolfinx.io import VTXWriter, gmsh as gmshio
+from dolfinx.io import gmsh as gmshio
 import numpy as np
 from scifem import create_real_functionspace
 import ufl
@@ -77,8 +77,8 @@ import gmsh
 gmsh.initialize()
 
 L = 0.5
-H = 0.41
-c_x = c_y = 0.2
+H = L
+c_x = c_y = L/2
 r = 0.05
 gdim = 2
 mesh_comm = MPI.COMM_WORLD
@@ -193,23 +193,21 @@ R = create_real_functionspace(mesh)
 W = ufl.MixedFunctionSpace(V, R)
 
 # %%
-dofs_boundary = dolfinx.fem.locate_dofs_topological(V, fdim, ft.indices[ft.values == wall_marker])
-dofs_bubble = dolfinx.fem.locate_dofs_topological(V, fdim, ft.indices[ft.values == obstacle_marker]
-)
-
-
 u = dolfinx.fem.Function(V)
 u_n = dolfinx.fem.Function(V)
 pressure = dolfinx.fem.Function(R)
 pressure_n = dolfinx.fem.Function(R)
 
+v, pressure_v = ufl.TestFunctions(W)
+
+
+# %%
 dt = dolfinx.fem.Constant(mesh, 0.05)
 K_S = dolfinx.fem.Constant(mesh, 2.0)
 e = dolfinx.fem.Constant(mesh, 2.0)
 volume = dolfinx.fem.Constant(mesh, 40.0)
 
-v, pressure_v = ufl.TestFunctions(W)
-
+# %%
 pressure_ini_expr = dolfinx.fem.Expression(
     dolfinx.fem.Constant(mesh, 3.5), R.element.interpolation_points
 )
@@ -220,9 +218,14 @@ bc_bubble_expr = dolfinx.fem.Expression(K_S * pressure, V.element.interpolation_
 u_bc_bubble = dolfinx.fem.Function(V)
 u_bc_bubble.interpolate(bc_bubble_expr)
 
+dofs_boundary = dolfinx.fem.locate_dofs_topological(V, fdim, ft.indices[ft.values == wall_marker])
+dofs_bubble = dolfinx.fem.locate_dofs_topological(V, fdim, ft.indices[ft.values == obstacle_marker]
+)
+
 bc_bubble = dolfinx.fem.dirichletbc(u_bc_bubble, dofs_bubble)
 bc_boundary = dolfinx.fem.dirichletbc(dolfinx.fem.Constant(mesh, 0.0), dofs_boundary, V)
 
+# %%
 n = ufl.FacetNormal(mesh)
 flux = ufl.inner(ufl.grad(u), n)
 
@@ -232,6 +235,8 @@ F = -(u - u_n) / dt * v * ufl.dx + ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
 F += (pressure - pressure_n) / dt * pressure_v * ufl.dx - e / volume * flux * pressure_v * ds(2)
 
 forms = ufl.extract_blocks(F)
+
+# %%
 
 solver = NonlinearProblem(
     forms,
@@ -246,9 +251,7 @@ solver = NonlinearProblem(
     },
 )
 
-
 # %%
-import matplotlib.pyplot as plt
 import matplotlib as mpl
 grid = pyvista.UnstructuredGrid(*plot.vtk_mesh(V))
 
@@ -308,6 +311,9 @@ while t < t_final:
     warped.point_data["u"][:] = u.x.array
     plotter.write_frame()
 plotter.close()
+
+# %% [markdown]
+# ![title](u_time.gif)
 
 # %%
 import matplotlib.pyplot as plt
