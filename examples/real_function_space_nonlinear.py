@@ -24,6 +24,11 @@
 # In this example we will show how to use the "real" function space to solve
 # a non linear problem.
 #
+# A circular gas cavity inside a solid domain has an initial partial pressure $P_b$. The concentration $u$ on the cavity surface follows Henry's solubility law: the concentration is proportional to the partial pressure $P_b$.
+#
+# As particles leave the cavity by solution/diffusion, the partial pressure starts to decrease - affecting in turn the concentration on the cavity surface.
+#
+#
 # ## Mathematical formulation
 #  The problem at hand is:
 # Find $u \in H^1(\Omega)$ such that
@@ -43,7 +48,7 @@
 # $$
 #
 #
-# We write the weak formulation:
+# We write the weak formulation with $v$ and $w$ suitable test functions:
 #
 # $$
 # \begin{align}
@@ -64,19 +69,21 @@
 # %%
 from mpi4py import MPI
 import dolfinx
-from dolfinx import log
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.io import gmsh as gmshio
 import numpy as np
-from scifem import create_real_functionspace
+from scifem import create_real_functionspace, assemble_scalar
 import ufl
 
 import gmsh
 
+# %% [markdown]
+# We generate the mesh using GMSH:
+
 # %%
 gmsh.initialize()
 
-L = 0.5
+L = 2
 H = L
 c_x = c_y = L/2
 r = 0.05
@@ -186,11 +193,17 @@ if not pyvista.OFF_SCREEN:
 else:
     figure = p.screenshot("facet_markers.png")
 
+# %% [markdown]
+# We create two functionspaces `V` and `R` for $u$ and $P_b$, respectively, as well as a `ufl.MixedFunctionSpace` for test functions.
+
 # %%
 V = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
 R = create_real_functionspace(mesh)
 
 W = ufl.MixedFunctionSpace(V, R)
+
+# %% [markdown]
+# We then create appropriate functions and test functions:
 
 # %%
 u = dolfinx.fem.Function(V)
@@ -201,15 +214,28 @@ pressure_n = dolfinx.fem.Function(R)
 v, pressure_v = ufl.TestFunctions(W)
 
 
+# %% [markdown]
+# Let's define the problems constants:
+
 # %%
-dt = dolfinx.fem.Constant(mesh, 0.05)
+dt = dolfinx.fem.Constant(mesh, 0.1)
 K_S = dolfinx.fem.Constant(mesh, 2.0)
 e = dolfinx.fem.Constant(mesh, 2.0)
 volume = dolfinx.fem.Constant(mesh, 40.0)
+P_b_initial = dolfinx.fem.Constant(mesh, 3.5)
+u_out = dolfinx.fem.Constant(mesh, 0.0)
+
+# %% [markdown]
+# ```{note}
+# If `dt` is too large, the problem becomes unstable
+# ```
+#
+#
+# We can now define the initial condition and boundary conditions:
 
 # %%
 pressure_ini_expr = dolfinx.fem.Expression(
-    dolfinx.fem.Constant(mesh, 3.5), R.element.interpolation_points
+    P_b_initial, R.element.interpolation_points
 )
 pressure_n.interpolate(pressure_ini_expr)
 pressure.x.array[:] = pressure_n.x.array[:]
@@ -223,7 +249,10 @@ dofs_bubble = dolfinx.fem.locate_dofs_topological(V, fdim, ft.indices[ft.values 
 )
 
 bc_bubble = dolfinx.fem.dirichletbc(u_bc_bubble, dofs_bubble)
-bc_boundary = dolfinx.fem.dirichletbc(dolfinx.fem.Constant(mesh, 0.0), dofs_boundary, V)
+bc_boundary = dolfinx.fem.dirichletbc(u_out, dofs_boundary, V)
+
+# %% [markdown]
+# Next we define the variational formulation and call `ufl.extract_blocks` to form the blocked formulations:
 
 # %%
 n = ufl.FacetNormal(mesh)
@@ -231,13 +260,15 @@ flux = ufl.inner(ufl.grad(u), n)
 
 ds = ufl.Measure("ds", domain=mesh, subdomain_data=ft)
 
-F = -(u - u_n) / dt * v * ufl.dx + ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
-F += (pressure - pressure_n) / dt * pressure_v * ufl.dx - e / volume * flux * pressure_v * ds(2)
+F = (u - u_n) / dt * v * ufl.dx + ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
+F += (pressure - pressure_n) / dt * pressure_v * ufl.dx + e / volume * flux * pressure_v * ds(3)
 
 forms = ufl.extract_blocks(F)
 
-# %%
+# %% [markdown]
+# We can now create a nonlinear solver with the blocked formulations and the functions `u` and `pressure` as a list:
 
+# %%
 solver = NonlinearProblem(
     forms,
     [u, pressure],
@@ -250,6 +281,9 @@ solver = NonlinearProblem(
         "snes_monitor": None,
     },
 )
+
+# %% [markdown]
+# Set up transient pyvista visualisation:
 
 # %%
 import matplotlib as mpl
@@ -282,14 +316,18 @@ renderer = plotter.add_mesh(
     clim=[0, max(u_bc_bubble.x.array)],
 )
 
+# %% [markdown]
+# Time stepping loop:
+
 # %%
-
-log.set_log_level(log.LogLevel.INFO)
 t = 0
-t_final = 4
-times = []
+t_final = 15
 
+times = []
 all_pressures = []
+outgassing_fluxes = []
+
+
 while t < t_final:
     t += dt.value
     times.append(t)
@@ -297,11 +335,12 @@ while t < t_final:
 
     # Solve the problem
     (u, pressure) = solver.solve()
+
+    # Update previous solution
     u_n.x.array[:] = u.x.array[:]
     pressure_n.x.array[:] = pressure.x.array[:]
-    print(f"u = {u.x.array}")
-    print(f"pressure = {pressure.x.array}")
 
+    # Update bubble BC
     u_bc_bubble.interpolate(bc_bubble_expr)
     all_pressures.append(pressure.x.array[0].copy())
 
@@ -310,16 +349,32 @@ while t < t_final:
     warped.points[:, :] = new_warped.points
     warped.point_data["u"][:] = u.x.array
     plotter.write_frame()
+
+    # compute outgassing flux
+    outgassing_flux = -assemble_scalar(flux * ds(2))
+    outgassing_fluxes.append(outgassing_flux)
 plotter.close()
 
 # %% [markdown]
 # ![title](u_time.gif)
 
+# %% [markdown]
+# We see that, as expected, the partial pressure $P_b$ decreases with time.
+
 # %%
 import matplotlib.pyplot as plt
 
-plt.scatter([0], [3.5], color="red", label="Initial Pressure")
-plt.plot(times, all_pressures)
+fig, axs = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+
+axs[0].scatter([0], [P_b_initial.value], color="red", label="Initial Pressure")
+axs[0].plot(times, all_pressures)
+axs[0].set_ylabel("Pressure")
+axs[0].set_ylim(bottom=0)
+
+axs[1].plot(times, outgassing_fluxes)
+axs[1].set_ylabel("Outgassing Flux")
+axs[1].set_ylim(bottom=0)
+
 plt.xlabel("Time")
-plt.ylabel("Pressure")
 plt.show()
