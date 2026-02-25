@@ -20,7 +20,7 @@ from .mesh import (
     transfer_meshtags_to_submesh,
     reverse_mark_entities,
 )
-from .eval import evaluate_function
+from .eval import evaluate_function, find_cell_extrema, compute_extrema
 from .interpolation import interpolation_matrix, prepare_interpolation_data
 
 meta = metadata("scifem")
@@ -60,6 +60,8 @@ __all__ = [
     "interpolate_function_onto_facet_dofs",
     "interpolation_matrix",
     "prepare_interpolation_data",
+    "find_cell_extrema",
+    "compute_extrema",
 ]
 
 
