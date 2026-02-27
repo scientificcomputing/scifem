@@ -2,7 +2,7 @@
 # jupyter:
 #   jupytext:
 #     cell_metadata_filter: -all
-#     formats: py:percent,ipynb,md:myst
+#     formats: ipynb,md:myst,py:percent
 #     text_representation:
 #       extension: .py
 #       format_name: percent
@@ -44,7 +44,7 @@
 # where $P_b$ is the partial pressure inside the cavity region. The temporal evolution of $P_b$ is governed by:
 #
 # $$
-# \frac{dP_b}{dt} = \frac{e}{V} \int_{\Gamma_b} -D \nabla c \cdot \mathbf{n} dS
+# \frac{dP_b}{dt} = \frac{e}{V} \int_{\Gamma_b} -D \nabla u \cdot \mathbf{n} dS
 # $$
 #
 #
@@ -53,7 +53,7 @@
 # $$
 # \begin{align}
 # \int_\Omega  \frac{u - u_n}{\Delta t} \cdot v~\mathrm{d}x + \int_\Omega \nabla u \cdot \nabla v~\mathrm{d}x &= 0\\
-# \int_\Omega  \frac{P_b - P_{b_n}}{\Delta t} \cdot w~\mathrm{d}x &= \frac{e}{V} \int_{\Gamma_b} -D \nabla c \cdot \mathbf{n} ~dS ~w.
+# \int_\Omega  \frac{P_b - P_{b_n}}{\Delta t} \cdot w~\mathrm{d}x &= \frac{e}{V} \int_{\Gamma_b} -D \nabla u \cdot \mathbf{n} ~dS \cdot ~w.
 # \end{align}
 # $$
 #
