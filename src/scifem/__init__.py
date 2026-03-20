@@ -22,6 +22,7 @@ from .mesh import (
 )
 from .eval import evaluate_function, find_cell_extrema, compute_extrema
 from .interpolation import interpolation_matrix, prepare_interpolation_data
+from .geometry import closest_point_projection
 
 meta = metadata("scifem")
 __version__ = meta["Version"]
@@ -38,6 +39,7 @@ __all__ = [
     "__email__",
     "__program_name__",
     "PointSource",
+    "closest_point_projection",
     "assemble_scalar",
     "create_space_of_simple_functions",
     "compute_interface_data",
