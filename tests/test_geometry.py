@@ -7,6 +7,7 @@ from scifem import closest_point_projection
 from scifem.geometry import project_onto_simplex
 import ufl
 import basix.ufl
+import pytest
 
 
 def scipy_project_point_to_element(
@@ -94,7 +95,8 @@ def scipy_project_point_to_element(
     return closest_points, res.x
 
 
-def test_2D_curved_manifold():
+@pytest.mark.parametrize("order", [1, 2])
+def test_2D_manifold(order):
     comm = MPI.COMM_SELF
 
     # Curved quadratic triangle in 3D (6 nodes)
@@ -109,7 +111,10 @@ def test_2D_curved_manifold():
         ]
     )
     cells = np.array([[0, 1, 2, 3, 4, 5]], dtype=np.int64)  # Single curved triangle element
-    c_el = ufl.Mesh(basix.ufl.element("Lagrange", "triangle", 2, shape=(3,)))
+    c_el = ufl.Mesh(basix.ufl.element("Lagrange", "triangle", order, shape=(3,)))
+    if order == 1:
+        curved_nodes = curved_nodes[:3]  # Use only vertices for linear case
+        cells = cells[:, :3]
     mesh = dolfinx.mesh.create_mesh(comm, cells=cells, x=curved_nodes, e=c_el)
 
     tol = 1e-7
@@ -140,7 +145,8 @@ def test_2D_curved_manifold():
             assert np.isclose(dist_ours, dist_scipy, atol=tol, rtol=1e-2)
 
 
-def test_3D_curved_cell():
+@pytest.mark.parametrize("order", [1, 2])
+def test_3D_curved_cell(order):
     comm = MPI.COMM_SELF
 
     curved_nodes_tet = np.array(
@@ -160,7 +166,10 @@ def test_3D_curved_cell():
     )
     cells_tet = np.array([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]], dtype=np.int64)
 
-    domain_tet = ufl.Mesh(basix.ufl.element("Lagrange", "tetrahedron", 2, shape=(3,)))
+    domain_tet = ufl.Mesh(basix.ufl.element("Lagrange", "tetrahedron", order, shape=(3,)))
+    if order == 1:
+        curved_nodes_tet = curved_nodes_tet[:4]  # Use only vertices for linear case
+        cells_tet = cells_tet[:, :4]
     mesh = dolfinx.mesh.create_mesh(comm, cells=cells_tet, x=curved_nodes_tet, e=domain_tet)
 
     rand = np.random.RandomState(32)
