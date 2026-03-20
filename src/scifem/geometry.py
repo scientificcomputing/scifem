@@ -184,8 +184,8 @@ def closest_point_projection(
 
             if li == max_ls_iter - 1:
                 warnings.warn(
-                    f"Line search failed to converge after {max_ls_iter} iterations",
-                    f"for cell {cells[i]}  and {target_point=}.",
+                    f"Line search failed to converge after {max_ls_iter} iterations "
+                    + f"for cell {cells[i]}  and {target_point=}."
                 )
             x_k[:] = x_new
 
