@@ -126,22 +126,26 @@ def closest_point_projection(
         for k in range(max_iter):
             x_old = x_k.copy()
 
-            # 1. Evaluate ONLY the Value and First Derivative (Gradient)
+            # Evaluate basis functions and first order derivatives at current reference point
             tab = element.tabulate(1, x_k.reshape(1, tdim))
+
+            # Push forward to physical space
             surface_point = np.dot(tab[0, 0, :], coord)
+
+            # Compute current objective function
             diff = surface_point - target_point
             current_dist_sq = 0.5 * np.linalg.norm(diff) ** 2
 
+            # Compute the gradient in reference coordinates using the Jacobian (tangent vectors)
             tangents = np.dot(tab[1 : tdim + 1, 0, :], coord)
             g = np.dot(tangents, diff)
 
-            # SCALED GRADIENT TOLERANCE
+            # Check for convergence in gradient norm, scaled by the Jacobian to account
+            # for stretching of the reference space
             jac_norm = np.linalg.norm(tangents)
             scaled_tol_grad = tol_grad * max(jac_norm, 1.0)
             if np.linalg.norm(g) < scaled_tol_grad:
                 break
-            # 2. First-Order Step Direction
-            p = -g
 
             # 3. Goldstein-Polyak-Levitin Projected Line Search
             # Bertsekas (1976) Eq. (14) - Armijo Rule along the Projection Arc
@@ -153,13 +157,14 @@ def closest_point_projection(
             target_reached = False
             for li in range(max_ls_iter):
                 # Apply the exact analytical simplex projection
-                x_new = project(x_k + alpha * p)
+                x_new = project(x_k - alpha * g)
 
                 if np.linalg.norm(x_new - x_new_prev) < eps:
                     # The projection is pinned to a boundary.
                     # Changing alpha further will not change the physical point!
                     break
                 x_new_prev = x_new.copy()
+
                 # The actual physical step we took after hitting the geometric walls
                 actual_step = x_new - x_k
 
