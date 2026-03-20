@@ -1,4 +1,4 @@
-// Copyright (C) 2024 Jørgen S. Dokken and Henrik N.T. Finsberg
+// Copyright (C) 2024-2026 Jørgen S. Dokken and Henrik N.T. Finsberg
 // C++ wrappers for SCIFEM
 
 #include <basix/finite-element.h>
@@ -11,6 +11,7 @@
 #include <dolfinx/la/Vector.h>
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/mesh/MeshTags.h>
+#include <dolfinx/mesh/cell_types.h>
 #include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
@@ -54,8 +55,176 @@ auto as_nbarrayp(std::pair<V, std::array<std::size_t, U>>&& x)
 
 } // namespace
 
+namespace impl
+{
+template <typename T>
+inline void sort_array_3_descending(std::array<T, 3>& arr)
+{
+  // If the second element is larger, swap it to the front
+  if (arr[1] > arr[0])
+    std::swap(arr[0], arr[1]);
+
+  // If the third element is larger, swap it up
+  if (arr[2] > arr[1])
+    std::swap(arr[1], arr[2]);
+
+  // One final check between the first two elements
+  if (arr[1] > arr[0])
+    std::swap(arr[0], arr[1]);
+}
+
+template <typename T>
+inline void sort_array_2_descending(std::array<T, 2>& arr)
+{
+  if (arr[1] > arr[0])
+    std::swap(arr[0], arr[1]);
+}
+
+template <typename T, std::size_t tdim>
+inline void simplex_projection(const std::array<T, tdim>& x,
+                               std::array<T, tdim>& projected)
+{
+  std::array<T, tdim> u;
+  std::transform(x.begin(), x.end(), u.begin(),
+                 [](auto xi) { return std::max(xi, T(0)); });
+  T sum = std::accumulate(u.begin(), u.end(), T(0));
+  if (sum <= 1.0)
+  {
+    if constexpr (tdim == 2)
+    {
+      projected[0] = u[0];
+      projected[1] = u[1];
+      return;
+    }
+    else if constexpr (tdim == 3)
+    {
+      projected[0] = u[0];
+      projected[1] = u[1];
+      projected[2] = u[2];
+      return;
+    }
+    else
+    {
+      static_assert(tdim == 2 || tdim == 3, "Unsupported dimension");
+    }
+  }
+  std::array<T, tdim> x_sorted = x;
+  std::array<T, tdim> cumsum;
+  std::array<bool, tdim> Ks;
+  std::size_t K;
+  if constexpr (tdim == 2)
+  {
+    impl::sort_array_2_descending(x_sorted);
+    cumsum[0] = x_sorted[0];
+    cumsum[1] = x_sorted[0] + x_sorted[1];
+    Ks[0] = x_sorted[0] > (cumsum[0] - 1.0);
+    Ks[1] = x_sorted[1] * 2 > (cumsum[1] - 1.0);
+    if (Ks[1])
+      K = 2;
+    else if (Ks[0])
+      K = 1;
+    else
+      throw std::runtime_error("Unexpected condition in simplex projection.");
+  }
+  else if constexpr (tdim == 3)
+  {
+    impl::sort_array_3_descending(x_sorted);
+    cumsum[0] = x_sorted[0];
+    cumsum[1] = x_sorted[0] + x_sorted[1];
+    cumsum[2] = x_sorted[0] + x_sorted[1] + x_sorted[2];
+    Ks[0] = x_sorted[0] > (cumsum[0] - 1.0);
+    Ks[1] = x_sorted[1] * 2 > (cumsum[1] - 1.0);
+    Ks[2] = x_sorted[2] * 3 > (cumsum[2] - 1.0);
+    if (Ks[2])
+      K = 3;
+    else if (Ks[1])
+      K = 2;
+    else if (Ks[0])
+      K = 1;
+    else
+      throw std::runtime_error("Unexpected condition in simplex projection.");
+  }
+  else
+  {
+    static_assert(tdim == 2 || tdim == 3, "Unsupported dimension");
+  }
+  T tau = (cumsum[K - 1] - 1.0) / (K);
+  for (std::size_t i = 0; i < tdim; ++i)
+    projected[i] = std::max(x[i] - tau, T(0));
+};
+
+template <typename T, std::size_t tdim, bool is_simplex>
+inline void projection(const std::array<T, tdim>& x,
+                       std::array<T, tdim>& projected)
+{
+  if constexpr (is_simplex)
+    simplex_projection(x, projected);
+  else
+    for (std::size_t i = 0; i < tdim; ++i)
+    {
+      projected[i] = std::max(x[i], T(0));
+      projected[i] = std::min(projected[i], T(1));
+    }
+}
+
+} // namespace impl
+
 namespace scifem
 {
+
+template <typename T, std::size_t tdim, bool is_simplex>
+std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
+    const dolfinx::mesh::Mesh<T>& mesh, std::span<const std::int32_t> cells,
+    std::span<const T> points, T tol_x, T tol_dist, T tol_grad,
+    std::size_t max_iter, std::size_t max_ls_iter)
+{
+  constexpr T roundoff_tol = 10 * std::numeric_limits<T>::epsilon();
+
+  basix::FiniteElement e = basix::create_element<T>(
+      basix::element::family::P,
+      dolfinx::mesh::cell_type_to_basix_type(mesh.topology()->cell_type()),
+      mesh.geometry().cmap().degree(), mesh.geometry().cmap().variant(),
+      basix::element::dpc_variant::unset, false);
+
+  assert(mesh.geometry().cmap().hash() == e.hash());
+  std::vector<T> closest_points(cells.size());
+  assert(cells.size() == points.size() / 3);
+  std::vector<T> reference_points(cells.size() * mesh.topology()->dim());
+
+  std::array<T, tdim> initial_guess = {1. / T(tdim)};
+
+  std::function<void(const std::array<T, tdim>&, std::array<T, tdim>&)> project;
+
+  std::array<T, tdim> projected;
+
+  impl::projection<T, tdim, is_simplex>(initial_guess, projected);
+
+  std::array<T, tdim> x_k;
+  for (std::size_t i = 0; i < cells.size(); ++i)
+  {
+    std::span<const T> point(points.data() + 3 * i, 3);
+
+    // Update Initial guess
+    std::ranges::copy(initial_guess, x_k.begin());
+    // for (std::size_t k = 0; k < max_iter; ++k)
+    // {
+    //   // 1. Projection
+    //   impl::projection<T, tdim, is_simplex>(x_k, projected);
+
+    //   // 2. Compute closest point and gradient
+    //   T dist;
+    //   std::array<T, 3> g;
+    //   std::tie(closest_points[i], dist, g) = e.evaluate_closest_point(
+    //       cells[i], projected.data(), point.data());
+
+    //   // Check convergence
+    //   if (dist < tol_dist || dist < roundoff_tol)
+    //     break;
+  }
+
+  return {std::move(closest_points), std::move(reference_points)};
+}
+
 template <typename T>
 dolfinx::fem::FunctionSpace<T>
 create_real_functionspace(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
@@ -244,8 +413,8 @@ transfer_meshtags_to_submesh(
 
   // Accumulate global indices across processes
   dolfinx::la::Vector<std::int64_t> index_mapper(parent_entity_map, 1);
-  index_mapper.set(-1);
-  std::span<std::int64_t> indices = index_mapper.mutable_array();
+  std::ranges::fill(index_mapper.array(), -1);
+  std::span<std::int64_t> indices = index_mapper.array();
   for (std::size_t i = 0; i < global_tag_indices.size(); ++i)
     indices[tag_indices[i]] = global_tag_indices[i];
   index_mapper.scatter_rev([](std::int32_t a, std::int32_t b)
@@ -254,16 +423,16 @@ transfer_meshtags_to_submesh(
 
   // Map tag values in a similar way (Allowing negative values)
   dolfinx::la::Vector<T> values_mapper(parent_entity_map, 1);
-  values_mapper.set(std::numeric_limits<T>::min());
-  std::span<T> values = values_mapper.mutable_array();
+  std::ranges::fill(values_mapper.array(), std::numeric_limits<T>::min());
+  std::span<T> values = values_mapper.array();
   std::span<const T> tag_values = tags.values();
   for (std::size_t i = 0; i < tag_values.size(); ++i)
     values[tag_indices[i]] = tag_values[i];
   values_mapper.scatter_rev([](T a, T b) { return std::max<T>(a, b); });
   values_mapper.scatter_fwd();
 
-  // For each entity in the tag, find all cells of the submesh connected to this
-  // entity. Global to local returns -1 if not on process.
+  // For each entity in the tag, find all cells of the submesh connected to
+  // this entity. Global to local returns -1 if not on process.
   std::vector<std::int32_t> local_indices(indices.size());
   parent_entity_map->global_to_local(indices, local_indices);
   std::span<const T> parent_values = values_mapper.array();
@@ -380,6 +549,77 @@ void declare_meshtag_operators(nanobind::module_& m, std::string type)
       nanobind::arg("vertex_map"), nanobind::arg("cell_map"));
 }
 
+template <typename T>
+void declare_closest_point(nanobind::module_& m, std::string type)
+{
+  std::string pyfunc_name = "closest_point_projection_" + type;
+  m.def(
+      pyfunc_name.c_str(),
+      [](const dolfinx::mesh::Mesh<T>& mesh,
+         nanobind::ndarray<const std::int32_t, nanobind::ndim<1>,
+                           nanobind::c_contig>
+             cells,
+         nanobind::ndarray<const T, nanobind::ndim<2>, nanobind::c_contig>
+             points,
+         T tol_x, T tol_dist, T tol_grad, std::size_t max_iter,
+         std::size_t max_ls_iter)
+      {
+        std::size_t tdim
+            = dolfinx::mesh::cell_dim(mesh.topology()->cell_type());
+        bool is_simplex
+            = (mesh.topology()->cell_type() == dolfinx::mesh::CellType::triangle
+               || mesh.topology()->cell_type()
+                      == dolfinx::mesh::CellType::tetrahedron);
+        switch (tdim)
+        {
+        case 1:
+          return scifem::closest_point_projection<T, 1, false>(
+              mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
+              std::span<const T>(points.data(), points.size()), tol_x, tol_dist,
+              tol_grad, max_iter, max_ls_iter);
+        case 2:
+        {
+          if (is_simplex)
+          {
+            return scifem::closest_point_projection<T, 2, true>(
+                mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
+                std::span<const T>(points.data(), points.size()), tol_x,
+
+                tol_dist, tol_grad, max_iter, max_ls_iter);
+          }
+          else
+          {
+            return scifem::closest_point_projection<T, 2, false>(
+                mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
+                std::span<const T>(points.data(), points.size()), tol_x,
+                tol_dist, tol_grad, max_iter, max_ls_iter);
+          }
+        }
+        case 3:
+        {
+          if (is_simplex)
+            return scifem::closest_point_projection<T, 3, true>(
+                mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
+                std::span<const T>(points.data(), points.size()), tol_x,
+                tol_dist, tol_grad, max_iter, max_ls_iter);
+          else
+            return scifem::closest_point_projection<T, 3, false>(
+                mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
+                std::span<const T>(points.data(), points.size()), tol_x,
+                tol_dist, tol_grad, max_iter, max_ls_iter);
+        }
+        default:
+          throw std::runtime_error("Unsupported cell dimension");
+        }
+      },
+      nanobind::arg("mesh"), nanobind::arg("cells"), nanobind::arg("points"),
+      nanobind::arg("tol_x"), nanobind::arg("tol_dist"),
+      nanobind::arg("tol_grad"), nanobind::arg("max_iter"),
+      nanobind::arg("max_ls_iter"),
+      "Compute the closest points on the mesh to a set of input points, and "
+      "return the closest points and their reference coordinates.");
+}
+
 } // namespace scifem_wrapper
 
 NB_MODULE(_scifem, m)
@@ -387,4 +627,6 @@ NB_MODULE(_scifem, m)
   scifem_wrapper::declare_real_function_space<double>(m, "float64");
   scifem_wrapper::declare_real_function_space<float>(m, "float32");
   scifem_wrapper::declare_meshtag_operators<std::int32_t>(m, "int32");
+  scifem_wrapper::declare_closest_point<double>(m, "float64");
+  scifem_wrapper::declare_closest_point<float>(m, "float32");
 }
