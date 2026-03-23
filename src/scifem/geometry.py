@@ -134,7 +134,7 @@ def closest_point_projection(
 
             # Compute current objective function
             diff = surface_point - target_point
-            current_dist_sq = 0.5 * np.linalg.norm(diff) ** 2
+            current_dist_sq = 0.5 * np.dot(diff, diff)
             # Compute the gradient in reference coordinates using the Jacobian (tangent vectors)
             tangents = np.dot(tab[1 : tdim + 1, 0, :], coord)
             g = np.dot(tangents, diff)
@@ -172,7 +172,7 @@ def closest_point_projection(
                 # Evaluate distance at the projected point
                 tab_new = element.tabulate(0, x_new.reshape(1, tdim))
                 S_new = np.dot(tab_new[0, 0, :], coord)
-                new_dist_sq = 0.5 * np.linalg.norm(S_new - target_point) ** 2
+                new_dist_sq = 0.5 * np.dot(S_new - target_point, S_new - target_point)
                 if new_dist_sq < 0.5 * tol_dist**2:
                     # We are close enough to the target point, no need for further line search
                     target_reached = True
