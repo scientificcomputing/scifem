@@ -126,25 +126,39 @@ def test_2D_manifold(order):
     points = np.vstack([R * np.cos(theta), R * np.sin(theta), z]).T
 
     for point_to_project in points:
+        import time
+
+        start_scipy = time.perf_counter()
         (result_scipy, ref_scipy) = scipy_project_point_to_element(
             mesh, np.array([0], dtype=np.int32), point_to_project, tol=tol
         )
-
+        end_scipy = time.perf_counter()
+        start = time.perf_counter()
         result, ref_coords = closest_point_projection(
             mesh, np.array([0], dtype=np.int32), point_to_project, tol_x=tol, tol_dist=tol_dist
         )
+        end = time.perf_counter()
         import scifem
 
-        scifem._scifem.closest_point_projection_float64(
+        start_cpp = time.perf_counter()
+        closest_point, closest_ref = scifem._scifem.closest_point_projection_float64(
             mesh._cpp_object,
             np.array([0], dtype=np.int32),
             point_to_project.reshape(-1, 3),
             tol,
             tol,
             tol,
-            1000,
             250,
+            200,
         )
+        end_cpp = time.perf_counter()
+        print(
+            f"Python: {end - start:.6e} seconds, C++: {end_cpp - start_cpp:.6e} seconds, Scipy: {end_scipy - start_scipy:.6e} seconds"
+        )
+        np.testing.assert_allclose(result.flatten(), closest_point.flatten(), atol=tol)
+        np.testing.assert_allclose(ref_coords.flatten(), closest_ref.flatten(), atol=tol)
+        assert False
+        breakpoint()
         print(project_onto_simplex(np.array([1.3, 0.8])))
         breakpoint()
         # Check that we are within the bounds of the simplex

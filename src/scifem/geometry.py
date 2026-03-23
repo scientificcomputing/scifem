@@ -135,7 +135,6 @@ def closest_point_projection(
             # Compute current objective function
             diff = surface_point - target_point
             current_dist_sq = 0.5 * np.linalg.norm(diff) ** 2
-
             # Compute the gradient in reference coordinates using the Jacobian (tangent vectors)
             tangents = np.dot(tab[1 : tdim + 1, 0, :], coord)
             g = np.dot(tangents, diff)
@@ -143,6 +142,7 @@ def closest_point_projection(
             # Check for convergence in gradient norm, scaled by the Jacobian to account
             # for stretching of the reference space
             jac_norm = np.linalg.norm(tangents)
+
             scaled_tol_grad = tol_grad * max(jac_norm, 1.0)
             if np.linalg.norm(g) < scaled_tol_grad:
                 break
@@ -158,6 +158,7 @@ def closest_point_projection(
             for li in range(max_ls_iter):
                 # Apply the exact analytical simplex projection
                 x_new = project(x_k - alpha * g)
+                # breakpoint()
 
                 if np.linalg.norm(x_new - x_new_prev) < eps:
                     # The projection is pinned to a boundary.

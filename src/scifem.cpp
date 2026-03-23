@@ -2,6 +2,7 @@
 // C++ wrappers for SCIFEM
 
 #include <basix/finite-element.h>
+#include <basix/mdspan.hpp>
 #include <dolfinx/common/IndexMap.h>
 #include <dolfinx/common/version.h>
 #include <dolfinx/fem/DofMap.h>
@@ -15,9 +16,12 @@
 #include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
+
+namespace md = MDSPAN_IMPL_STANDARD_NAMESPACE;
 
 namespace
 {
@@ -57,6 +61,7 @@ auto as_nbarrayp(std::pair<V, std::array<std::size_t, U>>&& x)
 
 namespace impl
 {
+
 template <typename T>
 inline void sort_array_3_descending(std::array<T, 3>& arr)
 {
@@ -85,8 +90,8 @@ inline void simplex_projection(const std::array<T, tdim>& x,
                                std::array<T, tdim>& projected)
 {
   std::array<T, tdim> u;
-  std::transform(x.begin(), x.end(), u.begin(),
-                 [](auto xi) { return std::max(xi, T(0)); });
+  std::ranges::transform(x, u.begin(),
+                         [](auto xi) { return std::max(xi, T(0)); });
   T sum = std::accumulate(u.begin(), u.end(), T(0));
   if (sum <= 1.0)
   {
@@ -172,54 +177,227 @@ inline void projection(const std::array<T, tdim>& x,
 namespace scifem
 {
 
-template <typename T, std::size_t tdim, bool is_simplex>
+template <typename T, std::size_t tdim, bool is_simplex, std::size_t gdim>
 std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
     const dolfinx::mesh::Mesh<T>& mesh, std::span<const std::int32_t> cells,
     std::span<const T> points, T tol_x, T tol_dist, T tol_grad,
     std::size_t max_iter, std::size_t max_ls_iter)
 {
-  constexpr T roundoff_tol = 10 * std::numeric_limits<T>::epsilon();
+  constexpr T eps = std::numeric_limits<T>::epsilon();
+  constexpr T roundoff_tol = 100 * eps;
 
-  basix::FiniteElement e = basix::create_element<T>(
-      basix::element::family::P,
-      dolfinx::mesh::cell_type_to_basix_type(mesh.topology()->cell_type()),
-      mesh.geometry().cmap().degree(), mesh.geometry().cmap().variant(),
-      basix::element::dpc_variant::unset, false);
-
-  assert(mesh.geometry().cmap().hash() == e.hash());
-  std::vector<T> closest_points(cells.size());
+  const dolfinx::fem::CoordinateElement<T>& cmap = mesh.geometry().cmap();
+  std::vector<T> closest_points(3 * cells.size());
   assert(cells.size() == points.size() / 3);
-  std::vector<T> reference_points(cells.size() * mesh.topology()->dim());
+  std::vector<T> reference_points(cells.size() * tdim);
 
-  std::array<T, tdim> initial_guess = {1. / T(tdim)};
-
-  std::function<void(const std::array<T, tdim>&, std::array<T, tdim>&)> project;
+  std::array<T, tdim> initial_guess;
+  T midpoint_divider = (is_simplex) ? 1.0 : 0.0;
+  std::ranges::fill(initial_guess, 1.0 / ((T)tdim + midpoint_divider));
 
   std::array<T, tdim> projected;
 
-  impl::projection<T, tdim, is_simplex>(initial_guess, projected);
+  const std::array<std::size_t, 4> dtab_shape = cmap.tabulate_shape(1, 1);
+  const std::array<std::size_t, 4> tab_shape = cmap.tabulate_shape(0, 1);
+  const std::size_t basis_data_size
+      = std::reduce(tab_shape.begin(), tab_shape.end(), 1, std::multiplies{});
+  // Use single buffer for 0th and 1st order derivatives, as we only need one at
+  // a time
+  std::vector<T> dphi_b(
+      std::reduce(dtab_shape.begin(), dtab_shape.end(), 1, std::multiplies{}));
+  md::mdspan<const T, md::dextents<std::size_t, 4>> phi_full(dphi_b.data(),
+                                                             dtab_shape);
+  auto phi = md::submdspan(phi_full, 0, md::full_extent, md::full_extent, 0);
+  auto dphi
+      = md::submdspan(phi_full, std::pair(1, gdim + 1), 0, md::full_extent, 0);
 
   std::array<T, tdim> x_k;
+  std::array<T, tdim> x_old;
+  std::array<T, gdim> diff;
+  std::array<T, gdim * tdim> J_buffer;
+  std::array<T, tdim> gradient;
+  std::array<T, tdim> x_new_prev;
+  std::array<T, tdim> x_new;
+  md::mdspan<T, md::extents<std::size_t, gdim, tdim>> J(J_buffer.data(), gdim,
+                                                        tdim);
+
+  std::array<T, gdim> X_phys_buffer;
+  md::mdspan<T, md::extents<std::size_t, 1, gdim>> surface_point(
+      X_phys_buffer.data(), 1, gdim);
+
+  // Extract data to compute cell geometry
+  md::mdspan<const std::int32_t, md::dextents<std::size_t, 2>> x_dofmap
+      = mesh.geometry().dofmap(0);
+  std::span<const T> x = mesh.geometry().x();
+  std::vector<T> cdofs(3 * x_dofmap.extent(1));
+  md::mdspan<const T, md::dextents<std::size_t, 2>> cell_geometry(
+      cdofs.data(), x_dofmap.extent(1), gdim);
+
   for (std::size_t i = 0; i < cells.size(); ++i)
   {
-    std::span<const T> point(points.data() + 3 * i, 3);
+    // Pack cell geometry into mdspan for push_forward
+    auto x_dofs = md::submdspan(x_dofmap, cells[i], md::full_extent);
+    for (std::size_t i = 0; i < x_dofs.size(); ++i)
+      std::copy_n(x.data() + (3 * x_dofs[i]), gdim,
+                  std::next(cdofs.begin(), gdim * i));
+
+    std::span<const T> target_point(points.data() + 3 * i, 3);
+
+    constexpr T sigma = 0.1;
+    constexpr T beta = 0.5;
 
     // Update Initial guess
     std::ranges::copy(initial_guess, x_k.begin());
-    // for (std::size_t k = 0; k < max_iter; ++k)
-    // {
-    //   // 1. Projection
-    //   impl::projection<T, tdim, is_simplex>(x_k, projected);
+    for (std::size_t k = 0; k < max_iter; k++)
+    {
+      std::ranges::copy(x_k, x_old.begin());
 
-    //   // 2. Compute closest point and gradient
-    //   T dist;
-    //   std::array<T, 3> g;
-    //   std::tie(closest_points[i], dist, g) = e.evaluate_closest_point(
-    //       cells[i], projected.data(), point.data());
+      // Tabulate basis function and gradient at current point
+      std::ranges::fill(dphi_b, 0);
+      cmap.tabulate(1, std::span(x_k.data(), tdim), {1, tdim}, dphi_b);
 
-    //   // Check convergence
-    //   if (dist < tol_dist || dist < roundoff_tol)
-    //     break;
+      // Push forward to physicalspace
+      dolfinx::fem::CoordinateElement<T>::push_forward(surface_point,
+                                                       cell_geometry, phi);
+
+      // Compute objective function (squared distance to point)/2
+      std::ranges::transform(X_phys_buffer, target_point, diff.begin(),
+                             [](T xpi, T tpi) { return xpi - tpi; });
+
+      T current_dist_sq
+          = 0.5
+            * std::inner_product(diff.begin(), diff.end(), diff.begin(), T(0));
+
+      // Compute Jacobian (tangent vectors)
+      std::ranges::fill(J_buffer, 0);
+      dolfinx::fem::CoordinateElement<T>::compute_jacobian(dphi, cell_geometry,
+                                                           J);
+
+      // Compute tangents (J^T diff)
+      std::ranges::fill(gradient, 0);
+      for (std::size_t l = 0; l < gdim; ++l)
+        for (std::size_t m = 0; m < tdim; ++m)
+          gradient[m] += J(l, m) * diff[l];
+
+      // Check for convergence in gradient norm, scaled by Jacobian to account
+      // for stretching of the reference space
+      T jac_norm = std::sqrt(std::inner_product(J_buffer.data(),
+                                                J_buffer.data() + (gdim * tdim),
+                                                J_buffer.data(), T(0)));
+      T scaled_tol_grad = tol_grad * std::max(jac_norm, T(1));
+      if (std::sqrt(std::inner_product(gradient.begin(), gradient.end(),
+                                       gradient.begin(), T(0)))
+          < scaled_tol_grad)
+      {
+        break;
+      }
+
+      // Goldstein-Polyak-Levitin Projected Line Search
+      // Bertsekas (1976) Eq. (14) - Armijo Rule along the Projection Arc
+
+      std::ranges::fill(x_new_prev, -1);
+      bool target_reached = false;
+      T alpha = 1.0;
+      for (std::size_t ls_iter = 0; ls_iter < max_ls_iter; ++ls_iter)
+      { // Take projected gradient step
+        std::array<T, tdim> x_k_tmp;
+
+        // Compute new step xk - alpha * g and project back to domain
+        std::ranges::transform(x_k, gradient, x_k_tmp.begin(),
+                               [alpha](T xki, T gi)
+                               { return xki - alpha * gi; });
+
+        impl::projection<T, tdim, is_simplex>(x_k_tmp, x_new);
+
+        // The projection is pinned to the boundary, terminate search
+        T local_diff = std::sqrt(
+            std::inner_product(x_new.begin(), x_new.end(), x_new_prev.begin(),
+                               T(0), std::plus<T>(), [](T xni, T xki)
+                               { return (xni - xki) * (xni - xki); }));
+        if (local_diff < eps)
+          break;
+
+        std::ranges::copy(x_new, x_new_prev.begin());
+
+        // Size of step after projecting back to boundary
+        std::array<T, tdim> actual_step;
+        std::ranges::transform(x_k, x_new, actual_step.begin(),
+                               [](T xki, T xni) { return xni - xki; });
+        // Evaluate distance at new point
+
+        std::ranges::fill(dphi_b, basis_data_size);
+        cmap.tabulate(0, std::span(x_k.data(), tdim), {1, tdim},
+                      std::span(dphi_b.data(), basis_data_size));
+
+        // Push forward to physical space
+        dolfinx::fem::CoordinateElement<T>::push_forward(surface_point,
+                                                         cell_geometry, phi);
+
+        // Compute objective function (squared distance to point)/2
+        std::ranges::transform(X_phys_buffer, target_point, diff.begin(),
+                               [](T xpi, T tpi) { return xpi - tpi; });
+
+        T new_sq_dist = 0.5
+                        * std::inner_product(diff.begin(), diff.end(),
+                                             diff.begin(), T(0));
+
+        // If we are close enough to the targetpoint we terminate the
+        // linesearch, even if the Armijo condition is not satisfied, to avoid
+        // unnecessary iterations close to the target point.
+        if (new_sq_dist < 0.5 * tol_dist * tol_dist)
+        {
+          target_reached = true;
+          break;
+        }
+
+        // Bertsekas Eq. (14) condition:
+        // f(x_new) <= f(x_k) + sigma * grad_f(x_k)^T * (x_new - x_k)
+        // Note: g is grad_f(x_k)
+        if (new_sq_dist
+            <= current_dist_sq
+                   - sigma
+                         * std::inner_product(gradient.begin(), gradient.end(),
+                                              actual_step.begin(), T(0))
+                   + roundoff_tol)
+        {
+          break;
+        }
+
+        alpha *= beta;
+        if (ls_iter == max_ls_iter - 1)
+        {
+          std::cout << "Line search failed to find a suitable step after "
+                    << max_ls_iter << " iterations." << std::endl;
+        }
+      }
+
+      std::ranges::copy(x_new, x_k.begin());
+      if (target_reached)
+        break;
+
+      // Check if Newton iteration has converged
+      if (std::sqrt(std::inner_product(x_k.begin(), x_k.end(), x_old.begin(),
+                                       T(0), std::plus<T>(), [](T xki, T xoi)
+                                       { return (xki - xoi) * (xki - xoi); }))
+          < tol_x)
+        break;
+
+      if (k == max_iter - 1)
+      {
+        throw std::runtime_error("Newton iteration failed to converge after "
+                                 + std::to_string(max_iter) + " iterations.");
+      }
+
+      // Push forward to physicalspace for closest point
+      cmap.tabulate(0, std::span(x_k.data(), tdim), {1, tdim},
+                    std::span(dphi_b.data(), basis_data_size));
+      dolfinx::fem::CoordinateElement<T>::push_forward(surface_point,
+                                                       cell_geometry, phi);
+      std::copy_n(X_phys_buffer.data(), gdim,
+                  std::next(closest_points.begin(), 3 * i));
+      std::copy_n(x_k.begin(), tdim,
+                  std::next(reference_points.begin(), tdim * i));
+    }
   }
 
   return {std::move(closest_points), std::move(reference_points)};
@@ -566,6 +744,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
       {
         std::size_t tdim
             = dolfinx::mesh::cell_dim(mesh.topology()->cell_type());
+        std::size_t gdim = mesh.geometry().dim();
         bool is_simplex
             = (mesh.topology()->cell_type() == dolfinx::mesh::CellType::triangle
                || mesh.topology()->cell_type()
@@ -573,43 +752,147 @@ void declare_closest_point(nanobind::module_& m, std::string type)
         switch (tdim)
         {
         case 1:
-          return scifem::closest_point_projection<T, 1, false>(
-              mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
-              std::span<const T>(points.data(), points.size()), tol_x, tol_dist,
-              tol_grad, max_iter, max_ls_iter);
+        {
+          switch (gdim)
+          {
+          case 1:
+          {
+            auto [closest_point, closest_ref]
+                = scifem::closest_point_projection<T, 1, false, 1>(
+                    mesh,
+                    std::span<const std::int32_t>(cells.data(), cells.size()),
+                    std::span<const T>(points.data(), points.size()), tol_x,
+                    tol_dist, tol_grad, max_iter, max_ls_iter);
+            return std::make_tuple(
+                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_ref, {cells.size(), tdim}));
+          }
+          case 2:
+          {
+            auto [closest_point, closest_ref]
+                = scifem::closest_point_projection<T, 1, false, 2>(
+                    mesh,
+                    std::span<const std::int32_t>(cells.data(), cells.size()),
+                    std::span<const T>(points.data(), points.size()), tol_x,
+                    tol_dist, tol_grad, max_iter, max_ls_iter);
+            return std::make_tuple(
+                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_ref, {cells.size(), tdim}));
+          }
+          case 3:
+          {
+            auto [closest_point, closest_ref]
+                = scifem::closest_point_projection<T, 1, false, 3>(
+                    mesh,
+                    std::span<const std::int32_t>(cells.data(), cells.size()),
+                    std::span<const T>(points.data(), points.size()), tol_x,
+                    tol_dist, tol_grad, max_iter, max_ls_iter);
+            return std::make_tuple(
+                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_ref, {cells.size(), tdim}));
+          };
+
+          default:
+            throw std::runtime_error("Unsupported geometric dimension");
+          }
+        }
         case 2:
         {
           if (is_simplex)
           {
-            return scifem::closest_point_projection<T, 2, true>(
-                mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
-                std::span<const T>(points.data(), points.size()), tol_x,
-
-                tol_dist, tol_grad, max_iter, max_ls_iter);
+            switch (gdim)
+            {
+            case 2:
+            {
+              auto [closest_point, closest_ref]
+                  = scifem::closest_point_projection<T, 2, true, 2>(
+                      mesh,
+                      std::span<const std::int32_t>(cells.data(), cells.size()),
+                      std::span<const T>(points.data(), points.size()), tol_x,
+                      tol_dist, tol_grad, max_iter, max_ls_iter);
+              return std::make_tuple(
+                  as_nbarray(closest_point, {cells.size(), 3}),
+                  as_nbarray(closest_ref, {cells.size(), tdim}));
+            }
+            case 3:
+            {
+              auto [closest_point, closest_ref]
+                  = scifem::closest_point_projection<T, 2, true, 3>(
+                      mesh,
+                      std::span<const std::int32_t>(cells.data(), cells.size()),
+                      std::span<const T>(points.data(), points.size()), tol_x,
+                      tol_dist, tol_grad, max_iter, max_ls_iter);
+              return std::make_tuple(
+                  as_nbarray(closest_point, {cells.size(), 3}),
+                  as_nbarray(closest_ref, {cells.size(), tdim}));
+            }
+            default:
+              throw std::runtime_error("Unsupported geometric dimension");
+            }
           }
           else
           {
-            return scifem::closest_point_projection<T, 2, false>(
-                mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
-                std::span<const T>(points.data(), points.size()), tol_x,
-                tol_dist, tol_grad, max_iter, max_ls_iter);
+            switch (gdim)
+            {
+            case 2:
+            {
+              auto [closest_point, closest_ref]
+                  = scifem::closest_point_projection<T, 2, false, 2>(
+                      mesh,
+                      std::span<const std::int32_t>(cells.data(), cells.size()),
+                      std::span<const T>(points.data(), points.size()), tol_x,
+                      tol_dist, tol_grad, max_iter, max_ls_iter);
+              return std::make_tuple(
+                  as_nbarray(closest_point, {cells.size(), 3}),
+                  as_nbarray(closest_ref, {cells.size(), tdim}));
+            }
+            case 3:
+            {
+              auto [closest_point, closest_ref]
+                  = scifem::closest_point_projection<T, 2, false, 3>(
+                      mesh,
+                      std::span<const std::int32_t>(cells.data(), cells.size()),
+                      std::span<const T>(points.data(), points.size()), tol_x,
+                      tol_dist, tol_grad, max_iter, max_ls_iter);
+              return std::make_tuple(
+                  as_nbarray(closest_point, {cells.size(), 3}),
+                  as_nbarray(closest_ref, {cells.size(), tdim}));
+            }
+            default:
+              throw std::runtime_error("Unsupported geometric dimension");
+            }
           }
         }
         case 3:
         {
           if (is_simplex)
-            return scifem::closest_point_projection<T, 3, true>(
-                mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
-                std::span<const T>(points.data(), points.size()), tol_x,
-                tol_dist, tol_grad, max_iter, max_ls_iter);
+          {
+            auto [closest_point, closest_ref]
+                = scifem::closest_point_projection<T, 3, true, 3>(
+                    mesh,
+                    std::span<const std::int32_t>(cells.data(), cells.size()),
+                    std::span<const T>(points.data(), points.size()), tol_x,
+                    tol_dist, tol_grad, max_iter, max_ls_iter);
+            return std::make_tuple(
+                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_ref, {cells.size(), tdim}));
+          }
           else
-            return scifem::closest_point_projection<T, 3, false>(
-                mesh, std::span<const std::int32_t>(cells.data(), cells.size()),
-                std::span<const T>(points.data(), points.size()), tol_x,
-                tol_dist, tol_grad, max_iter, max_ls_iter);
-        }
+          {
+            auto [closest_point, closest_ref]
+                = scifem::closest_point_projection<T, 3, false, 3>(
+                    mesh,
+                    std::span<const std::int32_t>(cells.data(), cells.size()),
+                    std::span<const T>(points.data(), points.size()), tol_x,
+                    tol_dist, tol_grad, max_iter, max_ls_iter);
+            return std::make_tuple(
+                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_ref, {cells.size(), tdim}));
+          }
+
         default:
           throw std::runtime_error("Unsupported cell dimension");
+        }
         }
       },
       nanobind::arg("mesh"), nanobind::arg("cells"), nanobind::arg("points"),
