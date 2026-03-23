@@ -206,7 +206,7 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
                                                              dtab_shape);
   auto phi = md::submdspan(phi_full, 0, md::full_extent, md::full_extent, 0);
   auto dphi
-      = md::submdspan(phi_full, std::pair(1, gdim + 1), 0, md::full_extent, 0);
+      = md::submdspan(phi_full, std::pair(1, tdim + 1), 0, md::full_extent, 0);
 
   std::array<T, tdim> x_k;
   std::array<T, tdim> x_old;
