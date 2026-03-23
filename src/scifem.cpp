@@ -237,9 +237,9 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
   {
     // Pack cell geometry into mdspan for push_forward
     auto x_dofs = md::submdspan(x_dofmap, cells[i], md::full_extent);
-    for (std::size_t i = 0; i < x_dofs.size(); ++i)
-      std::copy_n(x.data() + (3 * x_dofs[i]), gdim,
-                  std::next(cdofs.begin(), gdim * i));
+    for (std::size_t k = 0; k < x_dofs.size(); ++k)
+      std::copy_n(x.data() + (3 * x_dofs[k]), gdim,
+                  std::next(cdofs.begin(), gdim * k));
 
     std::span<const T> target_point(points.data() + 3 * i, 3);
 
@@ -325,8 +325,8 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
                                [](T xki, T xni) { return xni - xki; });
         // Evaluate distance at new point
 
-        std::ranges::fill(dphi_b, basis_data_size);
-        cmap.tabulate(0, std::span(x_k.data(), tdim), {1, tdim},
+        std::ranges::fill(std::span(dphi_b.data(), basis_data_size), T(0));
+        cmap.tabulate(0, std::span(x_new.data(), tdim), {1, tdim},
                       std::span(dphi_b.data(), basis_data_size));
 
         // Push forward to physical space
@@ -355,7 +355,7 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
         // Note: g is grad_f(x_k)
         if (new_sq_dist
             <= current_dist_sq
-                   - sigma
+                   + sigma
                          * std::inner_product(gradient.begin(), gradient.end(),
                                               actual_step.begin(), T(0))
                    + roundoff_tol)
@@ -387,17 +387,17 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
         throw std::runtime_error("Newton iteration failed to converge after "
                                  + std::to_string(max_iter) + " iterations.");
       }
-
-      // Push forward to physicalspace for closest point
-      cmap.tabulate(0, std::span(x_k.data(), tdim), {1, tdim},
-                    std::span(dphi_b.data(), basis_data_size));
-      dolfinx::fem::CoordinateElement<T>::push_forward(surface_point,
-                                                       cell_geometry, phi);
-      std::copy_n(X_phys_buffer.data(), gdim,
-                  std::next(closest_points.begin(), 3 * i));
-      std::copy_n(x_k.begin(), tdim,
-                  std::next(reference_points.begin(), tdim * i));
     }
+    // Push forward to physicalspace for closest point
+    std::ranges::fill(std::span(dphi_b.data(), basis_data_size), T(0));
+    cmap.tabulate(0, std::span(x_k.data(), tdim), {1, tdim},
+                  std::span(dphi_b.data(), basis_data_size));
+    dolfinx::fem::CoordinateElement<T>::push_forward(surface_point,
+                                                     cell_geometry, phi);
+    std::copy_n(X_phys_buffer.data(), gdim,
+                std::next(closest_points.begin(), 3 * i));
+    std::copy_n(x_k.begin(), tdim,
+                std::next(reference_points.begin(), tdim * i));
   }
 
   return {std::move(closest_points), std::move(reference_points)};

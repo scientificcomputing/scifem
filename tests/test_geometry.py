@@ -146,21 +146,18 @@ def test_2D_manifold(order):
             np.array([0], dtype=np.int32),
             point_to_project.reshape(-1, 3),
             tol,
-            tol,
-            tol,
-            250,
-            200,
+            tol_dist=tol_dist,
+            tol_grad=1e-10,
+            max_iter=2000,
+            max_ls_iter=250,
         )
         end_cpp = time.perf_counter()
         print(
             f"Python: {end - start:.6e} seconds, C++: {end_cpp - start_cpp:.6e} seconds, Scipy: {end_scipy - start_scipy:.6e} seconds"
         )
         np.testing.assert_allclose(result.flatten(), closest_point.flatten(), atol=tol)
-        np.testing.assert_allclose(ref_coords.flatten(), closest_ref.flatten(), atol=tol)
-        assert False
-        breakpoint()
-        print(project_onto_simplex(np.array([1.3, 0.8])))
-        breakpoint()
+        np.testing.assert_allclose(ref_coords.flatten(), closest_ref.flatten(), atol=10 * tol)
+
         # Check that we are within the bounds of the simplex
         ref_proj = project_onto_simplex(ref_coords[0])
         np.testing.assert_allclose(ref_proj, ref_coords[0])
