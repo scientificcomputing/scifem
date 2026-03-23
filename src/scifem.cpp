@@ -184,7 +184,7 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
   constexpr T roundoff_tol = 100 * eps;
 
   const dolfinx::fem::CoordinateElement<T>& cmap = mesh.geometry().cmap();
-  std::vector<T> closest_points(3 * cells.size());
+  std::vector<T> closest_points(3 * cells.size(), T(0));
   assert(cells.size() == points.size() / 3);
   std::vector<T> reference_points(cells.size() * tdim);
 
@@ -215,6 +215,9 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
   std::array<T, tdim> gradient;
   std::array<T, tdim> x_new_prev;
   std::array<T, tdim> x_new;
+  std::array<T, tdim> x_k_tmp;
+  std::array<T, gdim> target_point;
+
   md::mdspan<T, md::extents<std::size_t, gdim, tdim>> J(J_buffer.data(), gdim,
                                                         tdim);
 
@@ -230,6 +233,9 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
   md::mdspan<const T, md::dextents<std::size_t, 2>> cell_geometry(
       cdofs.data(), x_dofmap.extent(1), gdim);
 
+  constexpr T sigma = 0.1;
+  constexpr T beta = 0.5;
+
   for (std::size_t i = 0; i < cells.size(); ++i)
   {
     // Pack cell geometry into mdspan for push_forward
@@ -238,16 +244,15 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
       std::copy_n(x.data() + (3 * x_dofs[k]), gdim,
                   std::next(cdofs.begin(), gdim * k));
 
-    std::span<const T> target_point(points.data() + 3 * i, 3);
-
-    constexpr T sigma = 0.1;
-    constexpr T beta = 0.5;
+    std::copy(points.data() + (3 * i), points.data() + (3 * i) + gdim,
+              target_point.begin());
 
     // Update Initial guess
     std::ranges::copy(initial_guess, x_k.begin());
     for (std::size_t k = 0; k < max_iter; k++)
     {
-      std::ranges::copy(x_k, x_old.begin());
+      for (std::size_t l = 0; l < tdim; ++l)
+        x_old[l] = x_k[l];
 
       // Tabulate basis function and gradient at current point
       std::ranges::fill(dphi_b, 0);
@@ -258,70 +263,65 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
                                                        cell_geometry, phi);
 
       // Compute objective function (squared distance to point)/2
-      std::ranges::transform(X_phys_buffer, target_point, diff.begin(),
-                             [](T xpi, T tpi) { return xpi - tpi; });
-
-      T current_dist_sq
-          = 0.5
-            * std::inner_product(diff.begin(), diff.end(), diff.begin(), T(0));
+      T current_dist_sq = 0;
+      for (std::size_t d = 0; d < gdim; ++d)
+      {
+        diff[d] = X_phys_buffer[d] - target_point[d];
+        current_dist_sq += diff[d] * diff[d];
+      }
+      current_dist_sq *= T(0.5);
 
       // Compute Jacobian (tangent vectors)
-      std::ranges::fill(J_buffer, 0);
+      for (std::size_t l = 0; l < tdim * gdim; l++)
+        J_buffer[l] = 0;
       dolfinx::fem::CoordinateElement<T>::compute_jacobian(dphi, cell_geometry,
                                                            J);
 
       // Compute tangents (J^T diff)
-      std::ranges::fill(gradient, 0);
+      for (std::size_t m = 0; m < tdim; ++m)
+        gradient[m] = 0;
       for (std::size_t l = 0; l < gdim; ++l)
         for (std::size_t m = 0; m < tdim; ++m)
           gradient[m] += J(l, m) * diff[l];
 
       // Check for convergence in gradient norm, scaled by Jacobian to account
       // for stretching of the reference space
-      T jac_norm = std::sqrt(std::inner_product(J_buffer.data(),
-                                                J_buffer.data() + (gdim * tdim),
-                                                J_buffer.data(), T(0)));
+      T jac_norm = 0;
+      for (std::size_t l = 0; l < tdim * gdim; l++)
+        jac_norm += J_buffer[l] * J_buffer[l];
       T scaled_tol_grad = tol_grad * std::max(jac_norm, T(1));
-      if (std::sqrt(std::inner_product(gradient.begin(), gradient.end(),
-                                       gradient.begin(), T(0)))
-          < scaled_tol_grad)
+      T g_squared = 0;
+      for (std::size_t l = 0; l < tdim; ++l)
+        g_squared += gradient[l] * gradient[l];
+      if (g_squared < scaled_tol_grad)
       {
         break;
       }
 
       // Goldstein-Polyak-Levitin Projected Line Search
       // Bertsekas (1976) Eq. (14) - Armijo Rule along the Projection Arc
-
-      std::ranges::fill(x_new_prev, -1);
+      for (std::size_t l = 0; l < tdim; ++l)
+        x_new_prev[l] = -1;
       bool target_reached = false;
       T alpha = 1.0;
       for (std::size_t ls_iter = 0; ls_iter < max_ls_iter; ++ls_iter)
-      { // Take projected gradient step
-        std::array<T, tdim> x_k_tmp;
-
+      {
+        // Take projected gradient step
         // Compute new step xk - alpha * g and project back to domain
-        std::ranges::transform(x_k, gradient, x_k_tmp.begin(),
-                               [alpha](T xki, T gi)
-                               { return xki - alpha * gi; });
-
+        for (std::size_t l = 0; l < tdim; l++)
+          x_k_tmp[l] = x_k[l] - alpha * gradient[l];
         impl::projection<T, tdim, is_simplex>(x_k_tmp, x_new);
 
         // The projection is pinned to the boundary, terminate search
-        T local_diff = std::sqrt(
-            std::inner_product(x_new.begin(), x_new.end(), x_new_prev.begin(),
-                               T(0), std::plus<T>(), [](T xni, T xki)
-                               { return (xni - xki) * (xni - xki); }));
-        if (local_diff < eps)
+        T local_diff = 0;
+        for (std::size_t l = 0; l < tdim; l++)
+          local_diff += (x_new[l] - x_new_prev[l]) * (x_new[l] - x_new_prev[l]);
+        if (local_diff < eps * eps)
           break;
+        for (std::size_t l = 0; l < tdim; l++)
+          x_new_prev[l] = x_new[l];
 
-        std::ranges::copy(x_new, x_new_prev.begin());
-
-        // Size of step after projecting back to boundary
-        std::array<T, tdim> actual_step;
-        std::ranges::transform(x_k, x_new, actual_step.begin(),
-                               [](T xki, T xni) { return xni - xki; });
         // Evaluate distance at new point
-
         std::ranges::fill(std::span(dphi_b.data(), basis_data_size), T(0));
         cmap.tabulate(0, std::span(x_new.data(), tdim), {1, tdim},
                       std::span(dphi_b.data(), basis_data_size));
@@ -331,12 +331,13 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
                                                          cell_geometry, phi);
 
         // Compute objective function (squared distance to point)/2
-        std::ranges::transform(X_phys_buffer, target_point, diff.begin(),
-                               [](T xpi, T tpi) { return xpi - tpi; });
-
-        T new_sq_dist = 0.5
-                        * std::inner_product(diff.begin(), diff.end(),
-                                             diff.begin(), T(0));
+        T new_sq_dist = 0;
+        for (std::size_t l = 0; l < gdim; ++l)
+        {
+          diff[l] = X_phys_buffer[l] - target_point[l];
+          new_sq_dist += diff[l] * diff[l];
+        }
+        new_sq_dist *= 0.5;
 
         // If we are close enough to the targetpoint we terminate the
         // linesearch, even if the Armijo condition is not satisfied, to avoid
@@ -350,12 +351,12 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
         // Bertsekas Eq. (14) condition:
         // f(x_new) <= f(x_k) + sigma * grad_f(x_k)^T * (x_new - x_k)
         // Note: g is grad_f(x_k)
+        // Size of step after projecting back to boundary
+        T grad_dot_step = 0;
+        for (std::size_t d = 0; d < tdim; ++d)
+          grad_dot_step += gradient[d] * (x_new[d] - x_k[d]);
         if (new_sq_dist
-            <= current_dist_sq
-                   + sigma
-                         * std::inner_product(gradient.begin(), gradient.end(),
-                                              actual_step.begin(), T(0))
-                   + roundoff_tol)
+            <= current_dist_sq + sigma * grad_dot_step + roundoff_tol)
         {
           break;
         }
@@ -373,10 +374,10 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
         break;
 
       // Check if Newton iteration has converged
-      if (std::sqrt(std::inner_product(x_k.begin(), x_k.end(), x_old.begin(),
-                                       T(0), std::plus<T>(), [](T xki, T xoi)
-                                       { return (xki - xoi) * (xki - xoi); }))
-          < tol_x)
+      T x_diff_sq = 0;
+      for (std::size_t l = 0; l < tdim; l++)
+        x_diff_sq += (x_k[l] - x_old[l]) * (x_k[l] - x_old[l]);
+      if (x_diff_sq < tol_x * tol_x)
         break;
 
       if (k == max_iter - 1)

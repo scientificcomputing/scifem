@@ -147,7 +147,7 @@ def test_2D_manifold(order):
             point_to_project.reshape(-1, 3),
             tol,
             tol_dist=tol_dist,
-            tol_grad=1e-10,
+            tol_grad=1e-16,
             max_iter=2000,
             max_ls_iter=250,
         )
@@ -225,7 +225,7 @@ def test_3D_curved_cell(order):
             point_to_project.reshape(-1, 3),
             tol,
             tol_dist=tol_dist,
-            tol_grad=1e-10,
+            tol_grad=1e-16,
             max_iter=2000,
             max_ls_iter=250,
         )
