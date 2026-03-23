@@ -93,7 +93,7 @@ inline void simplex_projection(const std::array<T, tdim>& x,
   std::ranges::transform(x, u.begin(),
                          [](auto xi) { return std::max(xi, T(0)); });
   T sum = std::accumulate(u.begin(), u.end(), T(0));
-  if (sum <= 1.0)
+  if (sum <= (T)1.0)
   {
     if constexpr (tdim == 2)
     {
@@ -122,8 +122,8 @@ inline void simplex_projection(const std::array<T, tdim>& x,
     impl::sort_array_2_descending(x_sorted);
     cumsum[0] = x_sorted[0];
     cumsum[1] = x_sorted[0] + x_sorted[1];
-    Ks[0] = x_sorted[0] > (cumsum[0] - 1.0);
-    Ks[1] = x_sorted[1] * 2 > (cumsum[1] - 1.0);
+    Ks[0] = x_sorted[0] > (cumsum[0] - (T)1.0);
+    Ks[1] = x_sorted[1] * (T)2 > (cumsum[1] - (T)1.0);
     if (Ks[1])
       K = 2;
     else if (Ks[0])
@@ -137,9 +137,9 @@ inline void simplex_projection(const std::array<T, tdim>& x,
     cumsum[0] = x_sorted[0];
     cumsum[1] = x_sorted[0] + x_sorted[1];
     cumsum[2] = x_sorted[0] + x_sorted[1] + x_sorted[2];
-    Ks[0] = x_sorted[0] > (cumsum[0] - 1.0);
-    Ks[1] = x_sorted[1] * 2 > (cumsum[1] - 1.0);
-    Ks[2] = x_sorted[2] * 3 > (cumsum[2] - 1.0);
+    Ks[0] = x_sorted[0] > (cumsum[0] - (T)1.0);
+    Ks[1] = x_sorted[1] * (T)2 > (cumsum[1] - (T)1.0);
+    Ks[2] = x_sorted[2] * (T)3 > (cumsum[2] - (T)1.0);
     if (Ks[2])
       K = 3;
     else if (Ks[1])
@@ -153,7 +153,7 @@ inline void simplex_projection(const std::array<T, tdim>& x,
   {
     static_assert(tdim == 2 || tdim == 3, "Unsupported dimension");
   }
-  T tau = (cumsum[K - 1] - 1.0) / (K);
+  T tau = (cumsum[K - 1] - (T)1.0) / T(K);
   for (std::size_t i = 0; i < tdim; ++i)
     projected[i] = std::max(x[i] - tau, T(0));
 };
