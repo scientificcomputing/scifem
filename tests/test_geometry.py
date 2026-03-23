@@ -155,9 +155,6 @@ def test_2D_manifold(order):
         print(
             f"Python: {end - start:.6e} seconds, C++: {end_cpp - start_cpp:.6e} seconds, Scipy: {end_scipy - start_scipy:.6e} seconds"
         )
-        # if not np.allclose(result.flatten(), closest_point.flatten(), atol=tol):
-        #     breakpoint()
-
         np.testing.assert_allclose(result.flatten(), closest_point.flatten(), atol=tol)
         np.testing.assert_allclose(ref_coords.flatten(), closest_ref.flatten(), atol=10 * tol)
 
