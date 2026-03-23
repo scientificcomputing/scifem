@@ -1,6 +1,7 @@
 // Copyright (C) 2024-2026 Jørgen S. Dokken and Henrik N.T. Finsberg
 // C++ wrappers for SCIFEM
 
+#include <algorithm>
 #include <basix/finite-element.h>
 #include <basix/mdspan.hpp>
 #include <dolfinx/common/IndexMap.h>
@@ -13,6 +14,7 @@
 #include <dolfinx/mesh/Mesh.h>
 #include <dolfinx/mesh/MeshTags.h>
 #include <dolfinx/mesh/cell_types.h>
+#include <iostream>
 #include <memory>
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
@@ -20,6 +22,8 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
+#include <numeric>
+#include <thread>
 
 namespace md = MDSPAN_IMPL_STANDARD_NAMESPACE;
 
