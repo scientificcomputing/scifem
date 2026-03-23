@@ -30,15 +30,8 @@ def project_onto_simplex(
 
     # 2. Otherwise, project exactly onto the slanted face sum(x) = 1
     tdim = len(v)
-    if tdim == 2:
-        sort_v = np.array([max(u[0], u[1]), min(u[0], u[1])])
-        cssv = np.array([sort_v[0], sort_v[0] + sort_v[1]])
-    elif tdim == 3:
-        sort_v = np.sort(v)[::-1]
-        cssv = np.array([sort_v[0], sort_v[0] + sort_v[1], sort_v[0] + sort_v[1] + sort_v[2]])
-    else:
-        raise RuntimeError("Projection onto simplex is only implemented for 2D and 3D vectors.")
-    # cssv = np.cumsum(sort_v)
+    sort_v = np.sort(v)[::-1]
+    cssv = np.cumsum(sort_v)
 
     # Find the primal-dual root
     # sum x_i = a
@@ -102,7 +95,14 @@ def closest_point_projection(
     cell_type = mesh.topology.cell_type
 
     # Set initial guess and tolerance for solver
-    initial_guess = np.full(mesh.topology.dim, 1 / (mesh.topology.dim + 1), dtype=dtype)
+    if (
+        cell_type == dolfinx.mesh.CellType.triangle
+        or cell_type == dolfinx.mesh.CellType.tetrahedron
+    ):
+        plus_val = 1
+    else:
+        plus_val = 0
+    initial_guess = np.full(mesh.topology.dim, 1 / (mesh.topology.dim + plus_val), dtype=dtype)
     closest_points = np.zeros((target_points.shape[0], 3), dtype=dtype)
     reference_points = np.zeros((target_points.shape[0], mesh.topology.dim), dtype=dtype)
     is_simplex = cell_type in [
@@ -200,9 +200,6 @@ def closest_point_projection(
 
             # 4. Check for convergence
             if np.linalg.norm(x_k - x_old) < tol_x:
-                break
-            if new_dist_sq < 0.5 * tol_dist**2:
-                print("Projected point is within tolerance of target point, stopping optimization.")
                 break
 
         assert np.allclose(project(x_k), x_k), "Projection failed to satisfy constraints"
