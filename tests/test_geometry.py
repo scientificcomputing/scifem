@@ -150,6 +150,7 @@ def test_2D_manifold(order):
             tol_grad=1e-16,
             max_iter=2000,
             max_ls_iter=250,
+            num_threads=1
         )
         end_cpp = time.perf_counter()
         print(
@@ -228,6 +229,7 @@ def test_3D_curved_cell(order):
             tol_grad=1e-16,
             max_iter=2000,
             max_ls_iter=250,
+            num_threads=1
         )
         end_cpp = time.perf_counter()
         print(
