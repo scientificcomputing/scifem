@@ -166,10 +166,7 @@ inline void projection(const std::array<T, tdim>& x,
     simplex_projection(x, projected);
   else
     for (std::size_t i = 0; i < tdim; ++i)
-    {
-      projected[i] = std::max(x[i], T(0));
-      projected[i] = std::min(projected[i], T(1));
-    }
+      projected[i] = std::clamp(x[i], T(0.0), T(1.0));
 }
 
 } // namespace impl
