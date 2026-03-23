@@ -120,6 +120,7 @@ def closest_point_projection(
             return np.clip(x, 0.0, 1.0)
 
     for i, (coord, target_point) in enumerate(zip(node_coords, target_points)):
+        target_point = target_point[: mesh.geometry.dim]
         coord = coord.reshape(-1, mesh.geometry.dim)
         x_k = initial_guess.copy()
 
