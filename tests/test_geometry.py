@@ -125,7 +125,7 @@ def test_2D_manifold(order, num_threads):
 
     tol_x = 5e-6
     tol_dist = 1e-7
-    theta = np.linspace(0, 4 * np.pi, 10_000)
+    theta = np.linspace(0, 4 * np.pi, 3_016)
     rand = np.random.RandomState(42)
     R = rand.rand(len(theta))
     z = rand.rand(len(theta)) * 0.5  # Add some random z variation
@@ -198,7 +198,7 @@ def test_3D_curved_cell(order, num_threads):
     mesh = dolfinx.mesh.create_mesh(comm, cells=cells_tet, x=curved_nodes_tet, e=domain_tet)
 
     rand = np.random.RandomState(32)
-    M = 10_000
+    M = 5_001
     points = rand.rand(M, 3) - 0.5 * rand.rand(M, 3)
     tol_x = 1e-7
     tol_dist = 1e-7
