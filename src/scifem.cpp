@@ -375,7 +375,7 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
                 = "Line search failed to find a suitable step after {} "
                   "iterations. "
                   "Current dist: {}, grad_dot_step: {}, alpha: {}";
-            out_msg = std::format(out_msg, max_ls_iter, new_sq_dist, grad);
+            out_msg = std::format(out_msg, new_sq_dist, grad_dot_step, alpha);
             std::cout << out_msg << std::endl;
           }
         }
