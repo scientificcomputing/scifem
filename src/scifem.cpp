@@ -371,8 +371,12 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
           alpha *= beta;
           if (ls_iter == max_ls_iter - 1)
           {
-            std::cout << "Line search failed to find a suitable step after "
-                      << max_ls_iter << " iterations." << std::endl;
+            std::string out_msg
+                = "Line search failed to find a suitable step after {} "
+                  "iterations. "
+                  "Current dist: {}, grad_dot_step: {}, alpha: {}";
+            out_msg = std::format(out_msg, max_ls_iter, new_sq_dist, grad);
+            std::cout << out_msg << std::endl;
           }
         }
 
@@ -389,8 +393,11 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
 
         if (k == max_iter - 1)
         {
-          throw std::runtime_error("Newton iteration failed to converge after "
-                                   + std::to_string(max_iter) + " iterations.");
+          std::string error_msg
+              = std::format("Newton iteration failed to converge after {} "
+                            "iterations. x_diff_sq={} J={}",
+                            max_iter, x_diff_sq, current_dist_sq);
+          throw std::runtime_error(error_msg);
         }
       }
       // Push forward to physicalspace for closest point
