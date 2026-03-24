@@ -2,6 +2,7 @@ import dolfinx
 import numpy as np
 import numpy.typing as npt
 import warnings
+from scifem._scifem import closest_point_projection_float64, closest_point_projection_float32
 
 
 def project_onto_simplex(
@@ -30,15 +31,8 @@ def project_onto_simplex(
 
     # 2. Otherwise, project exactly onto the slanted face sum(x) = 1
     tdim = len(v)
-    if tdim == 2:
-        sort_v = np.array([max(u[0], u[1]), min(u[0], u[1])])
-        cssv = np.array([sort_v[0], sort_v[0] + sort_v[1]])
-    elif tdim == 3:
-        sort_v = np.sort(v)[::-1]
-        cssv = np.array([sort_v[0], sort_v[0] + sort_v[1], sort_v[0] + sort_v[1] + sort_v[2]])
-    else:
-        raise RuntimeError("Projection onto simplex is only implemented for 2D and 3D vectors.")
-    # cssv = np.cumsum(sort_v)
+    sort_v = np.sort(v)[::-1]
+    cssv = np.cumsum(sort_v)
 
     # Find the primal-dual root
     # sum x_i = a
@@ -59,9 +53,9 @@ def closest_point_projection(
     tol_grad: float = 1e-10,
     max_iter: int = 2000,
     max_ls_iter: int = 250,
-) -> tuple[npt.NDArray[np.float64 | np.float32], npt.NDArray[np.float64 | np.float32]]:
-    """
-    Projects a 3D point onto a cell in a potentially higher order mesh.
+    num_threads: int = 1,
+):
+    """Projects a 3D point onto a cell in a potentially higher order mesh.
 
     Uses the Goldstein-Levitin-Polyak Gradient projection method, where
     potential simplex constraints are handled by an exact projection using a
@@ -71,11 +65,85 @@ def closest_point_projection(
     - Dimitri P. Bertsekas, "On the Goldstein-Levitin-Polyak gradient projection method," (1976)
 
     Args:
-        mesh: {py:class}`dolfinx.mesh.Mesh`, the mesh containing the cell.
-        cells: {py:class}`numpy.ndarray`, the local indices of the cells to project onto.
-        target_point: (3,) numpy array, the 3D point to project.
+        mesh: The mesh containing the cells.
+        cells: The local indices of the cells to project onto.
+        target_points: (n, 3) numpy array, the 3D points to project.
         tol_x: Tolerance for changes between iterates in the reference coordinates.
-        If None, uses the square root of machine precision.
+            If None, uses the square root of machine precision.
+        tol_grad: Tolerance for determination based on the gradient norm.
+            The gradient is scaled by the Jacobian to account for stretching.
+        tol_dist: Tolerance used to determine if the projected point is close enough to
+            the target point to stop optimization.
+        max_iter: int, the maximum number of iterations for the projected gradient method.
+        max_ls_iter: int, the maximum number of line search iterations.
+        num_threads: int, the number of threads to use for parallel projection.
+
+    Returns:
+        A tuple of arrays containing the closest points (in physical space)
+        and reference coordinates for each cell to each target point.
+    """
+    xdtype = mesh.geometry.x.dtype
+
+    if xdtype == np.float64:
+        return closest_point_projection_float64(
+            mesh._cpp_object,
+            cells,
+            target_points,
+            tol_x=tol_x,
+            tol_dist=tol_dist,
+            tol_grad=tol_grad,
+            max_iter=max_iter,
+            max_ls_iter=max_ls_iter,
+            num_threads=num_threads,
+        )
+    elif xdtype == np.float32:
+        return closest_point_projection_float32(
+            mesh._cpp_object,
+            cells,
+            target_points,
+            tol_x=tol_x,
+            tol_dist=tol_dist,
+            tol_grad=tol_grad,
+            max_iter=max_iter,
+            max_ls_iter=max_ls_iter,
+            num_threads=num_threads,
+        )
+    else:
+        raise TypeError(f"Unsupported mesh coordinate dtype {xdtype}.")
+
+
+def _closest_point_projection(
+    mesh: dolfinx.mesh.Mesh,
+    cells: npt.NDArray[np.int32],
+    target_points: npt.NDArray[np.float64 | np.float32],
+    tol_x: float | None = None,
+    tol_dist: float = 1e-10,
+    tol_grad: float = 1e-10,
+    max_iter: int = 2000,
+    max_ls_iter: int = 250,
+) -> tuple[npt.NDArray[np.float64 | np.float32], npt.NDArray[np.float64 | np.float32]]:
+    """Projects a 3D point onto a cell in a potentially higher order mesh.
+
+    NOTE:
+        Reference implementation in Python. This should only be used for testing and debugging,
+        and is not optimized for performance. The performant implementation can be found in
+        {py:func}`closest_point_projection`.
+
+    Uses the Goldstein-Levitin-Polyak Gradient projection method, where
+    potential simplex constraints are handled by an exact projection using a
+    primal-dual root finding method. See:
+    - Held, M., Wolfe, P., Crowder, H.: Validation of subgradient optimization (1974)
+    - Laurent Condat. Fast Projection onto the Simplex and the l1 Ball. (2016)
+    - Dimitri P. Bertsekas, "On the Goldstein-Levitin-Polyak gradient projection method," (1976)
+
+    Args:
+        mesh: The mesh containing the cell.
+        cells: The local indices of the cells to project onto.
+        target_points: (n, 3) numpy array, the 3D points to project.
+        tol_x: Tolerance for changes between iterates in the reference coordinates.
+            If None, uses the square root of machine precision.
+        tol_grad: Tolerance for determination based on the gradient norm.
+            The gradient is scaled by the Jacobian to account for stretching.
         tol_dist: Tolerance used to determine if the projected point is close enough to
             the target point to stop optimization.
         max_iter: int, the maximum number of iterations for the projected gradient method.
@@ -96,13 +164,19 @@ def closest_point_projection(
     # Get the coordinates of the nodes for the specified cell
     node_coords = mesh.geometry.x[mesh.geometry.dofmap[cells]][:, :, : mesh.geometry.dim]
     target_points = target_points.reshape(-1, 3)
-    # cmap = mesh.geometry.cmap
 
     # Constraints and Bounds
     cell_type = mesh.topology.cell_type
 
     # Set initial guess and tolerance for solver
-    initial_guess = np.full(mesh.topology.dim, 1 / (mesh.topology.dim + 1), dtype=dtype)
+    if (
+        cell_type == dolfinx.mesh.CellType.triangle
+        or cell_type == dolfinx.mesh.CellType.tetrahedron
+    ):
+        plus_val = 1
+    else:
+        plus_val = 0
+    initial_guess = np.full(mesh.topology.dim, 1 / (mesh.topology.dim + plus_val), dtype=dtype)
     closest_points = np.zeros((target_points.shape[0], 3), dtype=dtype)
     reference_points = np.zeros((target_points.shape[0], mesh.topology.dim), dtype=dtype)
     is_simplex = cell_type in [
@@ -120,6 +194,7 @@ def closest_point_projection(
             return np.clip(x, 0.0, 1.0)
 
     for i, (coord, target_point) in enumerate(zip(node_coords, target_points)):
+        target_point = target_point[: mesh.geometry.dim]
         coord = coord.reshape(-1, mesh.geometry.dim)
         x_k = initial_guess.copy()
 
@@ -134,8 +209,7 @@ def closest_point_projection(
 
             # Compute current objective function
             diff = surface_point - target_point
-            current_dist_sq = 0.5 * np.linalg.norm(diff) ** 2
-
+            current_dist_sq = 0.5 * np.dot(diff, diff)
             # Compute the gradient in reference coordinates using the Jacobian (tangent vectors)
             tangents = np.dot(tab[1 : tdim + 1, 0, :], coord)
             g = np.dot(tangents, diff)
@@ -143,6 +217,7 @@ def closest_point_projection(
             # Check for convergence in gradient norm, scaled by the Jacobian to account
             # for stretching of the reference space
             jac_norm = np.linalg.norm(tangents)
+
             scaled_tol_grad = tol_grad * max(jac_norm, 1.0)
             if np.linalg.norm(g) < scaled_tol_grad:
                 break
@@ -158,6 +233,7 @@ def closest_point_projection(
             for li in range(max_ls_iter):
                 # Apply the exact analytical simplex projection
                 x_new = project(x_k - alpha * g)
+                # breakpoint()
 
                 if np.linalg.norm(x_new - x_new_prev) < eps:
                     # The projection is pinned to a boundary.
@@ -171,7 +247,7 @@ def closest_point_projection(
                 # Evaluate distance at the projected point
                 tab_new = element.tabulate(0, x_new.reshape(1, tdim))
                 S_new = np.dot(tab_new[0, 0, :], coord)
-                new_dist_sq = 0.5 * np.linalg.norm(S_new - target_point) ** 2
+                new_dist_sq = 0.5 * np.dot(S_new - target_point, S_new - target_point)
                 if new_dist_sq < 0.5 * tol_dist**2:
                     # We are close enough to the target point, no need for further line search
                     target_reached = True
@@ -199,9 +275,6 @@ def closest_point_projection(
 
             # 4. Check for convergence
             if np.linalg.norm(x_k - x_old) < tol_x:
-                break
-            if new_dist_sq < 0.5 * tol_dist**2:
-                print("Projected point is within tolerance of target point, stopping optimization.")
                 break
 
         assert np.allclose(project(x_k), x_k), "Projection failed to satisfy constraints"
