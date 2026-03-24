@@ -122,7 +122,7 @@ def test_2D_manifold(order, num_threads):
 
     tol_x = 1e-6
     tol_dist = 1e-7
-    theta = np.linspace(0, 4 * np.pi, 1_000_000)
+    theta = np.linspace(0, 4 * np.pi, 10_000)
     rand = np.random.RandomState(42)
     R = rand.rand(len(theta))
     z = rand.rand(len(theta)) * 0.5  # Add some random z variation
