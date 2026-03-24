@@ -129,9 +129,7 @@ def test_2D_manifold(order, num_threads):
     points = np.vstack([R * np.cos(theta), R * np.sin(theta), z]).T
 
     cells = np.zeros(points.shape[0], dtype=np.int32)
-    import time
 
-    start = time.perf_counter()
     closest_point, closest_ref = closest_point_projection(
         mesh,
         cells,
@@ -143,22 +141,12 @@ def test_2D_manifold(order, num_threads):
         max_ls_iter=250,
         num_threads=num_threads,
     )
-    end = time.perf_counter()
-    print(len(cells))
-    print(
-        f"Projection completed in {end - start:.5e} seconds with num_threads={num_threads} and order={order}."
-    )
-    start_scipy = time.perf_counter()
-    (result_scipy, ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_dist)
-    end_scipy = time.perf_counter()
-    print(f"Scipy projection completed in {end_scipy - start_scipy:.5e} seconds.")
 
-    start_python = time.perf_counter()
+    (result_scipy, ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_dist)
+
     result, ref_coords = _closest_point_projection(
         mesh, cells, points, tol_x=tol_x, tol_dist=tol_dist
     )
-    end_python = time.perf_counter()
-    print(f"Python projection completed in {end_python - start_python:.5e} seconds.")
 
     for i, point_to_project in enumerate(points):
         # Check that python and C++ implementations give the same result
