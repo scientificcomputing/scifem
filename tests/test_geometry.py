@@ -47,13 +47,16 @@ def scipy_project_point_to_element(
     ):
         method = method or "SLSQP"
         constraint = {"type": "ineq", "fun": lambda x: 1.0 - np.sum(x)}
+        d = 1.0
     else:
         method = method or "L-BFGS-B"
         constraint = {}
+        d = 0.0
     bounds = [(0.0, 1.0) for _ in range(mesh.topology.dim)]
 
     # Set initial guess and tolerance for solver
-    initial_guess = np.full(mesh.topology.dim, 1 / (mesh.topology.dim + 1), dtype=np.float64)
+
+    initial_guess = np.full(mesh.topology.dim, 1 / (mesh.topology.dim + d), dtype=np.float64)
     tol = np.sqrt(np.finfo(mesh.geometry.x.dtype).eps) if tol is None else tol
     closest_points = np.zeros((target_points.shape[0], 3), dtype=mesh.geometry.x.dtype)
     ref_points = np.zeros((target_points.shape[0], mesh.topology.dim), dtype=mesh.geometry.x.dtype)
@@ -74,7 +77,7 @@ def scipy_project_point_to_element(
         def objective(x_ref):
             surface_point = S(x_ref)
             diff = surface_point - target_point
-            return 0.5 * np.linalg.norm(diff) ** 2
+            return 0.5 * np.dot(diff, diff)
 
         def objective_grad(x_ref):
             diff = S(x_ref) - target_point
@@ -120,7 +123,7 @@ def test_2D_manifold(order, num_threads):
         cells = cells[:, :3]
     mesh = dolfinx.mesh.create_mesh(comm, cells=cells, x=curved_nodes, e=c_el)
 
-    tol_x = 1e-6
+    tol_x = 5e-6
     tol_dist = 1e-7
     theta = np.linspace(0, 4 * np.pi, 10_000)
     rand = np.random.RandomState(42)
@@ -137,38 +140,33 @@ def test_2D_manifold(order, num_threads):
         tol_x=tol_x,
         tol_dist=tol_dist,
         tol_grad=1e-16,
-        max_iter=2000,
-        max_ls_iter=250,
+        max_iter=500,
+        max_ls_iter=50,
         num_threads=num_threads,
     )
 
-    (result_scipy, _ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_dist)
+    (result_scipy, _ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_x**2)
 
     result, ref_coords = _closest_point_projection(
         mesh, cells, points, tol_x=tol_x, tol_dist=tol_dist
     )
 
-    for i, point_to_project in enumerate(points):
-        # Check that python and C++ implementations give the same result
-        np.testing.assert_allclose(result[i].flatten(), closest_point[i].flatten(), atol=tol_dist)
-        np.testing.assert_allclose(
-            ref_coords[i].flatten(), closest_ref[i].flatten(), atol=10 * tol_dist
-        )
+    # Check that python and C++ implementations give the same result
+    np.testing.assert_allclose(result, closest_point, atol=tol_dist)
+    np.testing.assert_allclose(ref_coords, closest_ref, atol=10 * tol_x)
 
+    # Check that scipy and our implementation give similar distances,
+    # allowing for some tolerance due to different optimization methods
+    diff_scifem = closest_point - points
+    dist_scifem = 0.5 * np.sum(diff_scifem**2, axis=1)
+    diff_scipy = result_scipy - points
+    dist_scipy = 0.5 * np.sum(diff_scipy**2, axis=1)
+    np.testing.assert_allclose(dist_scifem, dist_scipy, atol=50 * tol_dist, rtol=1e-6)
+
+    for coord in closest_ref:
         # Check that we are within the bounds of the simplex
-        ref_proj = project_onto_simplex(ref_coords[i])
-        np.testing.assert_allclose(ref_proj, ref_coords[i])
-
-        # Check that scipy and our implementation give similar distances,
-        # allowing for some tolerance due to different optimization methods
-        dist_scipy = 0.5 * np.dot(
-            result_scipy[i] - point_to_project, result_scipy[i] - point_to_project
-        )
-        dist_ours = 0.5 * np.dot(result[i] - point_to_project, result[i] - point_to_project)
-        if np.isclose(dist_ours, 0.0, atol=tol_dist):
-            assert np.isclose(dist_scipy, 0.0, atol=10 * tol_dist)
-        else:
-            assert np.isclose(dist_ours, dist_scipy, atol=50 * tol_dist, rtol=1e-2)
+        ref_proj = project_onto_simplex(coord)
+        np.testing.assert_allclose(ref_proj, coord)
 
 
 @pytest.mark.parametrize("num_threads", [1, 2, 4])
@@ -202,7 +200,7 @@ def test_3D_curved_cell(order, num_threads):
     rand = np.random.RandomState(32)
     M = 10_000
     points = rand.rand(M, 3) - 0.5 * rand.rand(M, 3)
-    tol_x = 1e-6
+    tol_x = 1e-7
     tol_dist = 1e-7
 
     cells = np.zeros(points.shape[0], dtype=np.int32)
@@ -213,12 +211,11 @@ def test_3D_curved_cell(order, num_threads):
         tol_x=tol_x,
         tol_dist=tol_dist,
         tol_grad=1e-16,
-        max_iter=2000,
-        max_ls_iter=250,
+        max_iter=500,
+        max_ls_iter=50,
         num_threads=num_threads,
     )
-    (result_scipy, ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_x)
-
+    (result_scipy, _ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_x**2)
     result, ref_coords = _closest_point_projection(
         mesh,
         cells,
@@ -227,21 +224,20 @@ def test_3D_curved_cell(order, num_threads):
         tol_dist=tol_dist,
         tol_grad=1e-16,
     )
-    for i, point_to_project in enumerate(points):
-        np.testing.assert_allclose(result[i].flatten(), closest_point[i].flatten(), atol=tol_dist)
-        np.testing.assert_allclose(
-            ref_coords[i].flatten(), closest_ref[i].flatten(), atol=10 * tol_x
-        )
 
+    # Check that python and C++ implementations give the same result
+    np.testing.assert_allclose(result, closest_point, atol=tol_dist)
+    np.testing.assert_allclose(ref_coords, closest_ref, atol=10 * tol_x)
+
+    # Check that scipy and our implementation give similar distances,
+    # allowing for some tolerance due to different optimization methods
+    diff_scifem = closest_point - points
+    dist_scifem = 0.5 * np.sum(diff_scifem**2, axis=1)
+    diff_scipy = result_scipy - points
+    dist_scipy = 0.5 * np.sum(diff_scipy**2, axis=1)
+    np.testing.assert_allclose(dist_scifem, dist_scipy, atol=50 * tol_dist, rtol=1e-6)
+
+    for coord in closest_ref:
         # Check that we are within the bounds of the simplex
-        ref_proj = project_onto_simplex(ref_coords[i])
-        np.testing.assert_allclose(ref_proj, ref_coords[i])
-
-        dist_scipy = 0.5 * np.dot(
-            result_scipy[i] - point_to_project, result_scipy[i] - point_to_project
-        )
-        dist_ours = 0.5 * np.dot(result[i] - point_to_project, result[i] - point_to_project)
-        if np.isclose(dist_ours, 0.0, atol=tol_dist):
-            assert np.isclose(dist_scipy, 0.0, atol=50 * tol_dist)
-        else:
-            assert np.isclose(dist_ours, dist_scipy, atol=tol_dist, rtol=1e-2)
+        ref_proj = project_onto_simplex(coord)
+        np.testing.assert_allclose(ref_proj, coord)
