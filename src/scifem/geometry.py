@@ -2,6 +2,7 @@ import dolfinx
 import numpy as np
 import numpy.typing as npt
 import warnings
+from scifem._scifem import closest_point_projection_float64, closest_point_projection_float32
 
 
 def project_onto_simplex(
@@ -52,9 +53,9 @@ def closest_point_projection(
     tol_grad: float = 1e-10,
     max_iter: int = 2000,
     max_ls_iter: int = 250,
-) -> tuple[npt.NDArray[np.float64 | np.float32], npt.NDArray[np.float64 | np.float32]]:
-    """
-    Projects a 3D point onto a cell in a potentially higher order mesh.
+    num_threads: int = 1,
+):
+    """Projects a 3D point onto a cell in a potentially higher order mesh.
 
     Uses the Goldstein-Levitin-Polyak Gradient projection method, where
     potential simplex constraints are handled by an exact projection using a
@@ -64,11 +65,85 @@ def closest_point_projection(
     - Dimitri P. Bertsekas, "On the Goldstein-Levitin-Polyak gradient projection method," (1976)
 
     Args:
-        mesh: {py:class}`dolfinx.mesh.Mesh`, the mesh containing the cell.
-        cells: {py:class}`numpy.ndarray`, the local indices of the cells to project onto.
-        target_point: (3,) numpy array, the 3D point to project.
+        mesh: The mesh containing the cells.
+        cells: The local indices of the cells to project onto.
+        target_points: (n, 3) numpy array, the 3D points to project.
         tol_x: Tolerance for changes between iterates in the reference coordinates.
-        If None, uses the square root of machine precision.
+            If None, uses the square root of machine precision.
+        tol_grad: Tolerance for determination based on the gradient norm.
+            The gradient is scaled by the Jacobian to account for stretching.
+        tol_dist: Tolerance used to determine if the projected point is close enough to
+            the target point to stop optimization.
+        max_iter: int, the maximum number of iterations for the projected gradient method.
+        max_ls_iter: int, the maximum number of line search iterations.
+        num_threads: int, the number of threads to use for parallel projection.
+
+    Returns:
+        A tuple of arrays containing the closest points (in physical space)
+        and reference coordinates for each cell to each target point.
+    """
+    xdtype = mesh.geometry.x.dtype
+
+    if xdtype == np.float64:
+        return closest_point_projection_float64(
+            mesh._cpp_object,
+            cells,
+            target_points,
+            tol_x=tol_x,
+            tol_dist=tol_dist,
+            tol_grad=tol_grad,
+            max_iter=max_iter,
+            max_ls_iter=max_ls_iter,
+            num_threads=num_threads,
+        )
+    elif xdtype == np.float32:
+        return closest_point_projection_float32(
+            mesh._cpp_object,
+            cells,
+            target_points,
+            tol_x=tol_x,
+            tol_dist=tol_dist,
+            tol_grad=tol_grad,
+            max_iter=max_iter,
+            max_ls_iter=max_ls_iter,
+            num_threads=num_threads,
+        )
+    else:
+        raise TypeError(f"Unsupported mesh coordinate dtype {xdtype}.")
+
+
+def _closest_point_projection(
+    mesh: dolfinx.mesh.Mesh,
+    cells: npt.NDArray[np.int32],
+    target_points: npt.NDArray[np.float64 | np.float32],
+    tol_x: float | None = None,
+    tol_dist: float = 1e-10,
+    tol_grad: float = 1e-10,
+    max_iter: int = 2000,
+    max_ls_iter: int = 250,
+) -> tuple[npt.NDArray[np.float64 | np.float32], npt.NDArray[np.float64 | np.float32]]:
+    """Projects a 3D point onto a cell in a potentially higher order mesh.
+
+    NOTE:
+        Reference implementation in Python. This should only be used for testing and debugging,
+        and is not optimized for performance. The performant implementation can be found in
+        {py:func}`closest_point_projection`.
+
+    Uses the Goldstein-Levitin-Polyak Gradient projection method, where
+    potential simplex constraints are handled by an exact projection using a
+    primal-dual root finding method. See:
+    - Held, M., Wolfe, P., Crowder, H.: Validation of subgradient optimization (1974)
+    - Laurent Condat. Fast Projection onto the Simplex and the l1 Ball. (2016)
+    - Dimitri P. Bertsekas, "On the Goldstein-Levitin-Polyak gradient projection method," (1976)
+
+    Args:
+        mesh: The mesh containing the cell.
+        cells: The local indices of the cells to project onto.
+        target_points: (n, 3) numpy array, the 3D points to project.
+        tol_x: Tolerance for changes between iterates in the reference coordinates.
+            If None, uses the square root of machine precision.
+        tol_grad: Tolerance for determination based on the gradient norm.
+            The gradient is scaled by the Jacobian to account for stretching.
         tol_dist: Tolerance used to determine if the projected point is close enough to
             the target point to stop optimization.
         max_iter: int, the maximum number of iterations for the projected gradient method.
@@ -89,7 +164,6 @@ def closest_point_projection(
     # Get the coordinates of the nodes for the specified cell
     node_coords = mesh.geometry.x[mesh.geometry.dofmap[cells]][:, :, : mesh.geometry.dim]
     target_points = target_points.reshape(-1, 3)
-    # cmap = mesh.geometry.cmap
 
     # Constraints and Bounds
     cell_type = mesh.topology.cell_type
