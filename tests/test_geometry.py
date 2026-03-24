@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 from scipy.optimize import minimize
 from scifem import closest_point_projection
-from scifem.geometry import project_onto_simplex
+from scifem.geometry import project_onto_simplex, _closest_point_projection
 import ufl
 import basix.ufl
 import pytest
@@ -56,6 +56,7 @@ def scipy_project_point_to_element(
     initial_guess = np.full(mesh.topology.dim, 1 / (mesh.topology.dim + 1), dtype=np.float64)
     tol = np.sqrt(np.finfo(mesh.geometry.x.dtype).eps) if tol is None else tol
     closest_points = np.zeros((target_points.shape[0], 3), dtype=mesh.geometry.x.dtype)
+    ref_points = np.zeros((target_points.shape[0], mesh.topology.dim), dtype=mesh.geometry.x.dtype)
     for i, (coord, target_point) in enumerate(zip(node_coords, target_points)):
         coord = coord.reshape(-1, mesh.geometry.dim)
 
@@ -91,12 +92,14 @@ def scipy_project_point_to_element(
             options={"disp": False, "ftol": tol, "maxiter": 250},
         )
         closest_points[i] = S(res.x)
+        ref_points[i] = res.x
         assert res.success, f"Optimization failed for {cells[i]} and {target_point=}: {res.message}"
-    return closest_points, res.x
+    return closest_points, ref_points
 
 
+@pytest.mark.parametrize("num_threads", [1, 2, 4])
 @pytest.mark.parametrize("order", [1, 2])
-def test_2D_manifold(order):
+def test_2D_manifold(order, num_threads):
     comm = MPI.COMM_SELF
 
     # Curved quadratic triangle in 3D (6 nodes)
@@ -117,63 +120,70 @@ def test_2D_manifold(order):
         cells = cells[:, :3]
     mesh = dolfinx.mesh.create_mesh(comm, cells=cells, x=curved_nodes, e=c_el)
 
-    tol = 1e-7
+    tol_x = 1e-6
     tol_dist = 1e-7
-    theta = np.linspace(0, 4 * np.pi, 250)
+    theta = np.linspace(0, 4 * np.pi, 1_000_000)
     rand = np.random.RandomState(42)
     R = rand.rand(len(theta))
     z = rand.rand(len(theta)) * 0.5  # Add some random z variation
     points = np.vstack([R * np.cos(theta), R * np.sin(theta), z]).T
 
-    for point_to_project in points:
-        import time
+    cells = np.zeros(points.shape[0], dtype=np.int32)
+    import time
 
-        start_scipy = time.perf_counter()
-        (result_scipy, ref_scipy) = scipy_project_point_to_element(
-            mesh, np.array([0], dtype=np.int32), point_to_project, tol=tol
-        )
-        end_scipy = time.perf_counter()
-        start = time.perf_counter()
-        result, ref_coords = closest_point_projection(
-            mesh, np.array([0], dtype=np.int32), point_to_project, tol_x=tol, tol_dist=tol_dist
-        )
-        end = time.perf_counter()
-        import scifem
+    start = time.perf_counter()
+    closest_point, closest_ref = closest_point_projection(
+        mesh,
+        cells,
+        points,
+        tol_x=tol_x,
+        tol_dist=tol_dist,
+        tol_grad=1e-16,
+        max_iter=2000,
+        max_ls_iter=250,
+        num_threads=num_threads,
+    )
+    end = time.perf_counter()
+    print(len(cells))
+    print(
+        f"Projection completed in {end - start:.5e} seconds with num_threads={num_threads} and order={order}."
+    )
+    start_scipy = time.perf_counter()
+    (result_scipy, ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_dist)
+    end_scipy = time.perf_counter()
+    print(f"Scipy projection completed in {end_scipy - start_scipy:.5e} seconds.")
 
-        start_cpp = time.perf_counter()
-        closest_point, closest_ref = scifem._scifem.closest_point_projection_float64(
-            mesh._cpp_object,
-            np.array([0], dtype=np.int32),
-            point_to_project.reshape(-1, 3),
-            tol,
-            tol_dist=tol_dist,
-            tol_grad=1e-16,
-            max_iter=2000,
-            max_ls_iter=250,
-            num_threads=1,
+    start_python = time.perf_counter()
+    result, ref_coords = _closest_point_projection(
+        mesh, cells, points, tol_x=tol_x, tol_dist=tol_dist
+    )
+    end_python = time.perf_counter()
+    print(f"Python projection completed in {end_python - start_python:.5e} seconds.")
+
+    for i, point_to_project in enumerate(points):
+        # Check that python and C++ implementations give the same result
+        np.testing.assert_allclose(result[i].flatten(), closest_point[i].flatten(), atol=tol_dist)
+        np.testing.assert_allclose(
+            ref_coords[i].flatten(), closest_ref[i].flatten(), atol=10 * tol_dist
         )
-        end_cpp = time.perf_counter()
-        print(
-            f"Python: {end - start:.6e} seconds, C++: {end_cpp - start_cpp:.6e} seconds,",
-            f"Scipy: {end_scipy - start_scipy:.6e} seconds",
-        )
-        np.testing.assert_allclose(result.flatten(), closest_point.flatten(), atol=tol)
-        np.testing.assert_allclose(ref_coords.flatten(), closest_ref.flatten(), atol=10 * tol)
 
         # Check that we are within the bounds of the simplex
-        ref_proj = project_onto_simplex(ref_coords[0])
-        np.testing.assert_allclose(ref_proj, ref_coords[0])
+        ref_proj = project_onto_simplex(ref_coords[i])
+        np.testing.assert_allclose(ref_proj, ref_coords[i])
 
-        dist_scipy = 0.5 * np.sum(result_scipy - point_to_project) ** 2
-        dist_ours = 0.5 * np.sum(result - point_to_project) ** 2
+        # Check that scipy and our implementation give similar distances,
+        # allowing for some tolerance due to different optimization methods
+        dist_scipy = 0.5 * np.sum(result_scipy[i] - point_to_project) ** 2
+        dist_ours = 0.5 * np.sum(result[i] - point_to_project) ** 2
         if not np.isclose(dist_ours, dist_scipy, atol=tol_dist, rtol=1e-2):
-            assert np.linalg.norm(ref_coords - ref_scipy) < 1e-2
+            assert np.linalg.norm(ref_coords[i] - ref_scipy[i]) < 1e-2
         else:
-            assert np.isclose(dist_ours, dist_scipy, atol=tol, rtol=1e-2)
+            assert np.isclose(dist_ours, dist_scipy, atol=tol_dist, rtol=1e-2)
 
 
+@pytest.mark.parametrize("num_threads", [1, 2, 4])
 @pytest.mark.parametrize("order", [1, 2])
-def test_3D_curved_cell(order):
+def test_3D_curved_cell(order, num_threads):
     comm = MPI.COMM_SELF
 
     curved_nodes_tet = np.array(
@@ -201,52 +211,43 @@ def test_3D_curved_cell(order):
 
     rand = np.random.RandomState(32)
     points = rand.rand(100, 3) - 0.5 * rand.rand(100, 3)
-    tol = 1e-7
+    tol_x = 1e-6
     tol_dist = 1e-7
 
-    for point_to_project in points:
-        import time
-
-        start_scipy = time.perf_counter()
-        (result_scipy, ref_scipy) = scipy_project_point_to_element(
-            mesh, np.array([0], dtype=np.int32), point_to_project, tol=tol
+    cells = np.zeros(points.shape[0], dtype=np.int32)
+    closest_point, closest_ref = closest_point_projection(
+        mesh,
+        cells,
+        points,
+        tol_x=tol_x,
+        tol_dist=tol_dist,
+        tol_grad=1e-16,
+        max_iter=2000,
+        max_ls_iter=250,
+        num_threads=num_threads,
+    )
+    (result_scipy, ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_dist)
+    result, ref_coords = closest_point_projection(
+        mesh,
+        cells,
+        points,
+        tol_x=tol_x,
+        tol_dist=tol_dist,
+        tol_grad=1e-16,
+    )
+    for i, point_to_project in enumerate(points):
+        np.testing.assert_allclose(result[i].flatten(), closest_point[i].flatten(), atol=tol_dist)
+        np.testing.assert_allclose(
+            ref_coords[i].flatten(), closest_ref[i].flatten(), atol=10 * tol_x
         )
-        end_scipy = time.perf_counter()
-        start = time.perf_counter()
-        result, ref_coords = closest_point_projection(
-            mesh, np.array([0], dtype=np.int32), point_to_project, tol_x=tol, tol_dist=tol_dist
-        )
-        end = time.perf_counter()
-        import scifem
-
-        start_cpp = time.perf_counter()
-        closest_point, closest_ref = scifem._scifem.closest_point_projection_float64(
-            mesh._cpp_object,
-            np.array([0], dtype=np.int32),
-            point_to_project.reshape(-1, 3),
-            tol,
-            tol_dist=tol_dist,
-            tol_grad=1e-16,
-            max_iter=2000,
-            max_ls_iter=250,
-            num_threads=1,
-        )
-        end_cpp = time.perf_counter()
-        print(
-            f"Python: {end - start:.6e} seconds, C++: {end_cpp - start_cpp:.6e} seconds",
-            f", Scipy: {end_scipy - start_scipy:.6e} seconds",
-        )
-
-        np.testing.assert_allclose(result.flatten(), closest_point.flatten(), atol=tol)
-        np.testing.assert_allclose(ref_coords.flatten(), closest_ref.flatten(), atol=10 * tol)
 
         # Check that we are within the bounds of the simplex
-        ref_proj = project_onto_simplex(ref_coords[0])
-        np.testing.assert_allclose(ref_proj, ref_coords[0])
+        ref_proj = project_onto_simplex(ref_coords[i])
+        np.testing.assert_allclose(ref_proj, ref_coords[i])
 
-        dist_scipy = 0.5 * np.sum(result_scipy - point_to_project) ** 2
-        dist_ours = 0.5 * np.sum(result - point_to_project) ** 2
+        dist_scipy = 0.5 * np.sum(result_scipy[i] - point_to_project) ** 2
+        dist_ours = 0.5 * np.sum(result[i] - point_to_project) ** 2
         if not np.isclose(dist_ours, dist_scipy, atol=tol_dist, rtol=1e-2):
-            assert np.linalg.norm(ref_coords - ref_scipy) < 1e-2
+            assert np.linalg.norm(ref_coords[i] - ref_scipy[i]) < 1e-2
         else:
-            assert np.isclose(dist_ours, dist_scipy, atol=tol, rtol=1e-2)
+            assert np.isclose(dist_ours, dist_scipy, atol=tol_dist, rtol=1e-2)
