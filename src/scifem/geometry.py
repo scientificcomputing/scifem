@@ -233,7 +233,6 @@ def _closest_point_projection(
             for li in range(max_ls_iter):
                 # Apply the exact analytical simplex projection
                 x_new = project(x_k - alpha * g)
-                # breakpoint()
 
                 if np.linalg.norm(x_new - x_new_prev) < eps:
                     # The projection is pinned to a boundary.
