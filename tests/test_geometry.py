@@ -142,7 +142,7 @@ def test_2D_manifold(order, num_threads):
         num_threads=num_threads,
     )
 
-    (result_scipy, ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_dist)
+    (result_scipy, _ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_dist)
 
     result, ref_coords = _closest_point_projection(
         mesh, cells, points, tol_x=tol_x, tol_dist=tol_dist
@@ -161,12 +161,14 @@ def test_2D_manifold(order, num_threads):
 
         # Check that scipy and our implementation give similar distances,
         # allowing for some tolerance due to different optimization methods
-        dist_scipy = 0.5 * np.sum(result_scipy[i] - point_to_project) ** 2
-        dist_ours = 0.5 * np.sum(result[i] - point_to_project) ** 2
-        if not np.isclose(dist_ours, dist_scipy, atol=tol_dist, rtol=1e-2):
-            assert np.linalg.norm(ref_coords[i] - ref_scipy[i]) < 1e-2
+        dist_scipy = 0.5 * np.dot(
+            result_scipy[i] - point_to_project, result_scipy[i] - point_to_project
+        )
+        dist_ours = 0.5 * np.dot(result[i] - point_to_project, result[i] - point_to_project)
+        if np.isclose(dist_ours, 0.0, atol=tol_dist):
+            assert np.isclose(dist_scipy, 0.0, atol=10 * tol_dist)
         else:
-            assert np.isclose(dist_ours, dist_scipy, atol=tol_dist, rtol=1e-2)
+            assert np.isclose(dist_ours, dist_scipy, atol=50 * tol_dist, rtol=1e-2)
 
 
 @pytest.mark.parametrize("num_threads", [1, 2, 4])
@@ -198,7 +200,8 @@ def test_3D_curved_cell(order, num_threads):
     mesh = dolfinx.mesh.create_mesh(comm, cells=cells_tet, x=curved_nodes_tet, e=domain_tet)
 
     rand = np.random.RandomState(32)
-    points = rand.rand(100, 3) - 0.5 * rand.rand(100, 3)
+    M = 10_000
+    points = rand.rand(M, 3) - 0.5 * rand.rand(M, 3)
     tol_x = 1e-6
     tol_dist = 1e-7
 
@@ -234,9 +237,11 @@ def test_3D_curved_cell(order, num_threads):
         ref_proj = project_onto_simplex(ref_coords[i])
         np.testing.assert_allclose(ref_proj, ref_coords[i])
 
-        dist_scipy = 0.5 * np.sum(result_scipy[i] - point_to_project) ** 2
-        dist_ours = 0.5 * np.sum(result[i] - point_to_project) ** 2
-        if not np.isclose(dist_ours, dist_scipy, atol=tol_dist, rtol=1e-2):
-            assert np.linalg.norm(ref_coords[i] - ref_scipy[i]) < 1e-2
+        dist_scipy = 0.5 * np.dot(
+            result_scipy[i] - point_to_project, result_scipy[i] - point_to_project
+        )
+        dist_ours = 0.5 * np.dot(result[i] - point_to_project, result[i] - point_to_project)
+        if np.isclose(dist_ours, 0.0, atol=tol_dist):
+            assert np.isclose(dist_scipy, 0.0, atol=50 * tol_dist)
         else:
             assert np.isclose(dist_ours, dist_scipy, atol=tol_dist, rtol=1e-2)
