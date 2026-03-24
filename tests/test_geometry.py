@@ -214,6 +214,8 @@ def test_3D_curved_cell(order, num_threads):
         max_ls_iter=250,
         num_threads=num_threads,
     )
+    (result_scipy, ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_x)
+
     result, ref_coords = _closest_point_projection(
         mesh,
         cells,
