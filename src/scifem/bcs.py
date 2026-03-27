@@ -80,8 +80,7 @@ def interpolate_function_onto_facet_dofs(
     domain.topology.create_connectivity(domain.topology.dim, fdim)
     c_to_f = domain.topology.connectivity(domain.topology.dim, fdim)
     num_facets_on_process = (
-        domain.topology.index_map(fdim).size_local
-        + domain.topology.index_map(fdim).num_ghosts
+        domain.topology.index_map(fdim).size_local + domain.topology.index_map(fdim).num_ghosts
     )
     is_marked = np.zeros(num_facets_on_process, dtype=np.int8)
     is_marked[facets] = 1
@@ -99,13 +98,11 @@ def interpolate_function_onto_facet_dofs(
             except (AttributeError, AssertionError):
                 normal_on_facet = normal_expr.eval(domain, entity.flatten())
             # NOTE: evaluate within loop to avoid large memory requirements
-            values_per_entity[
-                insert_pos : insert_pos + reference_facet_points.shape[0]
-            ] = normal_on_facet.reshape(-1, domain.geometry.dim)
+            values_per_entity[insert_pos : insert_pos + reference_facet_points.shape[0]] = (
+                normal_on_facet.reshape(-1, domain.geometry.dim)
+            )
         values[
-            i * offsets[-1] * domain.geometry.dim : (i + 1)
-            * offsets[-1]
-            * domain.geometry.dim
+            i * offsets[-1] * domain.geometry.dim : (i + 1) * offsets[-1] * domain.geometry.dim
         ] = values_per_entity.reshape(-1)
 
     qh = dolfinx.fem.Function(Q)
@@ -113,9 +110,7 @@ def interpolate_function_onto_facet_dofs(
         interpolate_func = qh._cpp_object.interpolate_f
     else:
         interpolate_func = qh._cpp_object.interpolate
-    interpolate_func(
-        values.reshape(-1, domain.geometry.dim).T.copy(), all_connected_cells
-    )
+    interpolate_func(values.reshape(-1, domain.geometry.dim).T.copy(), all_connected_cells)
     qh.x.scatter_forward()
 
     return qh
