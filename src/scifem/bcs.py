@@ -48,12 +48,14 @@ def interpolate_function_onto_facet_dofs(
         shape=(domain.geometry.dim,),
         dtype=np.float64,
     )
-    facet_cel = dolfinx.cpp.fem.CoordinateElement_float64(facet_cmap.basix_element._e)
+    facet_cel = dolfinx.fem.CoordinateElement(
+        dolfinx.cpp.fem.CoordinateElement_float64(facet_cmap.basix_element._e)
+    )
     reference_facet_points = None
     for i, points in enumerate(interpolation_points[fdim]):
         geom = ref_geom[ref_top[fdim][i]]
-
         ref_points = facet_cel.pull_back(points, geom)
+
         # Assert that interpolation points are all equal on all facets
         if reference_facet_points is None:
             reference_facet_points = ref_points
