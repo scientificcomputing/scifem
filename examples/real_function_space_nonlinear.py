@@ -4,8 +4,11 @@
 #
 # License: MIT
 #
-# In this example we will show how to use the "real" function space to solve
-# a non linear problem.
+# In this example we will show:
+# - How to define a submesh on a subset of facets
+# - How to use the "real" function space on this submesh
+# - How to solve a problem coupling this real space with the bulk using
+#   a nonlinear solver.
 #
 # A circular gas cavity inside a solid domain has an initial partial
 # pressure $P_b$.
@@ -29,7 +32,7 @@
 # \end{align}
 # $$
 #
-# where $P_b$ is the partial pressure inside the cavity region.
+# where $P_b\in \mathbb{R}$ is the partial pressure inside the cavity region.
 # The temporal evolution of $P_b$ is governed by:
 #
 # $$
@@ -72,6 +75,7 @@ import matplotlib.pyplot as plt
 
 # -
 
+# ### Mesh generation
 # We generate the mesh using GMSH.
 # For a more detailed explaination of the mesh generation process, see:
 # https://jsdokken.com/dolfinx-tutorial/chapter2/ns_code2.html#mesh-generation
@@ -190,13 +194,30 @@ else:
 
 # -
 
-# We create two functionspaces `V` and `R` for $u$ and $P_b$, respectively,
-# as well as a {py:class}`ufl.MixedFunctionSpace` for test functions.
+# ### Submeshes and real function space
+# We create two functionspaces `V` and `R` for $u$ and $P_b$, respectively.
+# The partial pressure is a single, constant value, that should be defined
+# on the interface between the cavity and the fluid domain.
+# This is a "real" function space, that has only one degree of freedom,
+# and is not associated with any mesh entity.
+# We can create such a function space using the helper function
+# {py:func}`scifem.create_real_functionspace`.
+# However, first we will create a submesh on the cavity surface,
+# as this is where the partial pressure is defined.
+
+cavity_surface, cavity_map, _, _ = dolfinx.mesh.create_submesh(
+    mesh, ft.dim, ft.find(obstacle_marker))
+R = create_real_functionspace(cavity_surface)
+
+
+# We will solve this as a strongly coupled problem.
+# To do so, we use {py:class}`ufl.MixedFunctionSpace` test functions
+# that respect the block structure of the problem.
 
 V = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
-R = create_real_functionspace(mesh)
 W = ufl.MixedFunctionSpace(V, R)
 
+# ## Variational formulation and nonlinear solver
 # We then create appropriate functions and test functions:
 
 u = dolfinx.fem.Function(V)
@@ -211,7 +232,7 @@ dt = dolfinx.fem.Constant(mesh, 0.1)
 K_S = dolfinx.fem.Constant(mesh, 2.0)
 e = dolfinx.fem.Constant(mesh, 2.0)
 volume = dolfinx.fem.Constant(mesh, 40.0)
-P_b_initial = dolfinx.fem.Constant(mesh, 3.5)
+P_b_initial = dolfinx.fem.Constant(cavity_surface, 3.5)
 u_out = dolfinx.fem.Constant(mesh, 0.0)
 
 # ```{note}
@@ -228,17 +249,12 @@ pressure_ini_expr = dolfinx.fem.Expression(
 pressure_n.interpolate(pressure_ini_expr)
 pressure.x.array[:] = pressure_n.x.array[:]
 
-bc_bubble_expr = dolfinx.fem.Expression(
-    K_S * pressure, V.element.interpolation_points)
-u_bc_bubble = dolfinx.fem.Function(V)
-u_bc_bubble.interpolate(bc_bubble_expr)
-
+g = K_S * pressure
 dofs_boundary = dolfinx.fem.locate_dofs_topological(
     V, fdim, ft.find(wall_marker))
 dofs_bubble = dolfinx.fem.locate_dofs_topological(
     V, fdim, ft.find(obstacle_marker))
 
-bc_bubble = dolfinx.fem.dirichletbc(u_bc_bubble, dofs_bubble)
 bc_boundary = dolfinx.fem.dirichletbc(u_out, dofs_boundary, V)
 # -
 
@@ -246,17 +262,33 @@ bc_boundary = dolfinx.fem.dirichletbc(u_out, dofs_boundary, V)
 # {py:func}`ufl.extract_blocks` to form the blocked formulations:
 
 # +
+# For the boundary condition coupling pressure and concentration,
+# we use a Nitsche formulation,
+# see: https://jsdokken.com/dolfinx-tutorial/chapter1/nitsche.html
+# for more details about Nitsche's method.
+
 n = ufl.FacetNormal(mesh)
+H = dolfinx.fem.functionspace(cavity_surface, ("DG", 0))
+h = dolfinx.fem.Function(H)
+h.x.array[:] = cavity_surface.h(
+    ft.dim, np.arange(len(ft.find(obstacle_marker)), dtype=np.int32))
 flux = ufl.inner(ufl.grad(u), n)
 
 ds = ufl.Measure("ds", domain=mesh, subdomain_data=ft)
 
+g = K_S * pressure
+alpha = dolfinx.fem.Constant(mesh, 10.0)
+
 F = ufl.inner(u - u_n, v) * ufl.dx
 F += dt * ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
-F += ufl.inner(pressure - pressure_n, pressure_v) * ufl.dx
+F += ufl.inner(pressure - pressure_n, pressure_v) * ds(3)
 F += dt * ufl.inner(e / volume * flux, pressure_v) * ds(3)
+F -= ufl.dot(ufl.dot(n, ufl.grad(u)), v) * ds(3)
+F -= -ufl.inner(u - g, ufl.dot(n, ufl.grad(v))) * ds(3) 
+F += alpha / h * ufl.inner(u - g, v) * ds(3)
 
 forms = ufl.extract_blocks(F)
+
 # -
 
 # We can now create a
@@ -266,7 +298,7 @@ forms = ufl.extract_blocks(F)
 solver = NonlinearProblem(
     forms,
     [u, pressure],
-    bcs=[bc_boundary, bc_bubble],
+    bcs=[bc_boundary],
     petsc_options_prefix="bubble",
     petsc_options={
         "ksp_type": "preonly",
@@ -276,6 +308,7 @@ solver = NonlinearProblem(
         "ksp_error_if_not_converged": True,
         "snes_monitor": None,
     },
+    entity_maps=[cavity_map]
 )
 
 # Set up transient pyvista visualisation:
@@ -307,7 +340,7 @@ renderer = plotter.add_mesh(
     lighting=False,
     cmap=viridis,
     scalar_bar_args=sargs,
-    clim=[0, max(u_bc_bubble.x.array)],
+    clim=[0, float(K_S.value * P_b_initial.value)],
 )
 # -
 
@@ -335,7 +368,6 @@ while t < t_final:
     pressure_n.x.array[:] = pressure.x.array[:]
 
     # Update bubble BC
-    u_bc_bubble.interpolate(bc_bubble_expr)
     all_pressures.append(pressure.x.array[0].copy())
 
     # Update plot
@@ -345,7 +377,8 @@ while t < t_final:
     plotter.write_frame()
 
     # compute outgassing flux
-    outgassing_flux = mesh.comm.allreduce(-assemble_scalar(flux * ds(2)), op=MPI.SUM)
+    outgassing_flux = mesh.comm.allreduce(
+        -assemble_scalar(flux * ds(2)), op=MPI.SUM)
     outgassing_fluxes.append(outgassing_flux)
 plotter.close()
 # -
