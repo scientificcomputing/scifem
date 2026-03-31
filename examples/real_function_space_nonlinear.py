@@ -284,7 +284,7 @@ F += dt * ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
 F += ufl.inner(pressure - pressure_n, pressure_v) * ds(3)
 F += dt * ufl.inner(e / volume * flux, pressure_v) * ds(3)
 F -= ufl.dot(ufl.dot(n, ufl.grad(u)), v) * ds(3)
-F -= -ufl.inner(u - g, ufl.dot(n, ufl.grad(v))) * ds(3) 
+F -= -ufl.inner(u - g, ufl.dot(n, ufl.grad(v))) * ds(3)
 F += alpha / h * ufl.inner(u - g, v) * ds(3)
 
 forms = ufl.extract_blocks(F)
