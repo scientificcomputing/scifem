@@ -1,20 +1,3 @@
-# ---
-# jupyter:
-#   jupytext:
-#     cell_metadata_filter: -all
-#     formats: ipynb,md:myst,py:percent
-#     text_representation:
-#       extension: .py
-#       format_name: percent
-#       format_version: '1.3'
-#       jupytext_version: 1.19.1
-#   kernelspec:
-#     display_name: scifem-dev
-#     language: python
-#     name: python3
-# ---
-
-# %% [markdown]
 # # Real function spaces (non linear)
 #
 # Author: Remi Delaporte-Mathurin, Jørgen S. Dokken
@@ -24,9 +7,14 @@
 # In this example we will show how to use the "real" function space to solve
 # a non linear problem.
 #
-# A circular gas cavity inside a solid domain has an initial partial pressure $P_b$. The concentration $u$ on the cavity surface follows Henry's solubility law: the concentration is proportional to the partial pressure $P_b$.
+# A circular gas cavity inside a solid domain has an initial partial
+# pressure $P_b$.
+# The concentration $u$ on the cavity surface follows Henry's solubility law:
+# the concentration is proportional to the partial pressure $P_b$.
 #
-# As particles leave the cavity by solution/diffusion, the partial pressure starts to decrease - affecting in turn the concentration on the cavity surface.
+# As particles leave the cavity by solution/diffusion, the partial pressure
+# starts to decrease - affecting in turn the concentration on the
+# cavity surface.
 #
 #
 # ## Mathematical formulation
@@ -37,11 +25,12 @@
 # \begin{align}
 # \Delta u &= 0 \quad \text{in } \Omega, \\
 # u &= 0 \quad \text{on } \Gamma_1, \\
-# u &= K P_b \quad \text{on } \Gamma_b, \\
+# u &= K P_b \quad \text{on } \Gamma_b,
 # \end{align}
 # $$
 #
-# where $P_b$ is the partial pressure inside the cavity region. The temporal evolution of $P_b$ is governed by:
+# where $P_b$ is the partial pressure inside the cavity region.
+# The temporal evolution of $P_b$ is governed by:
 #
 # $$
 # \frac{dP_b}{dt} = \frac{e}{V} \int_{\Gamma_b} -D \nabla u \cdot \mathbf{n} dS
@@ -52,13 +41,13 @@
 #
 # $$
 # \begin{align}
-# \int_\Omega  \frac{u - u_n}{\Delta t} \cdot v~\mathrm{d}x + \int_\Omega \nabla u \cdot \nabla v~\mathrm{d}x &= 0\\
-# \int_\Omega  \frac{P_b - P_{b_n}}{\Delta t} \cdot w~\mathrm{d}x &= \frac{e}{V} \int_{\Gamma_b} -D \nabla u \cdot \mathbf{n} ~dS \cdot ~w.
+# \int_\Omega  \frac{u - u_n}{\Delta t} \cdot v~\mathrm{d}x
+# + \int_\Omega \nabla u \cdot \nabla v~\mathrm{d}x &= 0\\
+# \int_\Omega  \frac{P_b - P_{b_n}}{\Delta t} \cdot w~\mathrm{d}x
+# &= \frac{e}{V} \int_{\Gamma_b} -D \nabla u \cdot \mathbf{n} \cdot ~w ~\mathrm{d}S.
 # \end{align}
 # $$
 #
-
-# %% [markdown]
 # ## Implementation
 # We start by import the necessary modules
 # ```{admonition} Clickable functions/classes
@@ -66,21 +55,28 @@
 # name to be redirected to the corresponding documentation page.
 # ```
 
-# %%
+# +
 from mpi4py import MPI
+from petsc4py import PETSc
 import dolfinx
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.io import gmsh as gmshio
+from dolfinx.plot import vtk_mesh
 import numpy as np
 from scifem import create_real_functionspace, assemble_scalar
 import ufl
-
+import pyvista
 import gmsh
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 
-# %% [markdown]
-# We generate the mesh using GMSH:
+# -
 
-# %%
+# We generate the mesh using GMSH.
+# For a more detailed explaination of the mesh generation process, see:
+# https://jsdokken.com/dolfinx-tutorial/chapter2/ns_code2.html#mesh-generation
+
+# + tags=["hide-output"]
 gmsh.initialize()
 
 L = 2
@@ -153,71 +149,64 @@ if mesh_comm.rank == model_rank:
 
 mesh_data = gmshio.model_to_mesh(gmsh.model, mesh_comm, model_rank, gdim=gdim)
 mesh = mesh_data.mesh
+assert mesh is not None
 assert mesh_data.facet_tags is not None
 ft = mesh_data.facet_tags
 ft.name = "Facet markers"
+# -
 
-# %%
-from dolfinx import plot
-import pyvista
+# Next we inspect the grid and markers
 
+# +
 pyvista.set_jupyter_backend("html")
 
 tdim = mesh.topology.dim
 
 mesh.topology.create_connectivity(tdim, tdim)
-topology, cell_types, geometry = plot.vtk_mesh(mesh, tdim)
+topology, cell_types, geometry = vtk_mesh(mesh, tdim)
 grid = pyvista.UnstructuredGrid(topology, cell_types, geometry)
 
-plotter = pyvista.Plotter()
+plotter = pyvista.Plotter(shape=(1, 2))
+plotter.subplot(0, 0)
 plotter.add_mesh(grid, show_edges=True)
 plotter.view_xy()
+
+fdim = tdim - 1
+mesh.topology.create_connectivity(fdim, tdim)
+facet_topology, facet_cell_types, facet_x = vtk_mesh(mesh, fdim, ft.indices)
+
+facet_grid = pyvista.UnstructuredGrid(
+    facet_topology, facet_cell_types, facet_x)
+facet_grid.cell_data["Facet Marker"] = ft.values
+facet_grid.set_active_scalars("Facet Marker")
+plotter.subplot(0, 1)
+plotter.view_xy()
+plotter.add_mesh(facet_grid, show_edges=True)
+plotter.link_views()
 if not pyvista.OFF_SCREEN:
     plotter.show()
 else:
     figure = plotter.screenshot("mesh.png")
 
-fdim = tdim - 1
-mesh.topology.create_connectivity(fdim, tdim)
-topology, cell_types, x = plot.vtk_mesh(mesh, fdim, ft.indices)
+# -
 
-p = pyvista.Plotter()
-grid = pyvista.UnstructuredGrid(topology, cell_types, x)
-grid.cell_data["Facet Marker"] = ft.values
-grid.set_active_scalars("Facet Marker")
-p.view_xy()
-p.add_mesh(grid, show_edges=True)
+# We create two functionspaces `V` and `R` for $u$ and $P_b$, respectively,
+# as well as a {py:class}`ufl.MixedFunctionSpace` for test functions.
 
-if not pyvista.OFF_SCREEN:
-    p.show()
-else:
-    figure = p.screenshot("facet_markers.png")
-
-# %% [markdown]
-# We create two functionspaces `V` and `R` for $u$ and $P_b$, respectively, as well as a `ufl.MixedFunctionSpace` for test functions.
-
-# %%
 V = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
 R = create_real_functionspace(mesh)
-
 W = ufl.MixedFunctionSpace(V, R)
 
-# %% [markdown]
 # We then create appropriate functions and test functions:
 
-# %%
 u = dolfinx.fem.Function(V)
 u_n = dolfinx.fem.Function(V)
 pressure = dolfinx.fem.Function(R)
 pressure_n = dolfinx.fem.Function(R)
-
 v, pressure_v = ufl.TestFunctions(W)
 
-
-# %% [markdown]
 # Let's define the problems constants:
 
-# %%
 dt = dolfinx.fem.Constant(mesh, 0.1)
 K_S = dolfinx.fem.Constant(mesh, 2.0)
 e = dolfinx.fem.Constant(mesh, 2.0)
@@ -225,7 +214,6 @@ volume = dolfinx.fem.Constant(mesh, 40.0)
 P_b_initial = dolfinx.fem.Constant(mesh, 3.5)
 u_out = dolfinx.fem.Constant(mesh, 0.0)
 
-# %% [markdown]
 # ```{note}
 # If `dt` is too large, the problem becomes unstable
 # ```
@@ -233,42 +221,48 @@ u_out = dolfinx.fem.Constant(mesh, 0.0)
 #
 # We can now define the initial condition and boundary conditions:
 
-# %%
+# +
 pressure_ini_expr = dolfinx.fem.Expression(
     P_b_initial, R.element.interpolation_points
 )
 pressure_n.interpolate(pressure_ini_expr)
 pressure.x.array[:] = pressure_n.x.array[:]
 
-bc_bubble_expr = dolfinx.fem.Expression(K_S * pressure, V.element.interpolation_points)
+bc_bubble_expr = dolfinx.fem.Expression(
+    K_S * pressure, V.element.interpolation_points)
 u_bc_bubble = dolfinx.fem.Function(V)
 u_bc_bubble.interpolate(bc_bubble_expr)
 
-dofs_boundary = dolfinx.fem.locate_dofs_topological(V, fdim, ft.indices[ft.values == wall_marker])
-dofs_bubble = dolfinx.fem.locate_dofs_topological(V, fdim, ft.indices[ft.values == obstacle_marker]
-)
+dofs_boundary = dolfinx.fem.locate_dofs_topological(
+    V, fdim, ft.find(wall_marker))
+dofs_bubble = dolfinx.fem.locate_dofs_topological(
+    V, fdim, ft.find(obstacle_marker))
 
 bc_bubble = dolfinx.fem.dirichletbc(u_bc_bubble, dofs_bubble)
 bc_boundary = dolfinx.fem.dirichletbc(u_out, dofs_boundary, V)
+# -
 
-# %% [markdown]
-# Next we define the variational formulation and call `ufl.extract_blocks` to form the blocked formulations:
+# Next we define the variational formulation and call
+# {py:func}`ufl.extract_blocks` to form the blocked formulations:
 
-# %%
+# +
 n = ufl.FacetNormal(mesh)
 flux = ufl.inner(ufl.grad(u), n)
 
 ds = ufl.Measure("ds", domain=mesh, subdomain_data=ft)
 
-F = (u - u_n) / dt * v * ufl.dx + ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
-F += (pressure - pressure_n) / dt * pressure_v * ufl.dx + e / volume * flux * pressure_v * ds(3)
+F = ufl.inner(u - u_n, v) * ufl.dx
+F += dt * ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
+F += ufl.inner(pressure - pressure_n, pressure_v) * ufl.dx
+F += dt * ufl.inner(e / volume * flux, pressure_v) * ds(3)
 
 forms = ufl.extract_blocks(F)
+# -
 
-# %% [markdown]
-# We can now create a nonlinear solver with the blocked formulations and the functions `u` and `pressure` as a list:
+# We can now create a
+# {py:class}`nonlinear solver<dolfinx.fem.petsc.NonlinearProblem>`
+# with the blocked formulations and the functions `u` and `pressure` as a list:
 
-# %%
 solver = NonlinearProblem(
     forms,
     [u, pressure],
@@ -278,16 +272,16 @@ solver = NonlinearProblem(
         "ksp_type": "preonly",
         "pc_type": "lu",
         "pc_factor_mat_solver_type": "mumps",
+        "snes_error_if_not_converged": True,
+        "ksp_error_if_not_converged": True,
         "snes_monitor": None,
     },
 )
 
-# %% [markdown]
 # Set up transient pyvista visualisation:
 
-# %%
-import matplotlib as mpl
-grid = pyvista.UnstructuredGrid(*plot.vtk_mesh(V))
+# +
+grid = pyvista.UnstructuredGrid(*vtk_mesh(V))
 
 plotter = pyvista.Plotter()
 plotter.open_gif("u_time.gif", fps=10)
@@ -315,11 +309,11 @@ renderer = plotter.add_mesh(
     scalar_bar_args=sargs,
     clim=[0, max(u_bc_bubble.x.array)],
 )
+# -
 
-# %% [markdown]
 # Time stepping loop:
 
-# %%
+# + tags=["hide-output"]
 t = 0
 t_final = 15
 
@@ -327,11 +321,11 @@ times = []
 all_pressures = []
 outgassing_fluxes = []
 
-
+par_print = PETSc.Sys.Print
 while t < t_final:
     t += dt.value
     times.append(t)
-    print(f"Solving at time {t:.2f}")
+    par_print(f"Time: {t:.2f} / {t_final:.2f}")
 
     # Solve the problem
     (u, pressure) = solver.solve()
@@ -351,21 +345,16 @@ while t < t_final:
     plotter.write_frame()
 
     # compute outgassing flux
-    outgassing_flux = -assemble_scalar(flux * ds(2))
+    outgassing_flux = mesh.comm.allreduce(-assemble_scalar(flux * ds(2)), op=MPI.SUM)
     outgassing_fluxes.append(outgassing_flux)
 plotter.close()
+# -
 
-# %% [markdown]
 # ![title](u_time.gif)
-
-# %% [markdown]
 # We see that, as expected, the partial pressure $P_b$ decreases with time.
 
-# %%
-import matplotlib.pyplot as plt
-
+# +
 fig, axs = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-
 
 axs[0].scatter([0], [P_b_initial.value], color="red", label="Initial Pressure")
 axs[0].plot(times, all_pressures)
@@ -377,4 +366,6 @@ axs[1].set_ylabel("Outgassing Flux")
 axs[1].set_ylim(bottom=0)
 
 plt.xlabel("Time")
+plt.grid(True)
 plt.show()
+# -
