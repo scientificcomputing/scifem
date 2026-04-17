@@ -499,4 +499,4 @@ axs[1].set_ylim(bottom=0)
 
 plt.xlabel("Time")
 plt.grid(True)
-plt.show()
+plt.savefig("comparison.png")
