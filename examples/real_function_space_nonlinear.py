@@ -474,13 +474,13 @@ Flux_out_ana = np.zeros_like(time_array)
 for lam in eigenvalues:
     phi_Rin = sp.j0(lam * R_in) * sp.y0(lam * R_out) - sp.y0(lam * R_in) * sp.j0(lam * R_out)
     phi_1_Rin = sp.j1(lam * R_in) * sp.y0(lam * R_out) - sp.y1(lam * R_in) * sp.j0(lam * R_out)
-    
+
     # Norm of the eigenfunction with point-mass integration for the boundary ODE
     N_n = 2 / (np.pi**2 * lam**2) - (R_in**2 / 2) * (phi_Rin**2 + phi_1_Rin**2) + (1 / (2 * np.pi * A_val * K_S_val)) * phi_Rin**2
-    
+
     # Projection of initial condition (u=0 in domain, P_b=P_ini at cavity)
     a_n = (P_ini * phi_Rin) / (2 * np.pi * A_val * N_n)
-    
+
     # Series superposition
     P_b_ana += (a_n * phi_Rin / K_S_val) * np.exp(-lam**2 * time_array)
     Flux_out_ana += 4 * a_n * np.exp(-lam**2 * time_array)
