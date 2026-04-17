@@ -2,7 +2,6 @@
 # jupyter:
 #   jupytext:
 #     cell_metadata_filter: -all
-#     default_lexer: ipython3
 #     formats: ipynb,md:myst,py:percent
 #     text_representation:
 #       extension: .py
@@ -90,6 +89,7 @@ import pyvista
 import gmsh
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+
 
 # %% [markdown]
 # ### Mesh generation
@@ -232,9 +232,10 @@ plotter.view_xy()
 plotter.add_mesh(facet_grid, show_edges=True)
 plotter.link_views()
 if not pyvista.OFF_SCREEN:
-    plotter.show()
+    pass
 else:
     figure = plotter.screenshot("mesh.png")
+
 
 # %% [markdown]
 # ### Submeshes and real function space
@@ -277,9 +278,9 @@ v, pressure_v = ufl.TestFunctions(W)
 # Let's define the problems constants:
 
 # %%
-dt = dolfinx.fem.Constant(mesh, 0.05)
+dt = dolfinx.fem.Constant(mesh, 1.0)
 K_S = dolfinx.fem.Constant(mesh, 2.0)
-A = dolfinx.fem.Constant(mesh, 1.0/40.0)
+A = dolfinx.fem.Constant(mesh, 1.0/800.0)
 P_b_initial = dolfinx.fem.Constant(cavity_surface, 3.5)
 u_out = dolfinx.fem.Constant(mesh, 0.0)
 
@@ -328,15 +329,16 @@ ds = ufl.Measure("ds", domain=mesh, subdomain_data=ft)
 g = K_S * pressure
 alpha = dolfinx.fem.Constant(mesh, 10.0)
 
-F = ufl.inner(u - u_n, v) * ufl.dx
-F += dt * ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
-F += ufl.inner(pressure - pressure_n, pressure_v) * ds(3)
-F += dt * ufl.inner(A * flux, pressure_v) * ds(3)
+F = ufl.inner((u - u_n)/dt, v) * ufl.dx
+F += ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
+F += ufl.inner((pressure - pressure_n)/dt, pressure_v) * ds(3)
+F += ufl.inner(A * flux, pressure_v) * ds(3)
 F -= ufl.dot(ufl.dot(n, ufl.grad(u)), v) * ds(3)
 F -= -ufl.inner(u - g, ufl.dot(n, ufl.grad(v))) * ds(3)
-F += alpha / h * ufl.inner(u - g, v) * ds(3)
+F +=  alpha / h * ufl.inner(u - g, v) * ds(3)
 
 forms = ufl.extract_blocks(F)
+
 
 # %% [markdown]
 # We can now create a
@@ -398,6 +400,7 @@ renderer = plotter.add_mesh(
 
 # %%
 t = 0
+# num_steps = 200
 t_final = 15
 
 times = []
@@ -471,13 +474,13 @@ Flux_out_ana = np.zeros_like(time_array)
 for lam in eigenvalues:
     phi_Rin = sp.j0(lam * R_in) * sp.y0(lam * R_out) - sp.y0(lam * R_in) * sp.j0(lam * R_out)
     phi_1_Rin = sp.j1(lam * R_in) * sp.y0(lam * R_out) - sp.y1(lam * R_in) * sp.j0(lam * R_out)
-
+    
     # Norm of the eigenfunction with point-mass integration for the boundary ODE
     N_n = 2 / (np.pi**2 * lam**2) - (R_in**2 / 2) * (phi_Rin**2 + phi_1_Rin**2) + (1 / (2 * np.pi * A_val * K_S_val)) * phi_Rin**2
-
+    
     # Projection of initial condition (u=0 in domain, P_b=P_ini at cavity)
     a_n = (P_ini * phi_Rin) / (2 * np.pi * A_val * N_n)
-
+    
     # Series superposition
     P_b_ana += (a_n * phi_Rin / K_S_val) * np.exp(-lam**2 * time_array)
     Flux_out_ana += 4 * a_n * np.exp(-lam**2 * time_array)
@@ -500,3 +503,4 @@ axs[1].set_ylim(bottom=0)
 plt.xlabel("Time")
 plt.grid(True)
 plt.savefig("comparison.png")
+plt.show()
