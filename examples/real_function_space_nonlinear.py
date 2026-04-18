@@ -75,22 +75,6 @@
 # name to be redirected to the corresponding documentation page.
 # ```
 
-# %%
-from mpi4py import MPI
-from petsc4py import PETSc
-import dolfinx
-from dolfinx.fem.petsc import NonlinearProblem
-from dolfinx.io import gmsh as gmshio
-from dolfinx.plot import vtk_mesh
-import numpy as np
-from scifem import create_real_functionspace, assemble_scalar
-import ufl
-import pyvista
-import gmsh
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-
-
 # %% [markdown]
 # ### Mesh generation
 # We generate the mesh using `dolfinx.mesh.create_interval`.
@@ -100,6 +84,7 @@ import numpy as np
 import scipy.optimize as opt
 from mpi4py import MPI
 import dolfinx
+from petsc4py import PETSc
 from dolfinx.fem.petsc import NonlinearProblem
 from scifem import create_real_functionspace
 import ufl
