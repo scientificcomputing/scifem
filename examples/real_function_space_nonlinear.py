@@ -283,7 +283,7 @@ while t < t_final:
     p_fem.append(pressure.x.array[0].copy())
 
     # n points in -x direction at x=0, so flux in +x dir is -(flux_u * n)
-    F_out = dolfinx.fem.assemble_scalar(flux_0_form) 
+    F_out = dolfinx.fem.assemble_scalar(flux_0_form)
     flux_0 = mesh.comm.allreduce(F_out, op=MPI.SUM)
     flux_fem.append(-flux_0)
 
@@ -295,7 +295,7 @@ def get_exact_roots(L, l_val, num_roots):
     exact_roots = []
     def root_eqn(alpha):
         return alpha * np.tan(alpha * l_val) - L
-        
+
     for n_root in range(num_roots):
         start = (n_root * np.pi) / l_val + 1e-9
         end = (n_root * np.pi + np.pi/2) / l_val - 1e-9
@@ -321,7 +321,7 @@ for i, t_ in enumerate(time_arr):
         term = np.exp(-D_val * t_ * alpha**2) / (L_const + l_val * (L_const**2 + alpha**2))
         c_l += term
         J_0 += term * alpha / np.sin(l_val * alpha)
-        
+
     p_ana[i] = 2 * L_const * P_0_val * c_l
     flux_ana[i] = 2 * L_const * P_0_val * D_val * K_H_val * J_0
 
