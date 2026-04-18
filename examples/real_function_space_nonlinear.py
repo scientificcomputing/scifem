@@ -27,7 +27,7 @@
 # - How to solve a problem coupling this real space with the bulk using
 #   a nonlinear solver.
 #
-# A circular gas cavity inside a solid domain has an initial partial
+# A gas cavity in contatc with a solid domain has an initial partial
 # pressure $P_b$.
 # The concentration $u$ on the cavity surface follows Henry's solubility law:
 # the concentration is proportional to the partial pressure $P_b$.
@@ -36,14 +36,13 @@
 # starts to decrease - affecting in turn the concentration on the
 # cavity surface.
 #
-#
 # ## Mathematical formulation
 #  The problem at hand is:
 # Find $u \in H^1(\Omega)$ such that
 #
 # $$
 # \begin{align}
-# \frac{du}{dt}&= \Delta u + f\quad \text{in } \Omega, \\
+# \frac{du}{dt}&= \Delta u \quad \text{in } \Omega, \\
 # u &= 0 \quad \text{on } \Gamma_1, \\
 # u &= K P_b \quad \text{on } \Gamma_b,
 # \end{align}
