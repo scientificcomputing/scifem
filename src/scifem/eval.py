@@ -10,6 +10,8 @@ import basix
 import ufl
 from scipy.optimize import minimize
 from ufl.algorithms.signature import compute_expression_signature
+from .compat import get_cmap
+
 
 T = typing.TypeVar("T", int, float)
 MinMaxFunc = typing.Callable[[typing.Sequence[T]], T]
@@ -155,7 +157,7 @@ def find_cell_extrema(
     _cell = np.array([cell], dtype=np.int32)
     mesh_nodes = mesh.geometry.x[mesh.geometry.dofmap[cell], : mesh.geometry.dim]
     _x_p = np.zeros(3)
-
+    cmap = get_cmap(mesh)
     def eval_J(x_ref):
         # Evaluating basis functions through {py:func}`dolfinx.fem.Function.eval`
         # is faster than generating an expression for the same thing
@@ -163,7 +165,8 @@ def find_cell_extrema(
             # This could in theory be made even faster by taking out some of the eval code
             # However, quite a lot of work needs to be reimplemented for minimal gain
             # to do so, so we rather push forward, then let eval pull back again.
-            _x_p[: mesh.geometry.dim] = mesh.geometry.cmap.push_forward(
+         
+            _x_p[: mesh.geometry.dim] = cmap.push_forward(
                 x_ref.reshape(-1, mesh.topology.dim), mesh_nodes
             )[0]
             try:
@@ -233,7 +236,7 @@ def find_cell_extrema(
         tol=tol,
     )
 
-    X_phys = mesh.geometry.cmap.push_forward(result.x.reshape(-1, mesh.topology.dim), mesh_nodes)[0]
+    X_phys = cmap.push_forward(result.x.reshape(-1, mesh.topology.dim), mesh_nodes)[0]
     return X_phys, sign * result.fun
 
 
