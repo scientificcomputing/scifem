@@ -4,7 +4,7 @@ import dolfinx
 import basix
 import numpy as np
 import ufl
-from scifem import PointSource
+from scifem import PointSource, compat
 
 
 def test_midpoint():
@@ -91,7 +91,7 @@ def test_outside():
     if cells.offsets[-1] > 0:
         cell = cells.links(0)[0]
         geom_dofs = mesh.geometry.dofmap[cell]
-        ref_x = mesh.geometry.cmap.pull_back(point.reshape(-1, 3), mesh.geometry.x[geom_dofs])
+        ref_x = compat.get_cmap(mesh).pull_back(point.reshape(-1, 3), mesh.geometry.x[geom_dofs])
         ref_values = V.ufl_element().tabulate(0, ref_x).flatten()
         b_nonzero = np.flatnonzero(b.x.array)
         dofs = V.dofmap.cell_dofs(cell)
