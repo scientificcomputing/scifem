@@ -158,6 +158,7 @@ def find_cell_extrema(
     mesh_nodes = mesh.geometry.x[mesh.geometry.dofmap[cell], : mesh.geometry.dim]
     _x_p = np.zeros(3)
     cmap = get_cmap(mesh)
+
     def eval_J(x_ref):
         # Evaluating basis functions through {py:func}`dolfinx.fem.Function.eval`
         # is faster than generating an expression for the same thing
@@ -165,7 +166,7 @@ def find_cell_extrema(
             # This could in theory be made even faster by taking out some of the eval code
             # However, quite a lot of work needs to be reimplemented for minimal gain
             # to do so, so we rather push forward, then let eval pull back again.
-         
+
             _x_p[: mesh.geometry.dim] = cmap.push_forward(
                 x_ref.reshape(-1, mesh.topology.dim), mesh_nodes
             )[0]
