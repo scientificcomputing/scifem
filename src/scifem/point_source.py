@@ -23,6 +23,7 @@ import numpy as np
 import numpy.typing as npt
 import ufl
 
+from .compat import get_cmap
 from .utils import unroll_dofmap
 
 __all__ = ["PointSource"]
@@ -121,7 +122,7 @@ class PointSource:
         mesh = self._function_space.mesh
         # Pull owning points back to reference cell
         mesh_nodes = mesh.geometry.x
-        cmap = mesh.geometry.cmap
+        cmap = get_cmap(mesh)
 
         ref_x = np.zeros((len(self._cells), mesh.topology.dim), dtype=mesh.geometry.x.dtype)
         for i, (point, cell) in enumerate(zip(self._points, self._cells)):
