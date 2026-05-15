@@ -34,23 +34,35 @@ def interpolate_function_onto_facet_dofs(
 
     interpolation_points = Q_el.basix_element.x
 
-    c_el = domain.ufl_domain().ufl_coordinate_element()
-    ref_top = c_el.reference_topology
-    ref_geom = c_el.reference_geometry
     facet_types = set(basix.cell.subentity_types(domain.basix_cell())[fdim])
     assert len(facet_types) == 1, "All facets must have the same topology"
 
     # Pull back interpolation points from reference coordinate element to facet reference element
+    # We create affine versions of each of them as we are in reference mode.
+    # Then we avoid Newton convergence issues
+    ref_cmap = basix.ufl.element(
+        "Lagrange",
+        domain.basix_cell(),
+        1,
+        shape=(domain.topology.dim,),
+        dtype=np.float64,
+    )
+    c_el = dolfinx.fem.CoordinateElement(
+        dolfinx.cpp.fem.CoordinateElement_float64(ref_cmap.basix_element._e)
+    )
+    ref_top = ref_cmap.reference_topology
+    ref_geom = ref_cmap.reference_geometry
     facet_cmap = basix.ufl.element(
         "Lagrange",
         facet_types.pop(),
-        c_el.degree,
-        shape=(domain.geometry.dim,),
+        1,
+        shape=(domain.topology.dim,),
         dtype=np.float64,
     )
     facet_cel = dolfinx.fem.CoordinateElement(
         dolfinx.cpp.fem.CoordinateElement_float64(facet_cmap.basix_element._e)
     )
+
     reference_facet_points = None
     for i, points in enumerate(interpolation_points[fdim]):
         geom = ref_geom[ref_top[fdim][i]]
