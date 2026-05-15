@@ -47,9 +47,6 @@ def interpolate_function_onto_facet_dofs(
         shape=(domain.topology.dim,),
         dtype=np.float64,
     )
-    c_el = dolfinx.fem.CoordinateElement(
-        dolfinx.cpp.fem.CoordinateElement_float64(ref_cmap.basix_element._e)
-    )
     ref_top = ref_cmap.reference_topology
     ref_geom = ref_cmap.reference_geometry
     facet_cmap = basix.ufl.element(
