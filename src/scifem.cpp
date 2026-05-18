@@ -423,13 +423,26 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
   }
   else
   {
+#ifdef __cpp_lib_jthread
     std::vector<std::jthread> threads;
+#else
+    std::vector<std::thread> threads;
+#endif
     threads.reserve(num_threads);
     for (size_t i = 0; i < num_threads; ++i)
     {
       auto [c0, c1] = dolfinx::MPI::local_range(i, total_cells, num_threads);
       threads.emplace_back(compute_chunk, c0, c1);
     }
+#ifndef __cpp_lib_jthread
+    for (auto& t : threads)
+    {
+      if (t.joinable())
+      {
+        t.join();
+      }
+    }
+#endif
   }
   return {std::move(closest_points), std::move(reference_points)};
 }
