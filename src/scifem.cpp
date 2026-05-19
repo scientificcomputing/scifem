@@ -635,8 +635,12 @@ transfer_meshtags_to_submesh(
 
   // Accumulate global indices across processes
   dolfinx::la::Vector<std::int64_t> index_mapper(parent_entity_map, 1);
-  std::ranges::fill(index_mapper.array(), -1);
+#if DOLFINX_VERSION_MINOR > 9
   std::span<std::int64_t> indices = index_mapper.array();
+#else
+  std::span<std::int64_t> indices = index_mapper.mutable_array();
+#endif
+  std::ranges::fill(indices, -1);
   for (std::size_t i = 0; i < global_tag_indices.size(); ++i)
     indices[tag_indices[i]] = global_tag_indices[i];
   index_mapper.scatter_rev([](std::int32_t a, std::int32_t b)
@@ -645,8 +649,13 @@ transfer_meshtags_to_submesh(
 
   // Map tag values in a similar way (Allowing negative values)
   dolfinx::la::Vector<T> values_mapper(parent_entity_map, 1);
-  std::ranges::fill(values_mapper.array(), std::numeric_limits<T>::min());
+#if DOLFINX_VERSION_MINOR > 9
   std::span<T> values = values_mapper.array();
+#else
+  std::span<T> values = values_mapper.mutable_array();
+#endif
+  std::ranges::fill(values, std::numeric_limits<T>::min());
+
   std::span<const T> tag_values = tags.values();
   for (std::size_t i = 0; i < tag_values.size(); ++i)
     values[tag_indices[i]] = tag_values[i];
