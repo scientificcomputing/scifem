@@ -244,7 +244,7 @@ def find_cell_extrema(
 def compute_LP_average(
     u: ufl.core.expr.Expr, p: int, domain: dolfinx.mesh.Mesh
 ) -> npt.NDArray[np.float32 | np.float64 | np.complex128 | np.complex64]:
-    """
+    r"""
     Compute the :math:`L^p(\Omega)`-average of a scalar-valued
     {py:class}`ufl-expression<ufl.core.expr.Expr>` over each cell in a
     {py:class}`domain<dolfinx.mesh.Mesh>`
