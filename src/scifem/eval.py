@@ -209,18 +209,19 @@ def find_cell_extrema(
     # In SciPy, 'ineq' means the function must be >= 0.
     # So, x + y <= 1 becomes 1 - x - y >= 0.
     cell_type = mesh.topology.cell_type
-    if cell_type == dolfinx.mesh.CellType.triangle:
+    if cell_type in (dolfinx.mesh.CellType.triangle, dolfinx.mesh.CellType.tetrahedron):
         method = method or "SLSQP"
-        constraint = {"type": "ineq", "fun": lambda x: 1.0 - x[0] - x[1]}
-    elif (
-        cell_type == dolfinx.mesh.CellType.quadrilateral
-        or cell_type == dolfinx.mesh.CellType.hexahedron
+        constraint = {
+            "type": "ineq",
+            "fun": lambda x: 1.0 - sum(x[i] for i in range(mesh.topology.dim)),
+        }
+    elif cell_type in (
+        dolfinx.mesh.CellType.interval,
+        dolfinx.mesh.CellType.quadrilateral,
+        dolfinx.mesh.CellType.hexahedron,
     ):
         method = method or "L-BFGS-B"
         constraint = {}
-    elif cell_type == dolfinx.mesh.CellType.tetrahedron:
-        method = method or "SLSQP"
-        constraint = {"type": "ineq", "fun": lambda x: 1.0 - x[0] - x[1] - x[2]}
     else:
         raise RuntimeError(f"Unsupported {cell_type=}")
 
