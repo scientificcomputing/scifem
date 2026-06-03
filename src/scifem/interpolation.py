@@ -337,7 +337,10 @@ def interpolate_to_surface_submesh(
     """
     Interpolate a function `u_volume` into the function `u_surface`.
     Note:
-        Does not work for DG as no dofs are associated with the facets
+        Does not work for DG as no dofs are associated with the facets in versions of DOLFINx
+        prior to https://github.com/FEniCS/dolfinx/pull/4140, which is included in version
+        0.11.0 and later.
+
     Args:
         u_volume: Function to interpolate data from
         u_surface: Function to interpolate data to
@@ -362,18 +365,21 @@ def interpolate_to_surface_submesh(
 
     submesh.topology.create_entity_permutations()
     mesh.topology.create_entity_permutations()
-    cell_info = mesh.topology.get_cell_permutation_info()
     ft = V_surf.element.basix_element.cell_type
 
-    for i in range(integration_entities.shape[0]):
-        perm = np.arange(data.shape[1], dtype=np.int32)
-        V_vol.element.basix_element.permute_subentity_closure_inv(
-            perm,
-            cell_info[integration_entities[i, 0]],
-            ft,
-            int(integration_entities[i, 1]),
-        )
-        data[i] = data[i][perm]
+    if Version(dolfinx.__version__) < Version("0.11.0.dev0"):
+        # Before the introduction of https://github.com/FEniCS/dolfinx/pull/4140
+        # one needed to permute the data according to the facet permutations. 
+        cell_info = mesh.topology.get_cell_permutation_info()
+        for i in range(integration_entities.shape[0]):
+            perm = np.arange(data.shape[1], dtype=np.int32)
+            V_vol.element.basix_element.permute_subentity_closure_inv(
+                perm,
+                cell_info[integration_entities[i, 0]],
+                ft,
+                int(integration_entities[i, 1]),
+            )
+            data[i] = data[i][perm]
 
     if len(data.shape) == 3:
         # Data is now (num_cells, value_size,num_points)
