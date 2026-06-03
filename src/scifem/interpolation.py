@@ -369,7 +369,7 @@ def interpolate_to_surface_submesh(
 
     if Version(dolfinx.__version__) < Version("0.11.0.dev0"):
         # Before the introduction of https://github.com/FEniCS/dolfinx/pull/4140
-        # one needed to permute the data according to the facet permutations. 
+        # one needed to permute the data according to the facet permutations.
         cell_info = mesh.topology.get_cell_permutation_info()
         for i in range(integration_entities.shape[0]):
             perm = np.arange(data.shape[1], dtype=np.int32)
