@@ -22,9 +22,9 @@ def right_facets(x):
 def test_normal_enforcement(cell_type: dolfinx.mesh.CellType):
     tdim = dolfinx.mesh.cell_dim(cell_type)
     if tdim == 2:
-        mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10)
+        mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10, cell_type=cell_type)
     elif tdim == 3:
-        mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 8, 10, 3)
+        mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 8, 10, 3, cell_type=cell_type)
 
     V = dolfinx.fem.functionspace(mesh, ("BDM", 1))
 
@@ -51,9 +51,9 @@ def test_normal_enforcement(cell_type: dolfinx.mesh.CellType):
 def test_tangent_enforcement(cell_type: dolfinx.mesh.CellType):
     tdim = dolfinx.mesh.cell_dim(cell_type)
     if tdim == 2:
-        mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10)
+        mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 10, 10, cell_type=cell_type)
     elif tdim == 3:
-        mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 8, 10, 3)
+        mesh = dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, 8, 10, 3, cell_type=cell_type)
     else:
         raise ValueError(f"Unsupported {cell_type=}")
 
