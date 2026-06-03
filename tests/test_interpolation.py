@@ -231,13 +231,16 @@ def test_discrete_curl(degree, use_petsc, cell_type):
 
 
 @pytest.mark.parametrize("degree", [1, 2, 3])
-@pytest.mark.parametrize("family", ["Lagrange"])
+@pytest.mark.parametrize("family", ["Lagrange", "DG"])
 @pytest.mark.skipif(
     Version(dolfinx.__version__) < Version("0.10.0"), reason="Requires DOLFINx version >0.10.0"
 )
 def test_interpolate_to_interface_submesh(family, degree):
     # Create a unit square
     comm = MPI.COMM_WORLD
+
+    if Version(dolfinx.__version__) < Version("0.11.0.dev0") and family == "DG":
+        pytest.skip("Interpolation to surface submesh does not work for DG in DOLFINx < 0.11.0")
     domain = dolfinx.mesh.create_unit_square(
         comm, 48, 48, ghost_mode=dolfinx.mesh.GhostMode.shared_facet
     )

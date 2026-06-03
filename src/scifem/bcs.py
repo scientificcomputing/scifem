@@ -3,8 +3,54 @@ import dolfinx
 import ufl
 import numpy.typing as npt
 import numpy as np
+from packaging.version import Version
+from ffcx.ir.elementtables import (
+    permute_quadrature_interval,
+    permute_quadrature_triangle,
+    permute_quadrature_quadrilateral,
+)
 
 __all__ = ["interpolate_function_onto_facet_dofs"]
+
+
+def build_quadrature_permutations(facet_type, points):
+    if Version(dolfinx.__version__) < Version("0.11.0.dev0"):
+        # In older versions of dolfinx, the permutation is handled internally
+        # in the C++ code, so we can just return the original points
+        if facet_type == basix.CellType.interval:
+            num_permutations = 2
+        elif facet_type == basix.CellType.triangle:
+            num_permutations = 6
+        elif facet_type == basix.CellType.quadrilateral:
+            num_permutations = 8
+        else:
+            raise ValueError(f"Unsupported {facet_type=}")
+        return [points for _ in range(num_permutations)]
+    else:
+        if facet_type == basix.CellType.interval:
+            return [permute_quadrature_interval(points, ref) for ref in range(2)]
+        elif facet_type == basix.CellType.triangle:
+            perms = []
+            # FFCx order: rot is outer loop, ref is inner loop
+            for rot in range(3):
+                for ref in range(2):
+                    # Counteract the mapping with the inverse permutation
+                    rot_inv = (3 - rot) % 3 if ref == 0 else rot
+                    perms.append(permute_quadrature_triangle(points, ref, rot_inv))
+            return perms
+
+        elif facet_type == basix.CellType.quadrilateral:
+            perms = []
+            # FFCx order: rot is outer loop, ref is inner loop
+            for rot in range(4):
+                for ref in range(2):
+                    # Counteract the mapping with the inverse permutation
+                    rot_inv = (4 - rot) % 4 if ref == 0 else rot
+                    perms.append(permute_quadrature_quadrilateral(points, ref, rot_inv))
+            return perms
+
+        else:
+            raise ValueError(f"Unsupported {facet_type=}")
 
 
 def interpolate_function_onto_facet_dofs(
@@ -49,9 +95,10 @@ def interpolate_function_onto_facet_dofs(
     )
     ref_top = ref_cmap.reference_topology
     ref_geom = ref_cmap.reference_geometry
+    facet_type = facet_types.pop()
     facet_cmap = basix.ufl.element(
         "Lagrange",
-        facet_types.pop(),
+        facet_type,
         1,
         shape=(domain.topology.dim,),
         dtype=np.float64,
@@ -59,7 +106,6 @@ def interpolate_function_onto_facet_dofs(
     facet_cel = dolfinx.fem.CoordinateElement(
         dolfinx.cpp.fem.CoordinateElement_float64(facet_cmap.basix_element._e)
     )
-
     reference_facet_points = None
     for i, points in enumerate(interpolation_points[fdim]):
         geom = ref_geom[ref_top[fdim][i]]
@@ -71,9 +117,10 @@ def interpolate_function_onto_facet_dofs(
         else:
             assert np.allclose(reference_facet_points, ref_points)
     assert reference_facet_points is not None
-    # Create expression for BC
-    normal_expr = dolfinx.fem.Expression(expr, reference_facet_points)
-
+    facet_points = build_quadrature_permutations(facet_type, reference_facet_points)
+    expressions = []
+    for i, perm in enumerate(facet_points):
+        expressions.append(dolfinx.fem.Expression(expr, perm))
     points_per_entity = [sum(ip.shape[0] for ip in ips) for ips in interpolation_points]
     offsets = np.zeros(domain.topology.dim + 2, dtype=np.int32)
     offsets[1:] = np.cumsum(points_per_entity[: domain.topology.dim + 1])
@@ -85,7 +132,12 @@ def interpolate_function_onto_facet_dofs(
     all_connected_cells = dolfinx.mesh.compute_incident_entities(
         domain.topology, facets, domain.topology.dim - 1, domain.topology.dim
     )
-    values = np.zeros(len(all_connected_cells) * offsets[-1] * domain.geometry.dim)
+    expr_value_size = expressions[0].value_size
+
+    # Update array allocations to use the exact expression value size
+    values_per_entity = np.zeros((offsets[-1], expr_value_size), dtype=dolfinx.default_scalar_type)
+    values = np.zeros(len(all_connected_cells) * offsets[-1] * expr_value_size)
+
     domain.topology.create_connectivity(domain.topology.dim, fdim)
     c_to_f = domain.topology.connectivity(domain.topology.dim, fdim)
     num_facets_on_process = (
@@ -93,6 +145,9 @@ def interpolate_function_onto_facet_dofs(
     )
     is_marked = np.zeros(num_facets_on_process, dtype=np.int8)
     is_marked[facets] = 1
+    domain.topology.create_entity_permutations()
+    num_facets_per_cell = dolfinx.cpp.mesh.cell_num_entities(domain.topology.cell_type, fdim)
+    facet_permutations = domain.topology.get_facet_permutations().reshape(-1, num_facets_per_cell)
     for i, cell in enumerate(all_connected_cells):
         values_per_entity[:] = 0.0
         local_facets = c_to_f.links(cell)
@@ -102,24 +157,24 @@ def interpolate_function_onto_facet_dofs(
             insert_pos = offsets[fdim] + reference_facet_points.shape[0] * j
             # Backwards compatibility
             entity = np.array([[cell, j]], dtype=np.int32)
+            perm = facet_permutations[cell, j]
             try:
-                normal_on_facet = normal_expr.eval(domain, entity)
+                normal_on_facet = expressions[perm].eval(domain, entity)
             except (AttributeError, AssertionError):
-                normal_on_facet = normal_expr.eval(domain, entity.flatten())
+                normal_on_facet = expressions[perm].eval(domain, entity.flatten())
             # NOTE: evaluate within loop to avoid large memory requirements
             values_per_entity[insert_pos : insert_pos + reference_facet_points.shape[0]] = (
-                normal_on_facet.reshape(-1, domain.geometry.dim)
+                normal_on_facet.reshape(-1, expr_value_size)
             )
-        values[
-            i * offsets[-1] * domain.geometry.dim : (i + 1) * offsets[-1] * domain.geometry.dim
-        ] = values_per_entity.reshape(-1)
+        values[i * offsets[-1] * expr_value_size : (i + 1) * offsets[-1] * expr_value_size] = (
+            values_per_entity.reshape(-1)
+        )
 
     qh = dolfinx.fem.Function(Q)
     if hasattr(qh._cpp_object, "interpolate_f"):
         interpolate_func = qh._cpp_object.interpolate_f
     else:
         interpolate_func = qh._cpp_object.interpolate
-    interpolate_func(values.reshape(-1, domain.geometry.dim).T.copy(), all_connected_cells)
+    interpolate_func(values.reshape(-1, expr_value_size).T.copy(), all_connected_cells)
     qh.x.scatter_forward()
-
     return qh
