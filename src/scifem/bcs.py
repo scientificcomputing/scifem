@@ -3,7 +3,7 @@ import dolfinx
 import ufl
 import numpy.typing as npt
 import numpy as np
-from packaging import Version
+from packaging.version import Version
 from ffcx.ir.elementtables import (
     permute_quadrature_interval,
     permute_quadrature_triangle,
