@@ -82,7 +82,7 @@ def plot_mesh(mesh: dolfinx.mesh.Mesh, values=None):
     plotter = pyvista.Plotter()
     V_linear = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
     linear_grid = pyvista.UnstructuredGrid(*dolfinx.plot.vtk_mesh(V_linear))
-    if compat.get_cmap(mesh).degree > 1:
+    if compat.cmap(mesh).degree > 1:
         ugrid = pyvista.UnstructuredGrid(*dolfinx.plot.vtk_mesh(mesh))
         if values is not None:
             ugrid.cell_data["Marker"] = values

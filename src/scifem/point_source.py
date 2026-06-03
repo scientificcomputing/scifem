@@ -23,7 +23,7 @@ import numpy as np
 import numpy.typing as npt
 import ufl
 
-from .compat import get_cmap
+from . import compat
 from .utils import unroll_dofmap
 
 __all__ = ["PointSource"]
@@ -122,11 +122,11 @@ class PointSource:
         mesh = self._function_space.mesh
         # Pull owning points back to reference cell
         mesh_nodes = mesh.geometry.x
-        cmap = get_cmap(mesh)
+        cmap = compat.cmap(mesh)
 
         ref_x = np.zeros((len(self._cells), mesh.topology.dim), dtype=mesh.geometry.x.dtype)
         for i, (point, cell) in enumerate(zip(self._points, self._cells)):
-            geom_dofs = mesh.geometry.dofmap[cell]
+            geom_dofs = compat.dofmap(mesh)[cell]
             ref_x[i] = cmap.pull_back(point.reshape(-1, 3), mesh_nodes[geom_dofs])
 
         # Create expression evaluating a trial function (i.e. just the basis function)

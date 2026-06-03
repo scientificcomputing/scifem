@@ -11,6 +11,8 @@ from packaging.version import Version
 import basix
 import ufl
 
+from . import compat
+
 __all__ = [
     "create_entity_markers",
     "transfer_meshtags_to_submesh",
@@ -413,7 +415,7 @@ def create_geometry_function_space(
 
     """
     geom_imap = mesh.geometry.index_map()
-    geom_dofmap = mesh.geometry.dofmap
+    geom_dofmap = compat.dofmap(mesh)
     ufl_domain = mesh.ufl_domain()
     assert ufl_domain is not None
     sub_el = ufl_domain.ufl_coordinate_element().sub_elements[0]
