@@ -10,7 +10,7 @@ import basix
 import ufl
 from scipy.optimize import minimize
 from ufl.algorithms.signature import compute_expression_signature
-from .compat import get_cmap
+from . import compat
 
 
 T = typing.TypeVar("T", int, float)
@@ -155,9 +155,9 @@ def find_cell_extrema(
         x_ref = x0
 
     _cell = np.array([cell], dtype=np.int32)
-    mesh_nodes = mesh.geometry.x[mesh.geometry.dofmap[cell], : mesh.geometry.dim]
+    mesh_nodes = mesh.geometry.x[compat.dofmap(mesh)[cell], : mesh.geometry.dim]
     _x_p = np.zeros(3)
-    cmap = get_cmap(mesh)
+    cmap = compat.cmap(mesh)
 
     def eval_J(x_ref):
         # Evaluating basis functions through {py:func}`dolfinx.fem.Function.eval`

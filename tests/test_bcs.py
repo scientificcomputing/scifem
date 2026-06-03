@@ -19,6 +19,10 @@ def right_facets(x):
         dolfinx.mesh.CellType.tetrahedron,
     ],
 )
+@pytest.mark.skipif(
+    condition=dolfinx.__version__ == "0.11.0.dev0",
+    reason="Update in expression in dolfinx",
+)
 def test_normal_enforcement(cell_type: dolfinx.mesh.CellType):
     tdim = dolfinx.mesh.cell_dim(cell_type)
     if tdim == 2:
@@ -47,6 +51,10 @@ def test_normal_enforcement(cell_type: dolfinx.mesh.CellType):
 
 @pytest.mark.parametrize(
     "cell_type", [dolfinx.mesh.CellType.triangle, dolfinx.mesh.CellType.quadrilateral]
+)
+@pytest.mark.skipif(
+    condition=dolfinx.__version__ == "0.11.0.dev0",
+    reason="Update in expression in dolfinx",
 )
 def test_tangent_enforcement(cell_type: dolfinx.mesh.CellType):
     tdim = dolfinx.mesh.cell_dim(cell_type)
