@@ -3,6 +3,7 @@ import numpy as np
 import numpy.typing as npt
 import warnings
 from scifem._scifem import closest_point_projection_float64, closest_point_projection_float32
+from . import compat
 
 
 def project_onto_simplex(
@@ -162,7 +163,7 @@ def _closest_point_projection(
     element = mesh.ufl_domain().ufl_coordinate_element().sub_elements[0]
     tdim = mesh.topology.dim
     # Get the coordinates of the nodes for the specified cell
-    node_coords = mesh.geometry.x[mesh.geometry.dofmap[cells]][:, :, : mesh.geometry.dim]
+    node_coords = mesh.geometry.x[compat.dofmap(mesh)[cells]][:, :, : mesh.geometry.dim]
     target_points = target_points.reshape(-1, 3)
 
     # Constraints and Bounds

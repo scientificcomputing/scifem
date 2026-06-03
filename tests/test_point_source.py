@@ -88,10 +88,11 @@ def test_outside():
     cells = dolfinx.geometry.compute_colliding_cells(mesh, cell_candidates, point)
     # Only use evaluate for points on current processor
     # BUG: In DOLFINx 0.8.0, links(0) yields a too long array
+
     if cells.offsets[-1] > 0:
         cell = cells.links(0)[0]
-        geom_dofs = mesh.geometry.dofmap[cell]
-        ref_x = compat.get_cmap(mesh).pull_back(point.reshape(-1, 3), mesh.geometry.x[geom_dofs])
+        geom_dofs = compat.dofmap(mesh)[cell]
+        ref_x = compat.cmap(mesh).pull_back(point.reshape(-1, 3), mesh.geometry.x[geom_dofs])
         ref_values = V.ufl_element().tabulate(0, ref_x).flatten()
         b_nonzero = np.flatnonzero(b.x.array)
         dofs = V.dofmap.cell_dofs(cell)

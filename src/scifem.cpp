@@ -187,7 +187,12 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
   constexpr T eps = std::numeric_limits<T>::epsilon();
   constexpr T roundoff_tol = 100 * eps;
 
+#if DOLFINX_VERSION_MINOR >= 11
+  const dolfinx::fem::CoordinateElement<T>& cmap
+      = mesh.geometry().cmaps().front();
+#else
   const dolfinx::fem::CoordinateElement<T>& cmap = mesh.geometry().cmap();
+#endif
   std::vector<T> closest_points(3 * cells.size(), T(0));
   assert(cells.size() == points.size() / 3);
   std::vector<T> reference_points(cells.size() * tdim);
@@ -201,8 +206,13 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
   const std::size_t basis_data_size
       = std::reduce(tab_shape.begin(), tab_shape.end(), 1, std::multiplies{});
 
+#if DOLFINX_VERSION_MINOR >= 11
+  md::mdspan<const std::int32_t, md::dextents<std::size_t, 2>> x_dofmap
+      = mesh.geometry().dofmaps().at(0);
+#else
   md::mdspan<const std::int32_t, md::dextents<std::size_t, 2>> x_dofmap
       = mesh.geometry().dofmap(0);
+#endif
   std::span<const T> x = mesh.geometry().x();
 
   auto compute_chunk = [&](std::size_t c0, std::size_t c1)
