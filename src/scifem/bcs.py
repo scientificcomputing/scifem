@@ -3,7 +3,7 @@ import dolfinx
 import ufl
 import numpy.typing as npt
 import numpy as np
-
+from packaging import Version
 from ffcx.ir.elementtables import (
     permute_quadrature_interval,
     permute_quadrature_triangle,
@@ -14,30 +14,43 @@ __all__ = ["interpolate_function_onto_facet_dofs"]
 
 
 def build_quadrature_permutations(facet_type, points):
-    if facet_type == basix.CellType.interval:
-        return [permute_quadrature_interval(points, ref) for ref in range(2)]
-    elif facet_type == basix.CellType.triangle:
-        perms = []
-        # FFCx order: rot is outer loop, ref is inner loop
-        for rot in range(3):
-            for ref in range(2):
-                # Counteract the mapping with the inverse permutation
-                rot_inv = (3 - rot) % 3 if ref == 0 else rot
-                perms.append(permute_quadrature_triangle(points, ref, rot_inv))
-        return perms
-
-    elif facet_type == basix.CellType.quadrilateral:
-        perms = []
-        # FFCx order: rot is outer loop, ref is inner loop
-        for rot in range(4):
-            for ref in range(2):
-                # Counteract the mapping with the inverse permutation
-                rot_inv = (4 - rot) % 4 if ref == 0 else rot
-                perms.append(permute_quadrature_quadrilateral(points, ref, rot_inv))
-        return perms
-
+    if Version(dolfinx.__version__) < Version("0.11.0.dev0"):
+        # In older versions of dolfinx, the permutation is handled internally
+        # in the C++ code, so we can just return the original points
+        if facet_type == basix.CellType.interval:
+            num_permutations = 2
+        elif facet_type == basix.CellType.triangle:
+            num_permutations = 6
+        elif facet_type == basix.CellType.quadrilateral:
+            num_permutations = 8
+        else:
+            raise ValueError(f"Unsupported {facet_type=}")
+        return [points for _ in range(num_permutations)]
     else:
-        raise ValueError(f"Unsupported {facet_type=}")
+        if facet_type == basix.CellType.interval:
+            return [permute_quadrature_interval(points, ref) for ref in range(2)]
+        elif facet_type == basix.CellType.triangle:
+            perms = []
+            # FFCx order: rot is outer loop, ref is inner loop
+            for rot in range(3):
+                for ref in range(2):
+                    # Counteract the mapping with the inverse permutation
+                    rot_inv = (3 - rot) % 3 if ref == 0 else rot
+                    perms.append(permute_quadrature_triangle(points, ref, rot_inv))
+            return perms
+
+        elif facet_type == basix.CellType.quadrilateral:
+            perms = []
+            # FFCx order: rot is outer loop, ref is inner loop
+            for rot in range(4):
+                for ref in range(2):
+                    # Counteract the mapping with the inverse permutation
+                    rot_inv = (4 - rot) % 4 if ref == 0 else rot
+                    perms.append(permute_quadrature_quadrilateral(points, ref, rot_inv))
+            return perms
+
+        else:
+            raise ValueError(f"Unsupported {facet_type=}")
 
 
 def interpolate_function_onto_facet_dofs(
