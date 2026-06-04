@@ -333,6 +333,7 @@ def interpolate_to_surface_submesh(
     u_surface: dolfinx.fem.Function,
     submesh_facets: npt.NDArray[np.int32],
     integration_entities: npt.NDArray[np.int32],
+    entity_maps: list[dolfinx.mesh.EntityMap] | None = None,
 ):
     """
     Interpolate a function `u_volume` into the function `u_surface`.
@@ -350,24 +351,29 @@ def interpolate_to_surface_submesh(
     """
     if Version(dolfinx.__version__) < Version("0.10.0"):
         raise RuntimeError("interpolate_to_submesh requires dolfinx version 0.10.0 or higher")
-    V_vol = u_volume.function_space
-    mesh = V_vol.mesh
+    ufl_domains = ufl.domain.extract_domains(u_volume)
+    max_tdim_pos = np.argmax([domain.ufl_cargo().topology.dim for domain in ufl_domains])
+    mesh = dolfinx.mesh.Mesh(ufl_domains[max_tdim_pos].ufl_cargo(), ufl_domains[max_tdim_pos])
+
     V_surf = u_surface.function_space
     submesh = V_surf.mesh
     ip = V_surf.element.interpolation_points
 
-    expr = dolfinx.fem.Expression(u_volume, ip)
-
+    try:
+        expr = dolfinx.fem.Expression(u_volume, ip, entity_maps=entity_maps)
+    except TypeError:
+        expr = dolfinx.fem.Expression(u_volume, ip)
     mesh.topology.create_connectivity(mesh.topology.dim, submesh.topology.dim)
     mesh.topology.create_connectivity(submesh.topology.dim, mesh.topology.dim)
 
     data = expr.eval(mesh, integration_entities)
-
     submesh.topology.create_entity_permutations()
     mesh.topology.create_entity_permutations()
     ft = V_surf.element.basix_element.cell_type
 
     if Version(dolfinx.__version__) < Version("0.11.0.dev0"):
+        V_vol = u_volume.function_space
+        mesh = V_vol.mesh
         # Before the introduction of https://github.com/FEniCS/dolfinx/pull/4140
         # one needed to permute the data according to the facet permutations.
         cell_info = mesh.topology.get_cell_permutation_info()
@@ -396,5 +402,6 @@ def interpolate_to_surface_submesh(
         interpolate_func = u_surface._cpp_object.interpolate_f
     else:
         interpolate_func = u_surface._cpp_object.interpolate
+
     interpolate_func(shaped_data, submesh_facets)
     u_surface.x.scatter_forward()
