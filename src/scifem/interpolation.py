@@ -402,6 +402,6 @@ def interpolate_to_surface_submesh(
         interpolate_func = u_surface._cpp_object.interpolate_f
     else:
         interpolate_func = u_surface._cpp_object.interpolate
-    breakpoint()
+
     interpolate_func(shaped_data, submesh_facets)
     u_surface.x.scatter_forward()
