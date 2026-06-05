@@ -4,6 +4,7 @@ import ufl
 import numpy as np
 import numpy.typing as npt
 from .utils import unroll_dofmap
+from .mesh import _EntityMap
 
 __all__ = ["interpolation_matrix", "prepare_interpolation_data", "interpolate_to_surface_submesh"]
 
@@ -333,7 +334,7 @@ def interpolate_to_surface_submesh(
     u_surface: dolfinx.fem.Function,
     submesh_facets: npt.NDArray[np.int32],
     integration_entities: npt.NDArray[np.int32],
-    entity_maps: list[dolfinx.mesh.EntityMap] | None = None,
+    entity_maps: list[_EntityMap] | None = None,
 ):
     """
     Interpolate a function `u_volume` into the function `u_surface`.
