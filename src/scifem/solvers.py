@@ -8,6 +8,8 @@ import numpy as np
 import ufl
 import dolfinx
 
+from . import compat
+
 __all__ = ["NewtonSolver", "BlockedNewtonSolver"]
 
 if dolfinx.has_petsc4py and dolfinx.has_petsc:
@@ -87,13 +89,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                     dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
                 )
 
-                self._maps = [
-                    (
-                        form.function_spaces[0].dofmaps(0).index_map,
-                        form.function_spaces[0].dofmaps(0).index_map_bs,
-                    )
-                    for form in self.F
-                ]
+                self._maps = [compat.form_map(form) for form in self._F]
 
             # Set PETSc options
             opts = PETSc.Options()
@@ -409,13 +405,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                     dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
                 )
 
-                self._maps = [
-                    (
-                        form.function_spaces[0].dofmaps(0).index_map,
-                        form.function_spaces[0].dofmaps(0).index_map_bs,
-                    )
-                    for form in self._F
-                ]
+                self._maps = [compat.form_map(form) for form in self._F]
 
             self._J.setOptionsPrefix(prefix)
             self._J.setFromOptions()
