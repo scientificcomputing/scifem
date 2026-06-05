@@ -25,7 +25,7 @@ def dofmap(mesh: dolfinx.mesh.Mesh) -> npt.NDArray[np.int32]:
         return mesh.geometry.dofmap
 
 
-def form_map(form: dolfinx.fem.Form):
+def form_map(form: dolfinx.fem.Form) -> tuple[dolfinx.common.IndexMap, int]:
     try:
         return (
             form.function_spaces[0].dofmaps(0).index_map,
