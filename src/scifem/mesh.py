@@ -39,6 +39,7 @@ class _EntityMap(Protocol):
 
     sub_topology: dolfinx.mesh.Topology
     dim: int
+    _cpp_object: object
 
     def sub_topology_to_topology(
         self, entities: npt.NDArray[np.int32], inverse: bool
