@@ -140,7 +140,7 @@ def _closest_point_projection(
     Args:
         mesh: The mesh containing the cell.
         cells: The local indices of the cells to project onto.
-        target_points: (n, 3) numpy array, the 3D points to project.
+        target_points: (n, gdim) numpy array, the points to project.
         tol_x: Tolerance for changes between iterates in the reference coordinates.
             If None, uses the square root of machine precision.
         tol_grad: Tolerance for determination based on the gradient norm.
@@ -164,21 +164,22 @@ def _closest_point_projection(
     tdim = mesh.topology.dim
     # Get the coordinates of the nodes for the specified cell
     node_coords = mesh.geometry.x[compat.dofmap(mesh)[cells]][:, :, : mesh.geometry.dim]
-    target_points = target_points.reshape(-1, 3)
+    target_points = target_points.reshape(-1, mesh.geometry.dim)
 
     # Constraints and Bounds
     cell_type = mesh.topology.cell_type
 
     # Set initial guess and tolerance for solver
-    if (
-        cell_type == dolfinx.mesh.CellType.triangle
-        or cell_type == dolfinx.mesh.CellType.tetrahedron
+    if cell_type in (
+        dolfinx.mesh.CellType.triangle,
+        dolfinx.mesh.CellType.tetrahedron,
+        dolfinx.mesh.CellType.interval,
     ):
         plus_val = 1
     else:
         plus_val = 0
     initial_guess = np.full(mesh.topology.dim, 1 / (mesh.topology.dim + plus_val), dtype=dtype)
-    closest_points = np.zeros((target_points.shape[0], 3), dtype=dtype)
+    closest_points = np.zeros((target_points.shape[0], mesh.geometry.dim), dtype=dtype)
     reference_points = np.zeros((target_points.shape[0], mesh.topology.dim), dtype=dtype)
     is_simplex = cell_type in [
         dolfinx.mesh.CellType.triangle,
@@ -229,17 +230,10 @@ def _closest_point_projection(
             beta = 0.5  # Reduction factor (0 < beta < 1)
             alpha = 1.0  # Initial step size
 
-            x_new_prev = np.full(tdim, -1, dtype=dtype)
             target_reached = False
             for li in range(max_ls_iter):
                 # Apply the exact analytical simplex projection
                 x_new = project(x_k - alpha * g)
-
-                if np.linalg.norm(x_new - x_new_prev) < eps:
-                    # The projection is pinned to a boundary.
-                    # Changing alpha further will not change the physical point!
-                    break
-                x_new_prev = x_new.copy()
 
                 # The actual physical step we took after hitting the geometric walls
                 actual_step = x_new - x_k
