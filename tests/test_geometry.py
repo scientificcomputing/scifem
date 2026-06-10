@@ -266,8 +266,6 @@ def test_1D_manifold(order, num_threads):
 
     c_el = ufl.Mesh(basix.ufl.element("Lagrange", "interval", order, shape=(2,)))
     mesh = dolfinx.mesh.create_mesh(comm, cells=cells, x=curved_nodes, e=c_el)
-    with dolfinx.io.XDMFFile(comm, "test_1D_manifold.xdmf", "w") as xdmf:
-        xdmf.write_mesh(mesh)
 
     tol_x = 5e-6
     tol_dist = 1e-7
