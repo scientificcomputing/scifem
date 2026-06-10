@@ -193,12 +193,14 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
 #else
   const dolfinx::fem::CoordinateElement<T>& cmap = mesh.geometry().cmap();
 #endif
-  std::vector<T> closest_points(3 * cells.size(), T(0));
-  assert(cells.size() == points.size() / 3);
+  std::vector<T> closest_points(gdim * cells.size(), T(0));
+  assert(cells.size() == points.size() / gdim);
   std::vector<T> reference_points(cells.size() * tdim);
 
   std::array<T, tdim> initial_guess;
   T midpoint_divider = (is_simplex) ? 1.0 : 0.0;
+  if (tdim == 1)
+    midpoint_divider = 1.0;
   std::ranges::fill(initial_guess, 1.0 / ((T)tdim + midpoint_divider));
 
   const std::array<std::size_t, 4> dtab_shape = cmap.tabulate_shape(1, 1);
@@ -232,7 +234,6 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
     std::array<T, gdim> diff;
     std::array<T, gdim * tdim> J_buffer;
     std::array<T, tdim> gradient;
-    std::array<T, tdim> x_new_prev;
     std::array<T, tdim> x_new;
     std::array<T, tdim> x_k_tmp;
     std::array<T, gdim> target_point;
@@ -260,7 +261,7 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
         std::copy_n(x.data() + (3 * x_dofs[k]), gdim,
                     std::next(cdofs.begin(), gdim * k));
 
-      std::copy(points.data() + (3 * i), points.data() + (3 * i) + gdim,
+      std::copy(points.data() + (gdim * i), points.data() + (gdim * i) + gdim,
                 target_point.begin());
 
       // Update Initial guess
@@ -305,7 +306,7 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
         T jac_norm = 0;
         for (std::size_t l = 0; l < tdim * gdim; l++)
           jac_norm += J_buffer[l] * J_buffer[l];
-        T scaled_tol_grad = tol_grad * std::max(jac_norm, T(1));
+        T scaled_tol_grad = tol_grad * tol_grad * std::max(jac_norm, T(1));
         T g_squared = 0;
         for (std::size_t l = 0; l < tdim; ++l)
           g_squared += gradient[l] * gradient[l];
@@ -316,8 +317,6 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
 
         // Goldstein-Polyak-Levitin Projected Line Search
         // Bertsekas (1976) Eq. (14) - Armijo Rule along the Projection Arc
-        for (std::size_t l = 0; l < tdim; ++l)
-          x_new_prev[l] = -1;
         bool target_reached = false;
         T alpha = 1.0;
         for (std::size_t ls_iter = 0; ls_iter < max_ls_iter; ++ls_iter)
@@ -327,16 +326,6 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
           for (std::size_t l = 0; l < tdim; l++)
             x_k_tmp[l] = x_k[l] - alpha * gradient[l];
           impl::projection<T, tdim, is_simplex>(x_k_tmp, x_new);
-
-          // The projection is pinned to the boundary, terminate search
-          T local_diff = 0;
-          for (std::size_t l = 0; l < tdim; l++)
-            local_diff
-                += (x_new[l] - x_new_prev[l]) * (x_new[l] - x_new_prev[l]);
-          if (local_diff < eps * eps)
-            break;
-          for (std::size_t l = 0; l < tdim; l++)
-            x_new_prev[l] = x_new[l];
 
           // Evaluate distance at new point
           std::ranges::fill(std::span(dphi_b.data(), basis_data_size), T(0));
@@ -418,7 +407,7 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
                                                        cell_geometry, phi);
 
       std::copy_n(X_phys_buffer.data(), gdim,
-                  std::next(closest_points.begin(), 3 * i));
+                  std::next(closest_points.begin(), gdim * i));
       std::copy_n(x_k.begin(), tdim,
                   std::next(reference_points.begin(), tdim * i));
     }
@@ -827,7 +816,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
                     std::span<const T>(points.data(), points.size()), tol_x,
                     tol_dist, tol_grad, max_iter, max_ls_iter, num_threads);
             return std::make_tuple(
-                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_point, {cells.size(), gdim}),
                 as_nbarray(closest_ref, {cells.size(), tdim}));
           }
           case 2:
@@ -839,7 +828,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
                     std::span<const T>(points.data(), points.size()), tol_x,
                     tol_dist, tol_grad, max_iter, max_ls_iter, num_threads);
             return std::make_tuple(
-                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_point, {cells.size(), gdim}),
                 as_nbarray(closest_ref, {cells.size(), tdim}));
           }
           case 3:
@@ -851,7 +840,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
                     std::span<const T>(points.data(), points.size()), tol_x,
                     tol_dist, tol_grad, max_iter, max_ls_iter, num_threads);
             return std::make_tuple(
-                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_point, {cells.size(), gdim}),
                 as_nbarray(closest_ref, {cells.size(), tdim}));
           };
 
@@ -874,7 +863,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
                       std::span<const T>(points.data(), points.size()), tol_x,
                       tol_dist, tol_grad, max_iter, max_ls_iter, num_threads);
               return std::make_tuple(
-                  as_nbarray(closest_point, {cells.size(), 3}),
+                  as_nbarray(closest_point, {cells.size(), gdim}),
                   as_nbarray(closest_ref, {cells.size(), tdim}));
             }
             case 3:
@@ -886,7 +875,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
                       std::span<const T>(points.data(), points.size()), tol_x,
                       tol_dist, tol_grad, max_iter, max_ls_iter, num_threads);
               return std::make_tuple(
-                  as_nbarray(closest_point, {cells.size(), 3}),
+                  as_nbarray(closest_point, {cells.size(), gdim}),
                   as_nbarray(closest_ref, {cells.size(), tdim}));
             }
             default:
@@ -906,7 +895,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
                       std::span<const T>(points.data(), points.size()), tol_x,
                       tol_dist, tol_grad, max_iter, max_ls_iter, num_threads);
               return std::make_tuple(
-                  as_nbarray(closest_point, {cells.size(), 3}),
+                  as_nbarray(closest_point, {cells.size(), gdim}),
                   as_nbarray(closest_ref, {cells.size(), tdim}));
             }
             case 3:
@@ -918,7 +907,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
                       std::span<const T>(points.data(), points.size()), tol_x,
                       tol_dist, tol_grad, max_iter, max_ls_iter, num_threads);
               return std::make_tuple(
-                  as_nbarray(closest_point, {cells.size(), 3}),
+                  as_nbarray(closest_point, {cells.size(), gdim}),
                   as_nbarray(closest_ref, {cells.size(), tdim}));
             }
             default:
@@ -937,7 +926,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
                     std::span<const T>(points.data(), points.size()), tol_x,
                     tol_dist, tol_grad, max_iter, max_ls_iter, num_threads);
             return std::make_tuple(
-                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_point, {cells.size(), gdim}),
                 as_nbarray(closest_ref, {cells.size(), tdim}));
           }
           else
@@ -949,7 +938,7 @@ void declare_closest_point(nanobind::module_& m, std::string type)
                     std::span<const T>(points.data(), points.size()), tol_x,
                     tol_dist, tol_grad, max_iter, max_ls_iter, num_threads);
             return std::make_tuple(
-                as_nbarray(closest_point, {cells.size(), 3}),
+                as_nbarray(closest_point, {cells.size(), gdim}),
                 as_nbarray(closest_ref, {cells.size(), tdim}));
           }
 

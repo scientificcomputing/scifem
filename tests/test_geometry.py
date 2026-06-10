@@ -23,7 +23,7 @@ def scipy_project_point_to_element(
     Args:
         mesh: {py:class}`dolfinx.mesh.Mesh`, the mesh containing the cell.
         cells: {py:class}`numpy.ndarray`, the indices of the cells to project onto.
-        target_point: (3,) numpy array, the 3D point to project.
+        target_point: (N,gdim) numpy array, the 3D point to project.
         method: str, the optimization method to use.
         tol: float, the tolerance for the optimizer.
 
@@ -36,17 +36,18 @@ def scipy_project_point_to_element(
 
     # Get the coordinates of the nodes for the specified cell
     node_coords = mesh.geometry.x[compat.dofmap(mesh)[cells]][:, :, : mesh.geometry.dim]
-    target_points = target_points.reshape(-1, 3)
+    target_points = target_points.reshape(-1, mesh.geometry.dim)
     # cmap = mesh.geometry.cmap
 
     # Constraints and Bounds
     cell_type = mesh.topology.cell_type
-    if (
-        cell_type == dolfinx.mesh.CellType.triangle
-        or cell_type == dolfinx.mesh.CellType.tetrahedron
-    ):
+    if cell_type in (dolfinx.mesh.CellType.triangle, dolfinx.mesh.CellType.tetrahedron):
         method = method or "SLSQP"
         constraint = {"type": "ineq", "fun": lambda x: 1.0 - np.sum(x)}
+        d = 1.0
+    elif cell_type == dolfinx.mesh.CellType.interval:
+        method = method or "L-BFGS-B"
+        constraint = {}
         d = 1.0
     else:
         method = method or "L-BFGS-B"
@@ -58,7 +59,9 @@ def scipy_project_point_to_element(
 
     initial_guess = np.full(mesh.topology.dim, 1 / (mesh.topology.dim + d), dtype=np.float64)
     tol = np.sqrt(np.finfo(mesh.geometry.x.dtype).eps) if tol is None else tol
-    closest_points = np.zeros((target_points.shape[0], 3), dtype=mesh.geometry.x.dtype)
+    closest_points = np.zeros(
+        (target_points.shape[0], mesh.geometry.dim), dtype=mesh.geometry.x.dtype
+    )
     ref_points = np.zeros((target_points.shape[0], mesh.topology.dim), dtype=mesh.geometry.x.dtype)
     for i, (coord, target_point) in enumerate(zip(node_coords, target_points)):
         coord = coord.reshape(-1, mesh.geometry.dim)
@@ -92,7 +95,7 @@ def scipy_project_point_to_element(
             bounds=bounds,
             constraints=constraint,
             tol=tol,
-            options={"disp": False, "ftol": tol, "maxiter": 250},
+            options={"disp": False, "ftol": tol, "maxiter": 250, "gtol": 1e3 * tol},
         )
         closest_points[i] = S(res.x)
         ref_points[i] = res.x
@@ -223,6 +226,74 @@ def test_3D_curved_cell(order, num_threads):
         tol_x=tol_x,
         tol_dist=tol_dist,
         tol_grad=1e-16,
+    )
+
+    # Check that python and C++ implementations give the same result
+    np.testing.assert_allclose(result, closest_point, atol=tol_dist)
+    np.testing.assert_allclose(ref_coords, closest_ref, atol=10 * tol_x)
+
+    # Check that scipy and our implementation give similar distances,
+    # allowing for some tolerance due to different optimization methods
+    diff_scifem = closest_point - points
+    dist_scifem = 0.5 * np.sum(diff_scifem**2, axis=1)
+    diff_scipy = result_scipy - points
+    dist_scipy = 0.5 * np.sum(diff_scipy**2, axis=1)
+    np.testing.assert_allclose(dist_scifem, dist_scipy, atol=50 * tol_dist, rtol=1e-6)
+
+    for coord in closest_ref:
+        # Check that we are within the bounds of the simplex
+        ref_proj = project_onto_simplex(coord)
+        np.testing.assert_allclose(ref_proj, coord)
+
+
+@pytest.mark.parametrize("num_threads", [1, 2, 4])
+@pytest.mark.parametrize("order", [1, 2])
+def test_1D_manifold(order, num_threads):
+    comm = MPI.COMM_SELF
+
+    # Curved quadratic triangle in 2D (5 nodes)
+    curved_nodes = np.array(
+        [
+            [0.0, 0.0],  # Node 0: Vertex
+            [1.0, 0.0],  # Node 1: Vertex
+            [0.3, 0.5],
+        ]
+    )
+    cells = np.array([[0, 1, 2]], dtype=np.int64)  # Single curved triangle element
+    if order == 1:
+        curved_nodes = curved_nodes[:2]  # Use only vertices for linear case
+        cells = cells[:, :2]
+
+    c_el = ufl.Mesh(basix.ufl.element("Lagrange", "interval", order, shape=(2,)))
+    mesh = dolfinx.mesh.create_mesh(comm, cells=cells, x=curved_nodes, e=c_el)
+    with dolfinx.io.XDMFFile(comm, "test_1D_manifold.xdmf", "w") as xdmf:
+        xdmf.write_mesh(mesh)
+
+    tol_x = 5e-6
+    tol_dist = 1e-7
+    theta = np.linspace(0, 4 * np.pi, 3_016)
+    rand = np.random.RandomState(42)
+    R = rand.rand(len(theta))
+    y = rand.rand(len(theta)) * 0.5  # Add some random z variation
+    points = np.vstack([R * np.cos(theta), y]).T
+
+    cells = np.zeros(points.shape[0], dtype=np.int32)
+    (result_scipy, _ref_scipy) = scipy_project_point_to_element(mesh, cells, points, tol=tol_x**2)
+
+    result, ref_coords = _closest_point_projection(
+        mesh, cells, points, tol_x=tol_x, tol_dist=tol_dist, tol_grad=1e-16
+    )
+
+    closest_point, closest_ref = closest_point_projection(
+        mesh,
+        cells,
+        points,
+        tol_x=tol_x,
+        tol_dist=tol_dist,
+        tol_grad=1e-16,
+        max_iter=500,
+        max_ls_iter=50,
+        num_threads=num_threads,
     )
 
     # Check that python and C++ implementations give the same result
