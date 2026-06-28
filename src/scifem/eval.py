@@ -336,7 +336,7 @@ def compute_extrema(
         jit_options.copy()
         if jit_options is not None
         else {
-            "cffi_extra_compile_args": ["-march=native", "-O3"],
+            "cffi_extra_compile_args": ["-O3"],
             "cffi_libraries": ["m"],
         }
     )
