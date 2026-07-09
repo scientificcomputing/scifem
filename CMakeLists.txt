@@ -35,7 +35,7 @@ endif()
 find_package(DOLFINX REQUIRED CONFIG)
 
 if(DOLFINX_FOUND)
-  message(STATUS "Found DOLFINx at ${DOLFINX_DIR}")
+  message(STATUS "Found DOLFINx at ${DOLFINX_DIR} (Version: ${DOLFINX_VERSION})")
 endif()
 
 find_package(Python COMPONENTS Interpreter Development.Module ${SKBUILD_SABI_COMPONENT} REQUIRED)
@@ -71,7 +71,11 @@ if(NANOBIND_SABI)
 endif()
 
 
-target_link_libraries(_scifem PRIVATE dolfinx)
+if(DOLFINX_VERSION VERSION_GREATER_EQUAL "0.12.0.0")
+  target_link_libraries(_scifem PRIVATE dolfinx::dolfinx)
+else()
+  target_link_libraries(_scifem PRIVATE dolfinx)
+endif()
 
 set_target_properties(_scifem PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
 
