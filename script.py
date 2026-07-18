@@ -38,7 +38,7 @@ def transfer_meshtags_to_periodic_mesh(
         meshtags: The mesh tag to transfer
     """
 
-    # Remove entities that have been replaced (vertices, edges, faces)
+    # Remove entities that are fully replaced (all incident vertices replaced).
     if meshtags.dim != mesh.topology.dim:
         mesh.topology.create_connectivity(meshtags.dim, 0)
         e_to_v = mesh.topology.connectivity(meshtags.dim, 0)
@@ -49,6 +49,7 @@ def transfer_meshtags_to_periodic_mesh(
         indices = []
         values = []
         for entity, value in zip(meshtags.indices, meshtags.values):
+            # Keep entities with at least one retained vertex.
             if not np.allclose(new_adj.links(entity), -1):
                 indices.append(entity)
                 values.append(value)
@@ -112,7 +113,10 @@ def find_position(data, values):
     """
     if len(data) == 0:
         return np.zeros(0, dtype=np.int32)
-    return (values == data[:, None]).argmax(1)
+    matches = values == data[:, None]
+    if not np.all(np.any(matches, axis=1)):
+        raise ValueError("find_position: data contains values not present in values")
+    return matches.argmax(1)
 
 
 def compute_insert_position(
@@ -213,7 +217,7 @@ def create_periodic_mesh(
 
         periodic_mesh = create_periodic_mesh(mesh, indicator, map)
     """
-
+    comm = mesh.comm
     geometry = mesh.geometry._cpp_object
     topology = mesh.topology
     num_vertices = dolfinx.cpp.mesh.cell_num_vertices(mesh.topology.cell_type)
@@ -352,7 +356,7 @@ def create_periodic_mesh(
     vertex_sources, recv_vertices_per_proc = np.unique(
         vertex_ownership_data.src_owner, return_counts=True
     )
-    new_owner_to_old_comm = mesh.comm.Create_dist_graph_adjacent(
+    new_owner_to_old_comm = comm.Create_dist_graph_adjacent(
         vertex_sources, vertex_destinations, reorder=False
     )
 
@@ -534,7 +538,7 @@ def create_periodic_mesh(
     new_owners = np.hstack([sub_map_without_ghosts.owners, new_ghost_owners]).astype(
         np.int32
     )
-    assert (new_owners != mesh.comm.rank).all()
+    assert (new_owners != comm.rank).all()
 
     # Check if index is already in (reduced) vertex map
     local_replacement_vertex = sub_map_without_ghosts.global_to_local(
@@ -546,11 +550,11 @@ def create_periodic_mesh(
     # Vertex map is temporary, as we need to extend it with additional ghosts on the process taking over facets
     try:
         tmp_vertex_map = dolfinx.common.IndexMap(
-            mesh.comm, new_local_size, new_ghosts, new_owners
+            comm, new_local_size, new_ghosts, new_owners
         )
     except TypeError:
         tmp_vertex_map = dolfinx.common.IndexMap(
-            mesh.comm, new_local_size, new_ghosts, new_owners, tag=1102
+            comm, new_local_size, new_ghosts, new_owners, tag=1102
         )
 
     tmp_vertex_ownership = get_ownership(tmp_vertex_map)
@@ -772,7 +776,7 @@ def create_periodic_mesh(
     recv_lost_cells_ranks, num_recv_lost_cells = np.unique(
         mapped_midpoint_owner.dest_owner, return_counts=True
     )
-    lost_cells_to_gainer_comm = mesh.comm.Create_dist_graph_adjacent(
+    lost_cells_to_gainer_comm = comm.Create_dist_graph_adjacent(
         recv_lost_cells_ranks.tolist(), lost_src_ranks.tolist(), reorder=False
     )
 
@@ -972,7 +976,7 @@ def create_periodic_mesh(
             unique_lost_cells_owners,
         ]
     ).astype(np.int32)
-    assert (all_cell_owners != mesh.comm.rank).all(), "Ghosted cells on owned process"
+    assert (all_cell_owners != comm.rank).all(), "Ghosted cells on owned process"
 
     all_cell_oci = np.hstack(
         [
@@ -993,25 +997,25 @@ def create_periodic_mesh(
         np.int32
     )
 
-    assert (all_owners != mesh.comm.rank).all(), "Ghosted vertices on owned process"
+    assert (all_owners != comm.rank).all(), "Ghosted vertices on owned process"
 
     # Create new cell and vertex map
     try:
         new_cell_map = dolfinx.common.IndexMap(
-            mesh.comm, cell_map.size_local, all_cell_ghosts, all_cell_owners
+            comm, cell_map.size_local, all_cell_ghosts, all_cell_owners
         )
     except TypeError:
         new_cell_map = dolfinx.common.IndexMap(
-            mesh.comm, cell_map.size_local, all_cell_ghosts, all_cell_owners, tag=1103
+            comm, cell_map.size_local, all_cell_ghosts, all_cell_owners, tag=1103
         )
 
     try:
         new_vertex_map = dolfinx.common.IndexMap(
-            mesh.comm, tmp_vertex_map.size_local, all_ghosts, all_owners
+            comm, tmp_vertex_map.size_local, all_ghosts, all_owners
         )
     except TypeError:
         new_vertex_map = dolfinx.common.IndexMap(
-            mesh.comm, tmp_vertex_map.size_local, all_ghosts, all_owners, tag=1104
+            comm, tmp_vertex_map.size_local, all_ghosts, all_owners, tag=1104
         )
 
     new_c_to_v = dolfinx.graph.adjacencylist(
@@ -1025,7 +1029,7 @@ def create_periodic_mesh(
     ).all(), "Cell to vertex map is out of bounds"
 
     try:
-        topology = dolfinx.cpp.mesh.Topology(MPI.COMM_WORLD, mesh.topology.cell_type)
+        topology = dolfinx.cpp.mesh.Topology(comm, mesh.topology.cell_type)
         topology.set_index_map(0, new_vertex_map)
         topology.set_index_map(mesh.topology.dim, new_cell_map)
         topology.set_connectivity(new_v_to_v, 0, 0)
@@ -1033,7 +1037,7 @@ def create_periodic_mesh(
     except TypeError:
         try:
             topology = dolfinx.cpp.mesh.Topology(
-                MPI.COMM_WORLD,
+                comm,
                 mesh.topology.cell_type,
                 new_vertex_map,
                 new_cell_map,
@@ -1054,7 +1058,7 @@ def create_periodic_mesh(
 
     # ranges = MPI.COMM_WORLD.allgather(tmp_vertex_map.local_range)
     # for ghost, owner in zip(all_ghosts, all_owners):
-    #     assert (ranges[owner][0] <= ghost) & (ghost < ranges[owner][1]), f"{MPI.COMM_WORLD.rank} Ghost {ghost} is not range {ranges[owner]}"
+    #     assert (ranges[owner][0] <= ghost) & (ghost < ranges[owner][1]), f"{comm.rank} Ghost {ghost} is not range {ranges[owner]}"
     assert (
         (all_ghosts < tmp_vertex_map.local_range[0])
         | (tmp_vertex_map.local_range[1] <= all_ghosts)
@@ -1082,11 +1086,11 @@ def create_periodic_mesh(
     ).astype(mesh.geometry.x.dtype)[:, : mesh.geometry.dim]
     try:
         new_node_im = dolfinx.common.IndexMap(
-            mesh.comm, num_local_nodes, extended_geom_ghosts, extended_geom_owners
+            comm, num_local_nodes, extended_geom_ghosts, extended_geom_owners
         )
     except TypeError:
         new_node_im = dolfinx.common.IndexMap(
-            mesh.comm,
+            comm,
             num_local_nodes,
             extended_geom_ghosts,
             extended_geom_owners,
@@ -1102,11 +1106,11 @@ def create_periodic_mesh(
     )
     if mesh.geometry.x.dtype == np.float64:
         cpp_mesh = dolfinx.cpp.mesh.Mesh_float64(
-            mesh.comm, topology, geometry._cpp_object
+            comm, topology, geometry._cpp_object
         )
     elif mesh.geometry.x.dtype == np.float32:
         cpp_mesh = dolfinx.cpp.mesh.Mesh_float32(
-            mesh.comm, topology, geometry._cpp_object
+            comm, topology, geometry._cpp_object
         )
     else:
         raise RuntimeError(f"Unsupported dtype for mesh {mesh.geometry.x.dtype}")
@@ -1131,7 +1135,7 @@ if __name__ == "__main__":
         max_facet_to_cell_links=max_facet_to_cell_links
     )
     mesh_data = dolfinx.io.gmsh.read_from_msh(
-        "mesh.msh", MPI.COMM_WORLD, 0, 2, partitioner=partitioner)
+        "mesh.msh", MPI.COMM_WORLD, 0, gdim=2, partitioner=partitioner)
     mesh = mesh_data.mesh
     ct = mesh_data.cell_tags
     ft = mesh_data.facet_tags
@@ -1139,15 +1143,15 @@ if __name__ == "__main__":
     num_indices_local = mesh.topology.index_map(dim).size_local
     marker = np.arange(num_indices_local, dtype=np.int32)
     tags_old = dolfinx.mesh.meshtags(
-        mesh, dim, marker, np.full_like(marker, MPI.COMM_WORLD.rank)
+        mesh, dim, marker, np.full_like(marker, mesh.comm.rank)
     )
 
-    with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
+    with dolfinx.io.XDMFFile(mesh.comm, "org_mesh.xdmf", "w") as xdmf:
         xdmf.write_mesh(mesh)
         xdmf.write_meshtags(tags_old, mesh.geometry)
 
-    L_min = MPI.COMM_WORLD.allreduce(np.min(mesh.geometry.x[:, 0]), op=MPI.MIN)
-    L_max = MPI.COMM_WORLD.allreduce(np.max(mesh.geometry.x[:, 0]), op=MPI.MAX)
+    L_min = mesh.comm.allreduce(np.min(mesh.geometry.x[:, 0]), op=MPI.MIN)
+    L_max = mesh.comm.allreduce(np.max(mesh.geometry.x[:, 0]), op=MPI.MAX)
 
     def indicator(x):
         return np.isclose(x[0], L_min)
@@ -1193,7 +1197,7 @@ if __name__ == "__main__":
     # marker = np.arange(len(local_indices), dtype=np.int32)
     # tags_old = dolfinx.mesh.meshtags(mesh, dim, local_indices, marker)
 
-    # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "org_mesh.xdmf", "w") as xdmf:
+    # with dolfinx.io.XDMFFile(mesh.comm, "org_mesh.xdmf", "w") as xdmf:
     #     xdmf.write_mesh(mesh)
     #     xdmf.write_meshtags(tags_old, mesh.geometry)
 
@@ -1201,14 +1205,14 @@ if __name__ == "__main__":
         mesh, new_mesh, replaced_vertices, ft
     )
     tags_periodic.name = "Periodic mesh tags"
-    with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
+    with dolfinx.io.XDMFFile(new_mesh.comm, "periodic_mesh_tags.xdmf", "w") as xdmf:
         xdmf.write_mesh(new_mesh)
         new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)
         xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
 
     # tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, tags_old)
     # tags_periodic.name = "Periodic mesh tags"
-    # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh_tags.xdmf", "w") as xdmf:
+    # with dolfinx.io.XDMFFile(mesh.comm, "periodic_mesh_tags.xdmf", "w") as xdmf:
     #     xdmf.write_mesh(new_mesh)
     #     new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)
     #     xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
@@ -1227,7 +1231,7 @@ if __name__ == "__main__":
     # #owned_left_facets = left_facets[(f_range[0]<= left_facets) & (left_facets < f_range[1])]
     # lfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1,left_facets)
     # for facet, midpoint in zip(left_facets, lfm):
-    #     assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
+    #     assert len(f_to_c.links(facet)) == 2, f"{mesh.comm.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
 
     # new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 
@@ -1235,11 +1239,11 @@ if __name__ == "__main__":
     # owned_right_facets = right_facets[(f_range[0]<= right_facets) & (right_facets < f_range[1])]
     # rfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, owned_right_facets)
     # for facet, midpoint in zip(owned_right_facets, rfm):
-    #     assert len(f_to_c.links(facet)) == 2, f"{MPI.COMM_WORLD.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
+    #     assert len(f_to_c.links(facet)) == 2, f"{mesh.comm.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
 
     # new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
 
-    # with dolfinx.io.XDMFFile(MPI.COMM_WORLD, "periodic_mesh.xdmf", "w") as xdmf:
+    # with dolfinx.io.XDMFFile(mesh.comm, "periodic_mesh.xdmf", "w") as xdmf:
     #     xdmf.write_mesh(new_mesh)
 
     x = ufl.SpatialCoordinate(new_mesh)

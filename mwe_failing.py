@@ -1,6 +1,6 @@
 from dolfinx import fem
 from dolfinx.fem.petsc import LinearProblem
-from dolfinx.io.gmshio import model_to_mesh
+from dolfinx.io.gmsh import model_to_mesh
 from dolfinx.io import VTXWriter
 import ufl
 import gmsh
@@ -142,8 +142,9 @@ model = comm.bcast(model, root=0)
 import packaging.version
 import dolfinx
 
+max_facet_to_cell_links = 2
 partitioner = dolfinx.cpp.mesh.create_cell_partitioner(
-    dolfinx.mesh.GhostMode.shared_facet
+    dolfinx.mesh.GhostMode.shared_facet, max_facet_to_cell_links=max_facet_to_cell_links
 )
 
 if packaging.version.Version(dolfinx.__version__) > packaging.version.Version("0.9.0"):
@@ -285,7 +286,9 @@ problem = LinearProblem(
         "ksp_type": "preonly",
         "pc_type": "lu",
         "pc_factor_mat_solver_type": "mumps",
+        "ksp_error_if_not_converged": True,
     },
+    petsc_options_prefix="mwe_",
 )  #
 U = problem.solve()
 
