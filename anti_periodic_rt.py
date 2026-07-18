@@ -88,7 +88,8 @@ dx = ufl.Measure("dx", domain=mesh)
 uD = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(0))
 U, U_to_W = V.sub(0).collapse()
 Q, Q_to_W = V.sub(1).collapse()
-f = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(1))
+x = ufl.SpatialCoordinate(mesh)
+f = x[0] + x[1]*dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(1))
 
 
 alpha = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(1))
@@ -109,22 +110,24 @@ J = ufl.derivative(F, w)
 
 tol = 1e-5
 
-problem = dolfinx.fem.petsc.NonlinearProblem(F, w, bcs=[], J=J)
-solver = dolfinx.nls.petsc.NewtonSolver(mesh.comm, problem)
-solver.convergence_criterion = "residual"
-solver.rtol = tol
-solver.atol = tol
-solver.max_it = 100
-solver.error_on_nonconvergence = True
+problem = dolfinx.fem.petsc.NonlinearProblem(F, u=w, bcs=[], J=J,
+                                             petsc_options_prefix="rt_",
+                                             petsc_options={
+                                                 "ksp_type": "preonly",
+                                                 "pc_type": "lu",
+                                                 "pc_factor_mat_solver_type": "mumps",
+                                                 "ksp_error_if_not_converged": True,
+                                                 "ksp_monitor": None,
+                                                 "snes_type": "newtonls",
+                                                 "snes_linesearch_type": "basic",
+                                                 "snes_rtol": 1e-10,
+                                                 "snes_atol": 1e-10,
+                                                 "snes_monitor": None,
+                                                 "snes_error_if_not_converged": True,
+                                                 "snes_max_it": 100,})
 
 
-ksp = solver.krylov_solver
-opts = PETSc.Options()  # type: ignore
-option_prefix = ksp.getOptionsPrefix()
-opts[f"{option_prefix}ksp_type"] = "preonly"
-opts[f"{option_prefix}pc_type"] = "lu"
-opts[f"{option_prefix}pc_factor_mat_solver_type"] = "mumps"
-ksp.setFromOptions()
+
 
 dolfinx.log.set_log_level(dolfinx.log.LogLevel.INFO)
 V_out = dolfinx.fem.functionspace(mesh, ("DG", 2))
@@ -145,13 +148,17 @@ submesh, entity_map, _, _ = dolfinx.mesh.create_submesh(
 q_el = basix.ufl.quadrature_element(submesh.basix_cell(), nh.ufl_shape, "default", 1)
 Q = dolfinx.fem.functionspace(submesh, q_el)
 expr = dolfinx.fem.Expression(
-    nh, Q.element.interpolation_points(), dtype=dolfinx.default_scalar_type
+    nh, Q.element.interpolation_points, dtype=dolfinx.default_scalar_type
 )
 f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
 mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
 c_to_f = mesh.topology.connectivity(mesh.topology.dim, mesh.topology.dim - 1)
 ie = []
-for facet in entity_map:
+
+sub_cell_map = submesh.topology.index_map(submesh.topology.dim)
+num_sub_cells = sub_cell_map.size_local + sub_cell_map.num_ghosts
+parent_facets = entity_map.sub_topology_to_topology(np.arange(num_sub_cells, dtype=np.int32), inverse=False)
+for facet in parent_facets:
     cells = f_to_c.links(facet)
     if len(cells) > 1:
         cell = f_to_c.links(facet)[1]
@@ -161,7 +168,7 @@ for facet in entity_map:
     local_index = np.flatnonzero(facets == facet)[0]
     ie.append(cell)
     ie.append(local_index)
-values = expr.eval(mesh, np.asarray(ie, dtype=np.int32))
+values = expr.eval(mesh, np.asarray(ie, dtype=np.int32).reshape((-1, 2)))
 qq = dolfinx.fem.Function(Q)
 qq.x.array[:] = values.flatten()
 
@@ -170,10 +177,11 @@ try:
     for i in range(1, 100):
         alpha.value = min(2**i, 10)
 
-        num_newton_iterations, converged = solver.solve(w)
+        problem.solve()
+        num_newton_iterations = problem.solver.getIterationNumber()
         newton_iterations.append(num_newton_iterations)
         print(
-            f"Iteration {i}: {converged=} {num_newton_iterations=} {ksp.getConvergedReason()=}"
+            f"Iteration {i}: {num_newton_iterations=} {problem.solver.getConvergedReason()=}"
         )
         local_diff = dolfinx.fem.assemble_scalar(compiled_diff)
         global_diff = np.sqrt(mesh.comm.allreduce(local_diff, op=MPI.SUM))

@@ -1,5 +1,9 @@
+"""Suitable mesh created with
+
+python3 create_mesh.py --res=0.01 --periodic
+"""
+
 from mpi4py import MPI
-from petsc4py import PETSc
 import dolfinx
 import numpy as np
 from script import create_periodic_mesh, transfer_meshtags_to_periodic_mesh
@@ -9,9 +13,12 @@ import ufl
 import dolfinx.fem.petsc
 import dolfinx.nls.petsc
 if __name__ == "__main__":
-    partitioner = dolfinx.cpp.mesh.create_cell_partitioner(dolfinx.mesh.GhostMode.shared_facet)
-    mesh, ct, ft =  dolfinx.io.gmshio.read_from_msh("mesh.msh", MPI.COMM_WORLD,  0, 2, partitioner=partitioner)
-
+    max_facet_to_cell_links=2
+    partitioner = dolfinx.cpp.mesh.create_cell_partitioner(dolfinx.mesh.GhostMode.shared_facet, max_facet_to_cell_links=max_facet_to_cell_links)
+    mesh_data =  dolfinx.io.gmsh.read_from_msh("mesh.msh", MPI.COMM_WORLD,  0, 2, partitioner=partitioner)
+    mesh = mesh_data.mesh
+    ct = mesh_data.cell_tags
+    ft = mesh_data.facet_tags
 
     L_min = MPI.COMM_WORLD.allreduce(np.min(mesh.geometry.x[:,0]), op=MPI.MIN)
     L_max = MPI.COMM_WORLD.allreduce(np.max(mesh.geometry.x[:,0]), op=MPI.MAX)
@@ -62,7 +69,7 @@ if __name__ == "__main__":
     F += k * ufl.div(v) * p * ufl.dx 
     F += ufl.div(u) * q * ufl.dx
     x = ufl.SpatialCoordinate(new_mesh)
-    source = dolfinx.fem.Constant(new_mesh, dolfinx.default_scalar_type(4))
+    source = dolfinx.fem.Constant(new_mesh, dolfinx.default_scalar_type(0.3))
     F -= ufl.inner(source, v[0])*ufl.dx
 
 
@@ -73,32 +80,28 @@ if __name__ == "__main__":
     bc_wall = dolfinx.fem.dirichletbc(u_bc, wall_dofs, W.sub(0))
     bcs = [bc_wall]
 
-    problem = dolfinx.fem.petsc.NonlinearProblem(F, w, bcs)
-    solver = dolfinx.nls.petsc.NewtonSolver(new_mesh.comm, problem)
+    problem = dolfinx.fem.petsc.NonlinearProblem(F, u=w, bcs=bcs,petsc_options_prefix="ns_",
+                                                 petsc_options={
+                                                     "ksp_type": "preonly",
+                                                     "pc_type": "lu",
+                                                     "pc_factor_mat_solver_type": "mumps",
+                                                     "mat_mumps_icntl_24": 1,
+                                                     "ksp_error_if_not_converged": True,
+                                                     #"ksp_monitor": None,
+                                                     "snes_type": "newtonls",
+                                                     "snes_linesearch_type": "basic",
+                                                     "snes_rtol": 1e-10,
+                                                     "snes_atol": 1e-10,
+                                                     #"snes_monitor": None,
+                                                     "snes_error_if_not_converged": True,})
 
     W1, sub1_to_mixed = W.sub(1).collapse()
     ns_vec = dolfinx.fem.Function(W)
     ns_vec.x.array[sub1_to_mixed] = 1
     dolfinx.la.orthonormalize([ns_vec.x])
-    nullspace = PETSc.NullSpace().create(vectors=[ns_vec.x.petsc_vec])
+    #nullspace = PETSc.NullSpace().create(vectors=[ns_vec.x.petsc_vec])
 
-
-    # Set Newton solver options
-    solver.atol = 1e-10
-    solver.rtol = 1e-10
-    solver.convergence_criterion = "residual"
-    solver.error_on_nonconvergence = True
-    ksp = solver.krylov_solver
-    opts = PETSc.Options()  # type: ignore
-    prefix = ""
-    ksp.setOptionsPrefix(prefix)
-    opts[f"{prefix}ksp_type"] = "preonly"
-    opts[f"{prefix}pc_type"] = "lu"
-    opts[f"{prefix}pc_factor_mat_solver_type"] = "mumps"
-    opts[f"{prefix}ksp_error_if_not_converged"] = True
-    opts[f"{prefix}ksp_monitor"] = None
-    ksp.setFromOptions()
-    solver.A.setNullSpace(nullspace)
+    #problem.A.setNullSpace(nullspace)
     t = 0
     T = 2000*dt
     num_steps = int(T/dt)
@@ -125,10 +128,9 @@ if __name__ == "__main__":
         t += dt
 
         dolfinx.log.set_log_level(dolfinx.log.LogLevel.INFO)
-        num_its, converged = solver.solve(w)
-        assert (converged)
-
-        converged_reason = ksp.getConvergedReason()     
+        problem.solve()
+        
+        converged_reason = problem.solver.getConvergedReason()     
         w_n.x.array[:] = w.x.array
 
         interpolation_matrix_u.mult(w.x.petsc_vec, u_out.x.petsc_vec)
@@ -140,7 +142,8 @@ if __name__ == "__main__":
         p_out.x.scatter_forward()
 
         bp_p.write(t)
-        print(f"Step {i+1}/{num_steps}, {t=:.2e}, {num_its=}, {converged=}, {converged_reason=}")
+        num_its = problem.solver.getIterationNumber()
+        print(f"Step {i+1}/{num_steps}, {t=:.2e}, {num_its=}, {converged_reason=}")
         if num_its == 0:
             stationary_counter += 1
             if stationary_counter >= max_stationary:

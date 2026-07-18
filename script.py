@@ -217,7 +217,8 @@ def create_periodic_mesh(
     geometry = mesh.geometry._cpp_object
     topology = mesh.topology
     num_vertices = dolfinx.cpp.mesh.cell_num_vertices(mesh.topology.cell_type)
-    num_nodes = mesh.geometry.dofmap.shape[1]
+    assert len(mesh.geometry.dofmaps) == 1, "Only one geometry dofmap is supported"
+    num_nodes = mesh.geometry.dofmaps[0].shape[1]
 
     mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
@@ -266,8 +267,8 @@ def create_periodic_mesh(
     mapped_vertex_coords = mapping_function(owned_vertex_coords.T).T
 
     # For each vertex that will be replaced, find which process should take it over
-    vertex_ownership_data = dolfinx.cpp.geometry.determine_point_ownership(
-        mesh._cpp_object, mapped_vertex_coords, eps
+    vertex_ownership_data = dolfinx.geometry.determine_point_ownership(
+        mesh, mapped_vertex_coords, padding=eps
     )
     # On process that has taken over a vertex, find the closest vertex (local to proc) that
     # will be its replacement
@@ -276,7 +277,7 @@ def create_periodic_mesh(
         mesh.topology, vertex_ownership_data.dest_cells, mesh.topology.dim, 0
     )
     closest_vertex_bb_tree = dolfinx.geometry.bb_tree(
-        mesh, 0, potential_closest_vertex, padding=eps
+        mesh, 0, entities=potential_closest_vertex, padding=eps
     )
     closest_vertex_mid_tree = dolfinx.geometry.create_midpoint_tree(
         mesh, 0, potential_closest_vertex
@@ -304,16 +305,17 @@ def create_periodic_mesh(
     mesh.topology.create_connectivity(0, mesh.topology.dim - 1)
 
     # Get vertex and geometry dofs to send
-    geom_dm = mesh.geometry.dofmap
+    assert len(mesh.geometry.dofmaps) == 1, "Only one geometry dofmap is supported"
+    geom_dm = mesh.geometry.dofmaps[0]
     c_to_v = mesh.topology.connectivity(mesh.topology.dim, 0)
 
     # Pack data from process taking over vertex to process that has lost vertex
 
     assert np.all(
-        vertex_ownership_data.dest_owners[:-1] <= vertex_ownership_data.dest_owners[1:]
+        vertex_ownership_data.dest_owner[:-1] <= vertex_ownership_data.dest_owner[1:]
     ), "Vertex owners are not sorted"
     vertex_destinations, send_vertices_per_proc = np.unique(
-        vertex_ownership_data.dest_owners, return_counts=True
+        vertex_ownership_data.dest_owner, return_counts=True
     )
     num_cells_per_proc = np.zeros_like(
         send_vertices_per_proc, dtype=np.int32
@@ -685,8 +687,8 @@ def create_periodic_mesh(
     )
     mapping_facet_midpoints = mapping_function(facet_midpoints.T).T
     eps = 1000 * np.finfo(mesh.geometry.x.dtype).eps
-    mapped_midpoint_owner = dolfinx.cpp.geometry.determine_point_ownership(
-        mesh._cpp_object, mapping_facet_midpoints, eps
+    mapped_midpoint_owner = dolfinx.geometry.determine_point_ownership(
+        mesh, mapping_facet_midpoints, padding=eps
     )
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
@@ -703,7 +705,7 @@ def create_periodic_mesh(
     lost_cells_dm_owners = tmp_vertex_ownership[renumbered_dm]
 
     # Pack dofmap,owners and igi of geometry, not in sorted by communication proc
-    org_geom_dm_cells_losing_vertex = mesh.geometry.dofmap[cells_losing_vertex].reshape(
+    org_geom_dm_cells_losing_vertex = mesh.geometry.dofmaps[0][cells_losing_vertex].reshape(
         -1
     )
     lost_geom_dm = geom_im.local_to_global(org_geom_dm_cells_losing_vertex)
@@ -768,7 +770,7 @@ def create_periodic_mesh(
 
     # Create communicator
     recv_lost_cells_ranks, num_recv_lost_cells = np.unique(
-        mapped_midpoint_owner.dest_owners, return_counts=True
+        mapped_midpoint_owner.dest_owner, return_counts=True
     )
     lost_cells_to_gainer_comm = mesh.comm.Create_dist_graph_adjacent(
         recv_lost_cells_ranks.tolist(), lost_src_ranks.tolist(), reorder=False
@@ -1073,7 +1075,7 @@ def create_periodic_mesh(
     )[new_local_nodes][gpos]
 
     extended_dofmap = np.vstack(
-        [mesh.geometry.dofmap, extra_geom_dm, ext_geometry_dm]
+        [mesh.geometry.dofmaps[0], extra_geom_dm, ext_geometry_dm]
     ).astype(np.int32)
     extended_coords = np.vstack(
         [mesh.geometry.x, extra_node_coords, filtered_geometry_coords]
@@ -1096,7 +1098,7 @@ def create_periodic_mesh(
     ).astype(np.int64)
 
     geometry = dolfinx.mesh.create_geometry(
-        new_node_im, extended_dofmap, c_el._cpp_object, extended_coords, extended_igi
+        new_node_im, extended_dofmap, c_el, extended_coords, extended_igi
     )
     if mesh.geometry.x.dtype == np.float64:
         cpp_mesh = dolfinx.cpp.mesh.Mesh_float64(
@@ -1123,13 +1125,16 @@ if __name__ == "__main__":
     # M = 10
     # mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet
     #                                        ,cell_type=dolfinx.mesh.CellType.quadrilateral)
+    max_facet_to_cell_links = 2
     partitioner = dolfinx.cpp.mesh.create_cell_partitioner(
-        dolfinx.mesh.GhostMode.shared_facet
+        dolfinx.mesh.GhostMode.shared_facet, 
+        max_facet_to_cell_links=max_facet_to_cell_links
     )
-    mesh, ct, ft = dolfinx.io.gmshio.read_from_msh(
-        "mesh.msh", MPI.COMM_WORLD, 0, 2, partitioner=partitioner
-    )
-
+    mesh_data = dolfinx.io.gmsh.read_from_msh(
+        "mesh.msh", MPI.COMM_WORLD, 0, 2, partitioner=partitioner)
+    mesh = mesh_data.mesh
+    ct = mesh_data.cell_tags
+    ft = mesh_data.facet_tags
     dim = 1
     num_indices_local = mesh.topology.index_map(dim).size_local
     marker = np.arange(num_indices_local, dtype=np.int32)
@@ -1271,10 +1276,13 @@ if __name__ == "__main__":
         a,
         L,
         bcs=[],
+        petsc_options_prefix="periodic_",
         petsc_options={
             "ksp_type": "preonly",
             "pc_type": "lu",
             "pc_factor_mat_solver_type": "mumps",
+            "ksp_error_if_not_converged": True,
+            "ksp_monitor": None
         },
     )
     uh = problem.solve()

@@ -34,7 +34,7 @@ for dim, tag in phys_grps:
     if len(s_tags) > 0:
         periodic_entities[(dim, tag)] = (s_tags, m_tags)
 ```
-This matches the input global indices of the mesh geometry, and can be used for determining communcation pattern through a third party communicator.
+This matches the input global indices of the mesh geometry, and can be used for determining communication pattern through a third party communicator.
 
 1. Create sub map based on the s_tags being removed from each process.
 2. For the process in possession of an `s_tags[i]`, check if:
