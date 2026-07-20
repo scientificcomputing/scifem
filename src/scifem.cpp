@@ -430,7 +430,11 @@ std::tuple<std::vector<T>, std::vector<T>> closest_point_projection(
     threads.reserve(num_threads);
     for (size_t i = 0; i < num_threads; ++i)
     {
+#if DOLFINX_VERSION_MINOR > 11
+      auto [c0, c1] = dolfinx::common::local_range(i, total_cells, num_threads);
+#else
       auto [c0, c1] = dolfinx::MPI::local_range(i, total_cells, num_threads);
+#endif
       threads.emplace_back(compute_chunk, c0, c1);
     }
 #ifndef __cpp_lib_jthread
