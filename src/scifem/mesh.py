@@ -1,4 +1,10 @@
 from __future__ import annotations
+import sys
+
+if sys.version_info >= (3, 13):
+    from warnings import deprecated
+else:
+    from typing_extensions import deprecated
 
 from . import _scifem  # type: ignore
 import collections
@@ -118,6 +124,12 @@ def create_entity_markers(
     return dolfinx.mesh.meshtags(domain, dim, facets, markers[facets])
 
 
+@deprecated(
+    "This function is deprecated and will be removed in a future version. "
+    + "Please use `dolfinx.mesh.transfer_meshtags_to_submesh()` instead.",
+    category=DeprecationWarning,
+    stacklevel=2,
+)
 def transfer_meshtags_to_submesh(
     entity_tag: dolfinx.mesh.MeshTags,
     submesh: dolfinx.mesh.Mesh,
