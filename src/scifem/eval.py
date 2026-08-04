@@ -145,8 +145,10 @@ def find_cell_extrema(
     else:
         raise NotImplementedError(f"Unknown type of extrema ({kind}), expected {min} or {max}")
 
-    ud = u.ufl_domain()
-    assert ud is not None
+    uds = ufl.domain.extract_domains(u)
+    if uds is None or len(uds) != 1:
+        raise ValueError(f"Expression {u:s} must be defined on a single domain")
+    ud = uds[0]
     mesh = dolfinx.mesh.Mesh(ud.ufl_cargo(), ud)
 
     if x0 is None:
@@ -307,8 +309,10 @@ def compute_extrema(
     """
 
     # Extract DOLFINx mesh
-    ud = u.ufl_domain()
-    assert ud is not None
+    uds = ufl.domain.extract_domains(u)
+    if uds is None or len(uds) != 1:
+        raise ValueError(f"Expression {u:s} must be defined on a single domain")
+    ud = uds[0]
     mesh = dolfinx.mesh.Mesh(ud.ufl_cargo(), ud)
 
     if kind is builtins.max:

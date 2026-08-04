@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import sys
 from typing import Callable
 import logging
+
+if sys.version_info >= (3, 13):
+    from warnings import deprecated
+else:
+    from typing_extensions import deprecated
+
+
 from packaging.version import parse as _v
 
 import numpy as np
@@ -23,6 +31,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
     if _v(dolfinx.__version__) < _v("0.9"):
         _alpha_kw = "scale"
 
+    @deprecated("NewtonSolver is deprecated in favor of `dolfinx.fem.petsc.NonlinearProblem`.")
     class NewtonSolver:
         max_iterations: int
         _bcs: list[dolfinx.fem.DirichletBC]
@@ -307,6 +316,9 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
             self._solver.destroy()
             self.x.destroy()
 
+    @deprecated(
+        "BlockedNewtonSolver is deprecated in favor of `dolfinx.fem.petsc.NonlinearProblem`."
+    )
     class BlockedNewtonSolver(dolfinx.cpp.nls.petsc.NewtonSolver):
         def __init__(
             self,
