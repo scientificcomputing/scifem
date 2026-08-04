@@ -1,3 +1,5 @@
+from warnings import warn
+
 from mpi4py import MPI
 import dolfinx
 import basix
@@ -22,7 +24,13 @@ def create_real_functionspace(
         For scalar elements value shape is ``()``.
 
     """
-
+    if Version(dolfinx.__version__) >= Version("0.11.0"):
+        warn(
+            "`create_real_functionspace()` is deprecated and will be removed in a future version."
+            + "Please use `basix.ufl.create_real_element()` instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
     dtype = mesh.geometry.x.dtype
     ufl_e = basix.ufl.element(
         "P", mesh.basix_cell(), 0, dtype=dtype, discontinuous=True, shape=value_shape

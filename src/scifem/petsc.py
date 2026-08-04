@@ -97,6 +97,9 @@ if dolfinx.has_petsc4py:
         except AssertionError:
             bcs0 = bcs
             bcs1 = bcs
+        except ValueError:  # Changed error type post https://github.com/FEniCS/dolfinx/pull/4312
+            bcs0 = bcs
+            bcs1 = bcs
 
         dolfinx.fem.petsc.apply_lifting(b, a, bcs=bcs1, x0=x, alpha=alpha)
         ghost_update(b, PETSc.InsertMode.ADD_VALUES, PETSc.ScatterMode.REVERSE)
