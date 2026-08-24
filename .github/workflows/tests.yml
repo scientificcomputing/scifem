@@ -12,6 +12,9 @@ jobs:
     container: ghcr.io/fenics/dolfinx/dolfinx:${{ matrix.label }}
     env:
       DEB_PYTHON_INSTALL_LAYOUT: deb_system
+      OMPI_ALLOW_RUN_AS_ROOT: 1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+      PRTE_MCA_rmaps_default_mapping_policy: :oversubscribe
     strategy:
       fail-fast: false
       matrix:
