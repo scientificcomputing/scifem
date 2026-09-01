@@ -31,6 +31,9 @@ def create_real_functionspace(
             category=DeprecationWarning,
             stacklevel=2,
         )
+        el = basix.ufl.real_element(mesh.basix_cell(), value_shape=value_shape)
+        return dolfinx.fem.functionspace(mesh, el)
+
     dtype = mesh.geometry.x.dtype
     ufl_e = basix.ufl.element(
         "P", mesh.basix_cell(), 0, dtype=dtype, discontinuous=True, shape=value_shape
