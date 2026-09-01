@@ -15,7 +15,7 @@ if dolfinx.has_petsc4py:
 
         def zero_petsc_vector(b: PETSc.Vec) -> None:
             """Zero a PETSc vector, including ghosts"""
-            dolfinx.la.petsc._zero_vector(b.vec)
+            dolfinx.la.petsc._zero_vector(b)
 
         def ghost_update(
             x: PETSc.Vec,
@@ -23,7 +23,7 @@ if dolfinx.has_petsc4py:
             scatter_mode: PETSc.ScatterMode,
         ) -> None:
             """Ghost update a vector"""
-            dolfinx.la.petsc._ghost_update(x.vec, insert_mode, scatter_mode)
+            dolfinx.la.petsc._ghost_update(x, insert_mode, scatter_mode)
     except ModuleNotFoundError:
 
         def zero_petsc_vector(b: PETSc.Vec) -> None:
