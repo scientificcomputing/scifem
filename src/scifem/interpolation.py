@@ -102,7 +102,7 @@ def prepare_interpolation_data(
         Q_vs = basix_el.value_size
         pull_back = basix_el.pull_back
         im = basix_el.interpolation_matrix
-    except RuntimeError:
+    except (RuntimeError, ValueError):
         Q_vs = 1  # If we do not have a basix element, assume value size is 1
         assert isinstance(Q.ufl_element().pullback, ufl.pullback.IdentityPullback)
         pull_back = lambda x: None
