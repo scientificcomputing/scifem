@@ -7,29 +7,43 @@ __all__ = [
     "apply_lifting_and_set_bc",
 ]
 
-try:
-    from petsc4py import PETSc
+if dolfinx.has_petsc4py:
+    try:
+        import dolfinx.la.petsc
 
-    def zero_petsc_vector(b):
-        """Zero a PETSc vector, including ghosts"""
+        def zero_petsc_vector(b: dolfinx.la.petsc.PETScVector) -> None:
+            """Zero a PETSc vector, including ghosts"""
+            dolfinx.la.petsc._zero_vector(b.vec)
 
-        if b.getType() == PETSc.Vec.Type.NEST:
-            for b_sub in b.getNestSubVecs():
-                with b_sub.localForm() as b_local:
-                    b_local.set(0.0)
-        else:
-            with b.localForm() as b_loc:
-                b_loc.set(0)
+        def ghost_update(
+            x: dolfinx.la.petsc.PETScVector,
+            insert_mode: dolfinx.la.petsc.PETScInsertMode,
+            scatter_mode: dolfinx.la.petsc.PETScScatterMode,
+        ) -> None:
+            """Ghost update a vector"""
+            dolfinx.la.petsc._ghost_update(x.vec, insert_mode, scatter_mode)
+    except ModuleNotFoundError:
+        from petsc4py import PETSc
 
-    def ghost_update(x, insert_mode, scatter_mode):
-        """Ghost update a vector"""
-        if x.getType() == PETSc.Vec.Type.NEST:
-            for x_sub in x.getNestSubVecs():
-                x_sub.ghostUpdate(addv=insert_mode, mode=scatter_mode)
-        else:
-            x.ghostUpdate(addv=insert_mode, mode=scatter_mode)
+        def zero_petsc_vector(b):
+            """Zero a PETSc vector, including ghosts"""
 
-except ImportError:
+            if b.getType() == PETSc.Vec.Type.NEST:
+                for b_sub in b.getNestSubVecs():
+                    with b_sub.localForm() as b_local:
+                        b_local.set(0.0)
+            else:
+                with b.localForm() as b_loc:
+                    b_loc.set(0)
+
+        def ghost_update(x, insert_mode, scatter_mode):
+            """Ghost update a vector"""
+            if x.getType() == PETSc.Vec.Type.NEST:
+                for x_sub in x.getNestSubVecs():
+                    x_sub.ghostUpdate(addv=insert_mode, mode=scatter_mode)
+            else:
+                x.ghostUpdate(addv=insert_mode, mode=scatter_mode)
+else:
 
     def zero_petsc_vector(_b):
         """Zero a PETSc vector, including ghosts"""
