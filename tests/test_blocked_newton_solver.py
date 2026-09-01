@@ -2,7 +2,6 @@ from mpi4py import MPI
 
 import numpy as np
 import dolfinx
-import dolfinx.nls.petsc
 from petsc4py import PETSc
 from scifem import assemble_scalar, NewtonSolver
 import basix.ufl
