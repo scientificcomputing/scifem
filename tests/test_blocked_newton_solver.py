@@ -4,7 +4,7 @@ import numpy as np
 import dolfinx
 import dolfinx.nls.petsc
 from petsc4py import PETSc
-from scifem import assemble_scalar, BlockedNewtonSolver, NewtonSolver
+from scifem import assemble_scalar, NewtonSolver
 import basix.ufl
 import ufl
 import pytest
@@ -79,24 +79,6 @@ def test_NewtonSolver(factor, auto_split):
     petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"}
     solver = NewtonSolver(F, J, [u, p], bcs=[bc_q], max_iterations=25, petsc_options=petsc_options)
     solver.solve()
-
-    err_u = ufl.inner(u_ex - u, u_ex - u) * ufl.dx
-    err_p = ufl.inner(p_ex - p, p_ex - p) * ufl.dx
-    tol = np.finfo(dtype).eps * 1.0e3
-    assert assemble_scalar(err_u) < tol
-    assert assemble_scalar(err_p) < tol
-
-    # Check consistency with other Newton solver
-    blocked_solver = BlockedNewtonSolver(
-        F, [u, p], bcs=[bc_q], J=None if auto_split else J, petsc_options=petsc_options
-    )
-
-    dolfinx.log.set_log_level(dolfinx.log.LogLevel.ERROR)
-    u.x.array[:] = factor * 0.1
-    p.x.array[:] = factor * 0.02
-    blocked_solver.convergence_criterion = "incremental"
-    dolfinx.log.set_log_level(dolfinx.log.LogLevel.INFO)
-    blocked_solver.solve()
 
     err_u = ufl.inner(u_ex - u, u_ex - u) * ufl.dx
     err_p = ufl.inner(p_ex - p, p_ex - p) * ufl.dx

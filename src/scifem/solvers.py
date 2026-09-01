@@ -18,7 +18,7 @@ import dolfinx
 
 from . import compat
 
-__all__ = ["NewtonSolver", "BlockedNewtonSolver"]
+__all__ = ["NewtonSolver"]
 
 if dolfinx.has_petsc4py and dolfinx.has_petsc:
     logger = logging.getLogger(__name__)
@@ -323,12 +323,5 @@ else:
         def __init__(self, *args, **kwargs):
             raise RuntimeError(
                 "NewtonSolver is not available in this version of DOLFINx. "
-                "Please install a version of DOLFINx with PETSc4py support."
-            )
-
-    class BlockedNewtonSolver:  # type: ignore[no-redef]
-        def __init__(self, *args, **kwargs):
-            raise RuntimeError(
-                "BlockedNewtonSolver is not available in this version of DOLFINx. "
                 "Please install a version of DOLFINx with PETSc4py support."
             )
