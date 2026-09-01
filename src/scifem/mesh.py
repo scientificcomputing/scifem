@@ -6,6 +6,7 @@ if sys.version_info >= (3, 13):
 else:
     from typing_extensions import deprecated
 
+from warnings import warn
 from . import _scifem  # type: ignore
 import collections
 import dolfinx
@@ -164,6 +165,11 @@ def transfer_meshtags_to_submesh(
     if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
         cpp_tag = dolfinx.mesh.transfer_meshtags_to_submesh(
             entity_tag, submesh, vertex_to_parent, cell_to_parent
+        )
+        warn(
+            "The returned sub_to_parent_entity_map is empty, as it was wrong in previous iterations."
+            + "Consult the library authors if you need this mapping.",
+            DeprecationWarning,
         )
         sub_to_parent_entity_map = np.array([], dtype=np.int32)
     else:
