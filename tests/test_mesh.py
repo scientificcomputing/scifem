@@ -154,9 +154,16 @@ def test_submesh_meshtags(edim):
         submesh.topology.create_connectivity(i, edim)
         midpoints = dolfinx.mesh.compute_midpoints(submesh, i, sub_tag.indices)
         mesh.topology.create_connectivity(i, mesh.topology.dim)
-        parent_midpoints = dolfinx.mesh.compute_midpoints(mesh, i, parent_tag.indices)
+        parent_midpoints = dolfinx.mesh.compute_midpoints(
+            mesh, i, np.arange(num_parent_entities, dtype=np.int32)
+        )
+        if len(midpoints) != len(sub_entity_to_parent):
+            # New function doesn't return incomplete entity map
+            global_to_local = parent_e_map.global_to_local(sub_tag.values)
+            np.testing.assert_allclose(midpoints, parent_midpoints[global_to_local])
 
-        np.testing.assert_allclose(midpoints, parent_midpoints[sub_entity_to_parent])
+        else:
+            np.testing.assert_allclose(midpoints, parent_midpoints[sub_entity_to_parent])
 
 
 @pytest.mark.parametrize("codim", [0, 1, 2])

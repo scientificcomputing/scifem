@@ -9,7 +9,7 @@ from .point_source import PointSource
 from .assembly import assemble_scalar, norm
 from .bcs import interpolate_function_onto_facet_dofs
 from . import xdmf
-from .solvers import BlockedNewtonSolver, NewtonSolver
+from .solvers import NewtonSolver
 from .spaces import create_real_functionspace, create_space_of_simple_functions
 from .mesh import (
     compute_interface_data,
@@ -54,7 +54,6 @@ __all__ = [
     "dof_to_vertexmap",
     "create_entity_markers",
     "NewtonSolver",
-    "BlockedNewtonSolver",
     "transfer_meshtags_to_submesh",
     "evaluate_function",
     "reverse_mark_entities",
