@@ -167,7 +167,8 @@ def transfer_meshtags_to_submesh(
             entity_tag, submesh, vertex_to_parent, cell_to_parent
         )
         warn(
-            "The returned sub_to_parent_entity_map is empty, as it was wrong in previous iterations."
+            "The returned sub_to_parent_entity_map is empty, as it was wrong"
+            + " in previous iterations."
             + "Consult the library authors if you need this mapping.",
             DeprecationWarning,
         )
