@@ -33,6 +33,7 @@ docs = [
     "pyvista[all]>=0.45.0",
     "sphinxcontrib-bibtex",
     "sphinx-codeautolink",
+    "scipy"
 ]
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
 test = ["pytest", "petsc4py", "h5py", "scifem[biomed]"]
