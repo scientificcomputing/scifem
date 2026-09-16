@@ -87,6 +87,9 @@ def scipy_project_point_to_element(
             tangents = dSdx_ref(x_ref)
             return np.dot(tangents, diff)
 
+        opts = {"ftol": tol, "maxiter": 250, "gtol": 1e3 * tol}
+        if method != "L-BFGS-B":
+            opts["disp"] = False  # Deprecated option L-BFGS-B
         res = minimize(
             objective,
             initial_guess,
@@ -95,7 +98,7 @@ def scipy_project_point_to_element(
             bounds=bounds,
             constraints=constraint,
             tol=tol,
-            options={"disp": False, "ftol": tol, "maxiter": 250, "gtol": 1e3 * tol},
+            options=opts,
         )
         closest_points[i] = S(res.x)
         ref_points[i] = res.x
