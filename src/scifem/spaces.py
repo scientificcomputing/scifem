@@ -77,7 +77,11 @@ def create_space_of_simple_functions(
 
     """
     value_shape = () if value_shape is None else value_shape
-    if mesh.topology._cpp_object != cell_tag.topology:
+    if not isinstance(cell_tag.topology, dolfinx.cpp.mesh.Topology):
+        _cpp_topology = cell_tag.topology._cpp_object
+    else:
+        _cpp_topology = cell_tag.topology
+    if mesh.topology._cpp_object != _cpp_topology:
         raise ValueError("Topology of cell tag is not the mesh topology")
     if cell_tag.dim != mesh.topology.dim:
         raise ValueError(
@@ -109,7 +113,12 @@ def create_space_of_simple_functions(
         imap_kwargs = {"tag": 321}
     else:
         imap_kwargs = {}
-    dof_imap = dolfinx.common.IndexMap(mesh.comm, num_dofs, ghosts, owners, **imap_kwargs)
+    if hasattr(dolfinx.common, "index_map"):
+        dof_imap = dolfinx.common.index_map(
+            mesh.comm, num_dofs, ghosts=(ghosts, owners), **imap_kwargs
+        )
+    else:
+        dof_imap = dolfinx.common.IndexMap(mesh.comm, num_dofs, ghosts, owners, **imap_kwargs)
 
     # Create element dof layout (1 dof per cell, based of the DG-0 element)
     value_size = int(np.prod(value_shape))
