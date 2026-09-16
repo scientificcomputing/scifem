@@ -37,7 +37,11 @@ __all__ = [
 if typing.TYPE_CHECKING:
     TaggedEntities = (
         tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]]]
-        | tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]], bool]
+        | tuple[
+            int,
+            typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]],
+            bool,
+        ]
     )
 
 
@@ -55,7 +59,9 @@ class _EntityMap(Protocol):
         ...
 
 
-def get_entity_map(entity_map: _EntityMap | npt.NDArray[np.int32]) -> npt.NDArray[np.int32]:
+def get_entity_map(
+    entity_map: _EntityMap | npt.NDArray[np.int32],
+) -> npt.NDArray[np.int32]:
     """Get an entity map from the sub-topology to the topology.
 
     This function handles both the deprecated construction of an entity map as a numpy array
@@ -112,7 +118,9 @@ def create_entity_markers(
     markers = np.full(num_entities_local, -1, dtype=np.int32)
 
     locate_entities = lambda on_boundary: (
-        dolfinx.mesh.locate_entities_boundary if on_boundary else dolfinx.mesh.locate_entities
+        dolfinx.mesh.locate_entities_boundary
+        if on_boundary
+        else dolfinx.mesh.locate_entities
     )
 
     # Concatenate and sort the arrays based on indices
@@ -194,6 +202,8 @@ def reverse_mark_entities(
     Returns:
         Local indices marked on any process sharing this entity
     """
+    if hasattr(dolfinx.common, "index_map"):
+        entity_map = entity_map
     comm_vec = dolfinx.la.vector(entity_map, dtype=np.int32)
     comm_vec.array[:] = 0
     comm_vec.array[entities] = 1
@@ -208,7 +218,9 @@ SubmeshData = collections.namedtuple(
 
 
 def extract_submesh(
-    mesh: dolfinx.mesh.Mesh, entity_tag: dolfinx.mesh.MeshTags, tags: typing.Sequence[int]
+    mesh: dolfinx.mesh.Mesh,
+    entity_tag: dolfinx.mesh.MeshTags,
+    tags: typing.Sequence[int],
 ) -> SubmeshData:
     """Generate a sub-mesh from a subset of tagged entities in a meshtag object.
 
@@ -229,7 +241,9 @@ def extract_submesh(
     all_tagged_indices = np.isin(entity_tag.values, tags_as_arr)
     entities = entity_tag.indices[all_tagged_indices]
     # Extract submesh
-    submesh, cell_map, vertex_map, node_map = dolfinx.mesh.create_submesh(mesh, edim, entities)
+    submesh, cell_map, vertex_map, node_map = dolfinx.mesh.create_submesh(
+        mesh, edim, entities
+    )
 
     # Transfer cell markers
     if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
@@ -237,7 +251,9 @@ def extract_submesh(
             entity_tag, submesh, vertex_map, cell_map
         )
     else:
-        new_et, _ = transfer_meshtags_to_submesh(entity_tag, submesh, vertex_map, cell_map)
+        new_et, _ = transfer_meshtags_to_submesh(
+            entity_tag, submesh, vertex_map, cell_map
+        )
     new_et.name = entity_tag.name
     return SubmeshData(submesh, cell_map, vertex_map, node_map, new_et)
 
@@ -257,12 +273,15 @@ def find_interface(
     Returns:
         The facets shared between the two domains.
     """
-    topology = dolfinx.mesh.Topology(cell_tags.topology)
+    # Wrapping C++ objects to be back compatible with older versions of dolfinx
+    if not isinstance(cell_tags.topology, dolfinx.cpp.mesh.Topology):
+        topology = cell_tags.topology
+    else:
+        topology = dolfinx.mesh.Topology(cell_tags.topology)
 
     assert topology.dim == cell_tags.dim
     tdim = topology.dim
     cell_map = topology.index_map(tdim)
-
     # Find all cells on process that has cell with tag(s) id_0
     domain_0 = reverse_mark_entities(
         cell_map,
@@ -283,10 +302,14 @@ def find_interface(
     topology.create_connectivity(tdim, tdim - 1)
     facet_map = topology.index_map(tdim - 1)
 
-    local_facets0 = dolfinx.mesh.compute_incident_entities(topology, domain_0, tdim, tdim - 1)
+    local_facets0 = dolfinx.mesh.compute_incident_entities(
+        topology, domain_0, tdim, tdim - 1
+    )
     facets0 = reverse_mark_entities(facet_map, local_facets0)
 
-    local_facets1 = dolfinx.mesh.compute_incident_entities(topology, domain_1, tdim, tdim - 1)
+    local_facets1 = dolfinx.mesh.compute_incident_entities(
+        topology, domain_1, tdim, tdim - 1
+    )
     facets1 = reverse_mark_entities(facet_map, local_facets1)
 
     # Compute intersecting facets
@@ -296,7 +319,9 @@ def find_interface(
 
     topology.create_connectivity(tdim - 1, tdim)
     f_to_c = topology.connectivity(tdim - 1, tdim)
-    num_cells_per_facet = f_to_c.offsets[interface_facets + 1] - f_to_c.offsets[interface_facets]
+    num_cells_per_facet = (
+        f_to_c.offsets[interface_facets + 1] - f_to_c.offsets[interface_facets]
+    )
     is_interface = interface_facets[num_cells_per_facet == 2]
     return is_interface
 
@@ -326,7 +351,9 @@ def compute_subdomain_exterior_facets(
         ct,
         markers,
     )
-    sub_mesh.topology.create_connectivity(sub_mesh.topology.dim - 1, sub_mesh.topology.dim)
+    sub_mesh.topology.create_connectivity(
+        sub_mesh.topology.dim - 1, sub_mesh.topology.dim
+    )
     sub_facets = dolfinx.mesh.exterior_facet_indices(sub_mesh.topology)
 
     # Map exterior facet to (submesh_cell, local_facet_index) tuples
@@ -350,9 +377,9 @@ def compute_subdomain_exterior_facets(
     num_facets_per_cell = dolfinx.cpp.mesh.cell_num_entities(
         mesh.topology.cell_type, mesh.topology.dim - 1
     )
-    c_to_f = mesh.topology.connectivity(mesh.topology.dim, mesh.topology.dim - 1).array.reshape(
-        -1, num_facets_per_cell
-    )
+    c_to_f = mesh.topology.connectivity(
+        mesh.topology.dim, mesh.topology.dim - 1
+    ).array.reshape(-1, num_facets_per_cell)
     # Map (parent_cell, local_facet_index) to facet index (local to process)
     parent_facets = c_to_f[integration_entities[:, 0], integration_entities[:, 1]]
     facet_map = mesh.topology.index_map(mesh.topology.dim - 1)
@@ -390,21 +417,30 @@ def compute_interface_data(
     if include_ghosts:
         if len(facet_indices) == 0:
             return np.empty((0, 4), dtype=np.int32)
-        f_to_c = cell_tags.topology.connectivity(cell_tags.topology.dim - 1, cell_tags.topology.dim)
-        c_to_f = cell_tags.topology.connectivity(cell_tags.topology.dim, cell_tags.topology.dim - 1)
+        f_to_c = cell_tags.topology.connectivity(
+            cell_tags.topology.dim - 1, cell_tags.topology.dim
+        )
+        c_to_f = cell_tags.topology.connectivity(
+            cell_tags.topology.dim, cell_tags.topology.dim - 1
+        )
 
         # Extract the cells connected to each facet.
         # Assumption is that there can only be two cells per facet, and should always be
         # two cells per facet.
-        num_cells_per_facet = f_to_c.offsets[facet_indices + 1] - f_to_c.offsets[facet_indices]
+        num_cells_per_facet = (
+            f_to_c.offsets[facet_indices + 1] - f_to_c.offsets[facet_indices]
+        )
         assert np.all(num_cells_per_facet == 2), "All facets must be interior facets."
-        facet_pos = np.vstack([f_to_c.offsets[facet_indices], f_to_c.offsets[facet_indices] + 1]).T
+        facet_pos = np.vstack(
+            [f_to_c.offsets[facet_indices], f_to_c.offsets[facet_indices] + 1]
+        ).T
         cells = f_to_c.array[facet_pos].flatten()
         # Extract facets connected to all cells
         # Assumption is that all cells have the same number of facets
         num_facets_per_cell = c_to_f.offsets[1:] - c_to_f.offsets[:-1]
         assert all(
-            num_facets_per_cell[cells.flatten()] == num_facets_per_cell[cells.flatten()[0]]
+            num_facets_per_cell[cells.flatten()]
+            == num_facets_per_cell[cells.flatten()[0]]
         ), "Cells must have facets."
         facets = np.vstack(
             [
@@ -426,7 +462,9 @@ def compute_interface_data(
             *integration_args,
         )
     ordered_idata = idata.reshape(-1, 4).copy()
-    switch = cell_tags.values[ordered_idata[:, 0]] > cell_tags.values[ordered_idata[:, 2]]
+    switch = (
+        cell_tags.values[ordered_idata[:, 0]] > cell_tags.values[ordered_idata[:, 2]]
+    )
     if True in switch:
         ordered_idata[switch, :] = ordered_idata[switch][:, [2, 3, 0, 1]]
     return ordered_idata
@@ -472,7 +510,9 @@ def create_geometry_function_space(
     else:
         raise RuntimeError(f"Unsupported type {ufl_el.dtype}")
     try:
-        cpp_el = _fe_constructor(ufl_el.basix_element._e, block_shape=value_shape, symmetric=False)
+        cpp_el = _fe_constructor(
+            ufl_el.basix_element._e, block_shape=value_shape, symmetric=False
+        )
     except TypeError:
         cpp_el = _fe_constructor(ufl_el.basix_element._e, block_size=N, symmetric=False)
     dof_layout = dolfinx.cpp.fem.create_element_dof_layout(cpp_el, [])
@@ -482,7 +522,9 @@ def create_geometry_function_space(
     try:
         cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap)
     except TypeError:
-        cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap, value_shape=value_shape)
+        cpp_space = _fem_constructor(
+            mesh._cpp_object, cpp_el, cpp_dofmap, value_shape=value_shape
+        )
 
     return dolfinx.fem.FunctionSpace(mesh, ufl_el, cpp_space)
 
@@ -511,7 +553,9 @@ def move(
         u_geom.interpolate(u_compiled)
     else:
         u_geom.interpolate(u)
-    mesh.geometry.x[:, : mesh.geometry.dim] += u_geom.x.array[:].reshape(-1, mesh.geometry.dim)
+    mesh.geometry.x[:, : mesh.geometry.dim] += u_geom.x.array[:].reshape(
+        -1, mesh.geometry.dim
+    )
 
 
 def copy(mesh: dolfinx.mesh.Mesh) -> dolfinx.mesh.Mesh:
@@ -533,4 +577,6 @@ def copy(mesh: dolfinx.mesh.Mesh) -> dolfinx.mesh.Mesh:
         mesh.comm, mesh.topology._cpp_object, mesh.geometry._cpp_object
     )
     # Initialize Python wrapper with new symbolic numbering in the `ufl.Mesh`
-    return dolfinx.mesh.Mesh(cpp_mesh, ufl.Mesh(mesh.ufl_domain().ufl_coordinate_element()))
+    return dolfinx.mesh.Mesh(
+        cpp_mesh, ufl.Mesh(mesh.ufl_domain().ufl_coordinate_element())
+    )
