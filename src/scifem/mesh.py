@@ -496,7 +496,7 @@ def create_geometry_function_space(
     if hasattr(dolfinx.common, "index_map"):
         _cpp_im = geom_imap._cpp_object
     else:
-        _cpp_im = geom_imap._cpp_index_map
+        _cpp_im = geom_imap
     cpp_dofmap = dolfinx.cpp.fem.DofMap(dof_layout, _cpp_im, N, adj_list, N)
 
     # Create function space
