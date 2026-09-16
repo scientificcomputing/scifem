@@ -37,7 +37,11 @@ __all__ = [
 if typing.TYPE_CHECKING:
     TaggedEntities = (
         tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]]]
-        | tuple[int, typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]], bool]
+        | tuple[
+            int,
+            typing.Callable[[npt.NDArray[np.floating]], npt.NDArray[np.bool_]],
+            bool,
+        ]
     )
 
 
@@ -55,7 +59,9 @@ class _EntityMap(Protocol):
         ...
 
 
-def get_entity_map(entity_map: _EntityMap | npt.NDArray[np.int32]) -> npt.NDArray[np.int32]:
+def get_entity_map(
+    entity_map: _EntityMap | npt.NDArray[np.int32],
+) -> npt.NDArray[np.int32]:
     """Get an entity map from the sub-topology to the topology.
 
     This function handles both the deprecated construction of an entity map as a numpy array
@@ -194,6 +200,8 @@ def reverse_mark_entities(
     Returns:
         Local indices marked on any process sharing this entity
     """
+    if hasattr(dolfinx.common, "index_map"):
+        entity_map = entity_map
     comm_vec = dolfinx.la.vector(entity_map, dtype=np.int32)
     comm_vec.array[:] = 0
     comm_vec.array[entities] = 1
@@ -208,7 +216,9 @@ SubmeshData = collections.namedtuple(
 
 
 def extract_submesh(
-    mesh: dolfinx.mesh.Mesh, entity_tag: dolfinx.mesh.MeshTags, tags: typing.Sequence[int]
+    mesh: dolfinx.mesh.Mesh,
+    entity_tag: dolfinx.mesh.MeshTags,
+    tags: typing.Sequence[int],
 ) -> SubmeshData:
     """Generate a sub-mesh from a subset of tagged entities in a meshtag object.
 
@@ -257,12 +267,15 @@ def find_interface(
     Returns:
         The facets shared between the two domains.
     """
-    topology = dolfinx.mesh.Topology(cell_tags.topology)
+    # Wrapping C++ objects to be back compatible with older versions of dolfinx
+    if not isinstance(cell_tags.topology, dolfinx.cpp.mesh.Topology):
+        topology = cell_tags.topology
+    else:
+        topology = dolfinx.mesh.Topology(cell_tags.topology)
 
     assert topology.dim == cell_tags.dim
     tdim = topology.dim
     cell_map = topology.index_map(tdim)
-
     # Find all cells on process that has cell with tag(s) id_0
     domain_0 = reverse_mark_entities(
         cell_map,
@@ -419,9 +432,13 @@ def compute_interface_data(
         assert np.unique(_row).shape[0] == len(_row)
         idata = np.vstack([cells, local_pos]).T.reshape(-1, 4)
     else:
+        if not isinstance(cell_tags.topology, dolfinx.cpp.mesh.Topology):
+            _cpp_topology = cell_tags.topology._cpp_object
+        else:
+            _cpp_topology = cell_tags.topology
         idata = dolfinx.cpp.fem.compute_integration_domains(
             dolfinx.fem.IntegralType.interior_facet,
-            cell_tags.topology,
+            _cpp_topology,
             facet_indices,
             *integration_args,
         )
@@ -476,7 +493,11 @@ def create_geometry_function_space(
     except TypeError:
         cpp_el = _fe_constructor(ufl_el.basix_element._e, block_size=N, symmetric=False)
     dof_layout = dolfinx.cpp.fem.create_element_dof_layout(cpp_el, [])
-    cpp_dofmap = dolfinx.cpp.fem.DofMap(dof_layout, geom_imap, N, adj_list, N)
+    if not isinstance(geom_imap, dolfinx.cpp.common.IndexMap):
+        _cpp_im = geom_imap._cpp_object
+    else:
+        _cpp_im = geom_imap
+    cpp_dofmap = dolfinx.cpp.fem.DofMap(dof_layout, _cpp_im, N, adj_list, N)
 
     # Create function space
     try:

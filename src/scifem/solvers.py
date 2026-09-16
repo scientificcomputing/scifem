@@ -186,15 +186,19 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                         for forms in self._J
                     ]
                 # Scatter previous solution `w` to `self.x`, the blocked version used for lifting
+                if hasattr(dolfinx.common, "index_map"):
+                    _imaps = [s.function_space.dofmap.index_map._cpp_object for s in self.w]
+                else:
+                    _imaps = [s.function_space.dofmap.index_map for s in self.w]
                 dolfinx.cpp.la.petsc.scatter_local_vectors(
                     self.x,
                     [si.x.petsc_vec.array_r for si in self.w],
                     [
                         (
-                            si.function_space.dofmap.index_map,
+                            _imaps[i],
                             si.function_space.dofmap.index_map_bs,
                         )
-                        for si in self.w
+                        for i, si in enumerate(self.w)
                     ],
                 )
                 self.x.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
@@ -244,11 +248,19 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                 self.A.zeroEntries()
                 try:
                     dolfinx.fem.petsc.assemble_matrix_block(
-                        self.A, self._J, bcs=self.bcs, constants=constants_a, coeffs=coeffs_a
+                        self.A,
+                        self._J,
+                        bcs=self.bcs,
+                        constants=constants_a,
+                        coeffs=coeffs_a,
                     )
                 except AttributeError:
                     dolfinx.fem.petsc.assemble_matrix(
-                        self.A, self._J, self.bcs, coeffs=coeffs_a, constants=constants_a
+                        self.A,
+                        self._J,
+                        self.bcs,
+                        coeffs=coeffs_a,
+                        constants=constants_a,
                     )
                 self.A.assemble()
 

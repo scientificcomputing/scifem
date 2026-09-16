@@ -84,7 +84,6 @@ def closest_point_projection(
         and reference coordinates for each cell to each target point.
     """
     xdtype = mesh.geometry.x.dtype
-
     if xdtype == np.float64:
         return closest_point_projection_float64(
             mesh._cpp_object,

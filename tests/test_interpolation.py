@@ -9,7 +9,8 @@ import basix.ufl
 
 
 @pytest.mark.skipif(
-    np.issubdtype(dolfinx.default_scalar_type, np.complexfloating), reason="No complex support"
+    np.issubdtype(dolfinx.default_scalar_type, np.complexfloating),
+    reason="No complex support",
 )
 @pytest.mark.parametrize(
     "cell_type",
@@ -89,7 +90,8 @@ def test_interpolation_matrix(use_petsc, cell_type, degree, out_family, value_sh
 
 
 @pytest.mark.skipif(
-    np.issubdtype(dolfinx.default_scalar_type, np.complexfloating), reason="No complex support"
+    np.issubdtype(dolfinx.default_scalar_type, np.complexfloating),
+    reason="No complex support",
 )
 @pytest.mark.skipif(
     not hasattr(dolfinx.fem, "discrete_gradient"),
@@ -168,7 +170,8 @@ def test_discrete_gradient(degree, use_petsc, cell_type):
 
 
 @pytest.mark.skipif(
-    np.issubdtype(dolfinx.default_scalar_type, np.complexfloating), reason="No complex support"
+    np.issubdtype(dolfinx.default_scalar_type, np.complexfloating),
+    reason="No complex support",
 )
 @pytest.mark.skipif(
     not hasattr(dolfinx.fem, "discrete_curl"),
@@ -233,7 +236,8 @@ def test_discrete_curl(degree, use_petsc, cell_type):
 @pytest.mark.parametrize("degree", [1, 2, 3])
 @pytest.mark.parametrize("family", ["Lagrange", "DG"])
 @pytest.mark.skipif(
-    Version(dolfinx.__version__) < Version("0.10.0"), reason="Requires DOLFINx version >0.10.0"
+    Version(dolfinx.__version__) < Version("0.10.0"),
+    reason="Requires DOLFINx version >0.10.0",
 )
 def test_interpolate_to_interface_submesh(family, degree):
     # Create a unit square
@@ -320,11 +324,17 @@ def test_interpolate_to_interface_submesh(family, degree):
 
     # Interpolate volume functions (on submesh) onto all cells of the interface submesh
     scifem.interpolation.interpolate_to_surface_submesh(
-        ue, qe, np.arange(len(gamma_to_parent_map), dtype=np.int32), mapped_entities[:, :2]
+        ue,
+        qe,
+        np.arange(len(gamma_to_parent_map), dtype=np.int32),
+        mapped_entities[:, :2],
     )
     qe.x.scatter_forward()
     scifem.interpolation.interpolate_to_surface_submesh(
-        ui, qi, np.arange(len(gamma_to_parent_map), dtype=np.int32), mapped_entities[:, 2:]
+        ui,
+        qi,
+        np.arange(len(gamma_to_parent_map), dtype=np.int32),
+        mapped_entities[:, 2:],
     )
     qi.x.scatter_forward()
 
