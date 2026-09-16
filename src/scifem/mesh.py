@@ -493,7 +493,7 @@ def create_geometry_function_space(
     except TypeError:
         cpp_el = _fe_constructor(ufl_el.basix_element._e, block_size=N, symmetric=False)
     dof_layout = dolfinx.cpp.fem.create_element_dof_layout(cpp_el, [])
-    if hasattr(dolfinx.common, "index_map"):
+    if not isinstance(geom_imap, dolfinx.cpp.common.IndexMap):
         _cpp_im = geom_imap._cpp_object
     else:
         _cpp_im = geom_imap

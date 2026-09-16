@@ -138,10 +138,10 @@ def create_space_of_simple_functions(
     dofmap_adj = dolfinx.cpp.graph.AdjacencyList_int32(
         adj_flattened, np.arange(len(cell_tag.values) + 1, dtype=np.int32)
     )
-    if hasattr(dolfinx.common, "index_map"):
+    if not isinstance(dof_imap, dolfinx.cpp.common.IndexMap):
         _cpp_im = dof_imap._cpp_object
     else:
-        _cpp_im = dof_imap._cpp_index_map
+        _cpp_im = dof_imap
     cpp_dofmap = dolfinx.cpp.fem.DofMap(e_layout, _cpp_im, index_map_bs, dofmap_adj, bs)
 
     # Create function space
