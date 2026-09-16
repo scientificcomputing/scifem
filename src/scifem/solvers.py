@@ -31,9 +31,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
     if _v(dolfinx.__version__) < _v("0.9"):
         _alpha_kw = "scale"
 
-    @deprecated(
-        "NewtonSolver is deprecated in favor of `dolfinx.fem.petsc.NonlinearProblem`."
-    )
+    @deprecated("NewtonSolver is deprecated in favor of `dolfinx.fem.petsc.NonlinearProblem`.")
     class NewtonSolver:
         max_iterations: int
         _bcs: list[dolfinx.fem.DirichletBC]
@@ -167,8 +165,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                         for form in self._F
                     ]
                     coeffs_L = [
-                        dolfinx.cpp.fem.pack_coefficients(form._cpp_object)
-                        for form in self._F
+                        dolfinx.cpp.fem.pack_coefficients(form._cpp_object) for form in self._F
                     ]
                     constants_a = [
                         [
@@ -190,9 +187,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                     ]
                 # Scatter previous solution `w` to `self.x`, the blocked version used for lifting
                 if hasattr(dolfinx.common, "index_map"):
-                    _imaps = [
-                        s.function_space.dofmap.index_map._cpp_object for s in self.w
-                    ]
+                    _imaps = [s.function_space.dofmap.index_map._cpp_object for s in self.w]
                 else:
                     _imaps = [s.function_space.dofmap.index_map for s in self.w]
                 dolfinx.cpp.la.petsc.scatter_local_vectors(
@@ -206,9 +201,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                         for i, si in enumerate(self.w)
                     ],
                 )
-                self.x.ghostUpdate(
-                    addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
-                )
+                self.x.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
                 # Assemble F(u_{i-1}) - J(u_D - u_{i-1}) and set du|_bc= u_D - u_{i-1}
                 with self.b.localForm() as b_local:
@@ -244,16 +237,12 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                         constants=constants_a,
                         alpha=-1.0,
                     )
-                    self.b.ghostUpdate(
-                        addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE
-                    )
+                    self.b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
                     bcs0 = dolfinx.fem.bcs_by_block(
                         dolfinx.fem.extract_function_spaces(self._F), self.bcs
                     )
                     dolfinx.fem.petsc.set_bc(self.b, bcs0, x0=self.x, alpha=-1.0)
-                    self.b.ghostUpdate(
-                        PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD
-                    )
+                    self.b.ghostUpdate(PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
 
                 # Assemble Jacobian
                 self.A.zeroEntries()
@@ -278,9 +267,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                 self._solver.solve(self.b, self.dx)
                 if self._error_on_convergence:
                     if (status := self._solver.getConvergedReason()) <= 0:
-                        raise RuntimeError(
-                            f"Linear solver did not converge, got reason: {status}"
-                        )
+                        raise RuntimeError(f"Linear solver did not converge, got reason: {status}")
 
                 # Update solution
                 offset_start = 0
@@ -290,8 +277,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                         * s.function_space.dofmap.index_map_bs
                     )
                     s.x.petsc_vec.array_w[:num_sub_dofs] -= (
-                        beta
-                        * self.dx.array_r[offset_start : offset_start + num_sub_dofs]
+                        beta * self.dx.array_r[offset_start : offset_start + num_sub_dofs]
                     )
                     s.x.petsc_vec.ghostUpdate(
                         addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD
