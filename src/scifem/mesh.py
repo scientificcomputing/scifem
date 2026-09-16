@@ -432,9 +432,13 @@ def compute_interface_data(
         assert np.unique(_row).shape[0] == len(_row)
         idata = np.vstack([cells, local_pos]).T.reshape(-1, 4)
     else:
+        if not isinstance(cell_tags.topology, dolfinx.cpp.mesh.Topology):
+            _cpp_topology = cell_tags.topology._cpp_object
+        else:
+            _cpp_topology = cell_tags.topology
         idata = dolfinx.cpp.fem.compute_integration_domains(
             dolfinx.fem.IntegralType.interior_facet,
-            cell_tags.topology,
+            _cpp_topology,
             facet_indices,
             *integration_args,
         )
