@@ -924,29 +924,54 @@ def create_periodic_mesh(
             " identified with another one."
         )
 
+    # Destinations per replacement vertex.
+    #
+    # `src_owner` names one cell -- the one `determine_point_ownership` happened to pick for
+    # the mapped point. That point lands exactly on a vertex, which several cells share, so
+    # the choice among them is arbitrary. Every process owning a cell incident to that
+    # replacement vertex owns part of the merged facet and needs this cell, so picking one
+    # leaves the others short. It shows up as a seam facet with a single incident cell, and
+    # whether it happens at all depends on how the partition lines up.
+    #
+    # Phase 1 already shipped those cells here together with their owners, grouped by the
+    # process that sent them. So the processes to reach, for a vertex handled by `src`, are
+    # the owners of the cells `src` sent, plus `src` itself.
+    source_offsets = np.zeros(len(recv_num_cells) + 1, dtype=np.int64)
+    np.cumsum(recv_num_cells, out=source_offsets[1:])
+    owners_from_source = {
+        int(src): np.union1d(
+            recv_potential_cell_owners[source_offsets[j] : source_offsets[j + 1]],
+            np.array([src], dtype=np.int32),
+        ).astype(np.int32)
+        for j, src in enumerate(vertex_sources)
+    }
+
     # one (facet, rank) pair per distinct destination among the facet's vertices.
     # Equivalent to:
     #     pairs = set()
     #     for i in range(len(indicator_facets)):
     #         for j in range(num_facet_vertices):
-    #             pairs.add((i, src_owner[facet_vertex_positions[i, j]]))
+    #             src = src_owner[facet_vertex_positions[i, j]]
+    #             for rank in owners_from_source[src]:
+    #                 pairs.add((i, rank))
     #     facet_pairs = sorted(pairs)
     # `np.unique(..., axis=0)` both de-duplicates and sorts lexicographically by
     # (facet, rank), which is the order the packing below expects.
-    facet_pairs = np.unique(
-        np.stack(
-            [
-                np.repeat(
-                    np.arange(len(indicator_facets), dtype=np.int32), num_facet_vertices
-                ),
-                vertex_ownership_data.src_owner[facet_vertex_positions]
-                .reshape(-1)
-                .astype(np.int32),
-            ],
-            axis=1,
-        ),
-        axis=0,
-    )
+    facet_vertex_source = vertex_ownership_data.src_owner[facet_vertex_positions]
+    pair_facet, pair_rank = [], []
+    for src, owners in owners_from_source.items():
+        hit_facet = np.nonzero(facet_vertex_source == src)[0].astype(np.int32)
+        if hit_facet.size and owners.size:
+            pair_facet.append(np.repeat(hit_facet, owners.size))
+            pair_rank.append(np.tile(owners, hit_facet.size))
+    if pair_facet:
+        facet_pairs = np.unique(
+            np.stack([np.concatenate(pair_facet), np.concatenate(pair_rank)], axis=1),
+            axis=0,
+        )
+    else:
+        facet_pairs = np.zeros((0, 2), dtype=np.int32)
+
     lost_facet_position = facet_pairs[:, 0]
     lost_dest_ranks = np.ascontiguousarray(facet_pairs[:, 1], dtype=np.int32)
 

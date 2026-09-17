@@ -296,14 +296,6 @@ def test_quadrilateral_corner_cell():
     assert jump < 1e-12, f"quad torus jumps by {jump:.3e}"
 
 
-@pytest.mark.xfail(
-    MPI.COMM_WORLD.size == 5,
-    strict=False,
-    reason="half fixed: cells now reach the indicator side, but the mirror case -- the "
-    "indicator-side cell travelling to the replacement side in phase 3 -- still has the "
-    "owned-vs-ghost asymmetry. Whether it bites depends on the partition, so this passes "
-    "on DOLFINx 0.11 and fails on 0.12 at 5 ranks. Not strict, for that reason",
-)
 def test_quadrilateral_4x4_doubly_periodic():
     """Regression test for the ghost cell that used to go missing at 5 ranks.
 
@@ -318,10 +310,12 @@ def test_quadrilateral_4x4_doubly_periodic():
     was also rank-local -- one process could not build the form while the rest ran on -- so
     the reduction below is what keeps a regression a clean failure rather than a deadlock.
 
-    Phase 1 is fixed. Phase 3 -- shipping the indicator-side cell the other way, to the
-    process that took over the vertex -- builds `cells_losing_vertex` from
-    `indicator_facets`, which `locate_entities_boundary` also returns owned-only. The same
-    asymmetry is still there in that direction.
+    There were two causes, one per direction. Phase 1 shipped only the cells behind the
+    boundary facets the process *owned*, because `exterior_facet_indices` is owned-only.
+    Phase 3 sent the cell to the single owner `determine_point_ownership` returned for the
+    mapped point -- but that point lands exactly on a vertex, which several cells share, so
+    the other owners of that vertex's cells were left short. Both are fixed; this test fails
+    at 5 ranks if either regresses, on either DOLFINx version.
     """
     comm = MPI.COMM_WORLD
     n = 4
