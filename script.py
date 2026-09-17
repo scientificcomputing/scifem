@@ -252,20 +252,23 @@ def _compat_index_map(comm, size_local, ghosts, owners, tag: int | None = None):
 
 
 def broadcast_marked_entities(mesh, dim, entities):
-    """Every local copy of an entity marked on any process that holds it.
+    """Extend a set of entities to every local copy of the entities in it.
 
-    `locate_entities_boundary` and `exterior_facet_indices` return owned entities only,
-    but both sides of the seam have to agree on what is marked, including where one of
-    them merely ghosts the entity. Marking, reducing onto the owner and scattering back
-    achieves that in one round.
+    An entity marked on one process that holds it comes back marked on all of them. Use
+    this on a set that is only correct on the owners, such as the output of
+    `locate_entities_boundary` or `exterior_facet_indices`, when the ghost copies have to
+    carry the same mark.
+
+    Collective on the communicator of the index map for `dim`.
 
     Args:
         mesh: The mesh the entities belong to.
         dim: Topological dimension of `entities`.
-        entities: Local indices of the marked entities.
+        entities: Local indices of the marked entities, owned or ghost.
 
     Returns:
-        Local indices of every entity marked on this process or on its owner, sorted.
+        Local indices of every entity marked on this process or on the owner of one of
+        its entities, ascending.
     """
     marker = dolfinx.la.vector(mesh.topology.index_map(dim), 1, dtype=np.int32)
     marker.array[:] = 0
@@ -480,19 +483,21 @@ def _match_vertices_geometric(
 
 
 def _reduced_vertex_map(mesh, indicator_vertices):
-    """The vertex index map of `mesh` with the replaced vertices taken out.
+    """The vertex index map of `mesh` with the given vertices removed.
+
+    Collective.
 
     Args:
-        mesh: The mesh being made periodic.
-        indicator_vertices: Local vertices that are to be replaced by their partner.
+        mesh: The mesh whose vertex map is to be reduced.
+        indicator_vertices: Local vertices to leave out of the reduced map.
 
     Returns:
         ``(sub_map, parent_to_sub)``: the reduced index map, and the map from a local
-        vertex of `mesh` to its index in `sub_map`, ``-1`` at the removed vertices.
+        vertex of `mesh` to its local index in `sub_map`, ``-1`` at the removed vertices.
 
     Raises:
-        RuntimeError: If removing the vertices would move ownership of another vertex,
-            which the rest of the algorithm assumes does not happen.
+        RuntimeError: If removing the vertices would move ownership of a vertex that is
+            kept. The reduced map is only usable here while ownership is unchanged.
     """
     vertex_map = mesh.topology.index_map(0)
     num_vertices_local = vertex_map.size_local + vertex_map.num_ghosts
@@ -522,21 +527,24 @@ def _reduced_vertex_map(mesh, indicator_vertices):
 
 
 def _partner_in_reduced_map(comm, sub_map, parent_to_sub, partner_vertex):
-    """Where each partner vertex sits in the reduced map, and who owns it.
+    """Look up local vertices in a reduced vertex map, as global index and owner.
+
+    Collective, so that a vertex missing from the map raises on every process rather than
+    on one.
 
     Args:
-        comm: The mesh communicator. The membership check below is collective.
-        sub_map: The reduced vertex map from :func:`_reduced_vertex_map`.
-        parent_to_sub: Its index map, as returned alongside it.
-        partner_vertex: Local vertices that replace the ones other processes gave up.
+        comm: The communicator to reduce the check over.
+        sub_map: A reduced vertex map, from :func:`_reduced_vertex_map`.
+        parent_to_sub: Its companion map from local vertices, as returned alongside it.
+        partner_vertex: Local vertices to look up.
 
     Returns:
-        ``(global_vertices, owners)``, both indexed like `partner_vertex`: the global
-        index of each partner in `sub_map`, and the rank owning it.
+        ``(global_vertices, owners)``, both indexed like `partner_vertex`: each vertex's
+        global index in `sub_map`, and the rank that owns it.
 
     Raises:
-        AssertionError: If a partner vertex is itself marked for replacement, so that the
-            reduced map no longer contains it.
+        AssertionError: If any of `partner_vertex` is one of the vertices `sub_map` was
+            built without.
     """
     sub_partner_vertex = parent_to_sub[partner_vertex]
 
@@ -554,6 +562,169 @@ def _partner_in_reduced_map(comm, sub_map, parent_to_sub, partner_vertex):
     global_vertices = sub_map.local_to_global(sub_partner_vertex).astype(np.int64)
     owners = get_ownership(sub_map)[sub_partner_vertex].copy()
     return global_vertices, owners
+
+
+def _owners_from_source(vertex_sources, recv_num_cells, recv_potential_cell_owners):
+    """For each sender, the owners of the cells it sent, together with the sender.
+
+    Reads the answer off data already received, so it communicates nothing.
+
+    Args:
+        vertex_sources: The sending ranks, ascending and without repeats.
+        recv_num_cells: How many cells were received from each of them, in the same order.
+        recv_potential_cell_owners: Owner of each received cell, grouped by sender, so of
+            length ``recv_num_cells.sum()``.
+
+    Returns:
+        A rank from `vertex_sources` to that union, ascending and without repeats. The
+        caller uses it as the set of ranks to reach on that sender's behalf, which is
+        wider than the sender alone because several of them may hold a cell at a vertex.
+    """
+    source_offsets = np.zeros(len(recv_num_cells) + 1, dtype=np.int64)
+    np.cumsum(recv_num_cells, out=source_offsets[1:])
+    return {
+        int(src): np.union1d(
+            recv_potential_cell_owners[source_offsets[j] : source_offsets[j + 1]],
+            np.array([src], dtype=np.int32),
+        ).astype(np.int32)
+        for j, src in enumerate(vertex_sources)
+    }
+
+
+def _seam_facet_destinations(
+    mesh, indicator_vertices, indicator_facets, src_owner, owners_from_source
+):
+    """Expand each facet into one pair per rank reachable through its vertices.
+
+    A facet's vertices name ranks in `src_owner`, each of which `owners_from_source`
+    widens to a set; the facet is paired with the union over its vertices.
+
+    Collective, so that a facet whose vertices are not all in `indicator_vertices` raises
+    on every process rather than on one.
+
+    Args:
+        mesh: The mesh `indicator_facets` and `indicator_vertices` are local to.
+        indicator_vertices: Local vertices that `src_owner` is keyed on, in that order.
+        indicator_facets: Local facets to expand.
+        src_owner: One rank per entry of `indicator_vertices`.
+        owners_from_source: A rank to the ranks it stands for, from
+            :func:`_owners_from_source`.
+
+    Returns:
+        ``(facet, rank)`` pairs as an ``(n, 2)`` array, de-duplicated and sorted
+        lexicographically, where `facet` indexes into `indicator_facets`. A facet appears
+        once per distinct rank, so the array is longer than `indicator_facets`.
+
+    Raises:
+        RuntimeError: If a facet in `indicator_facets` has a vertex that is not in
+            `indicator_vertices`.
+    """
+    comm = mesh.comm
+    mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
+    f_to_v = mesh.topology.connectivity(mesh.topology.dim - 1, 0)
+
+    vertex_map = mesh.topology.index_map(0)
+    # position of a local vertex in `indicator_vertices`, which is the index that
+    # `src_owner` and `global_replacement_*` are keyed on: entry k describes the k-th
+    # local vertex that will be replaced.
+    position_in_indicator_vertices = np.full(
+        vertex_map.size_local + vertex_map.num_ghosts, -1, dtype=np.int32
+    )
+    position_in_indicator_vertices[indicator_vertices] = np.arange(
+        len(indicator_vertices), dtype=np.int32
+    )
+
+    # NOTE: assumes every facet has the same number of vertices. That holds for a single
+    # cell type but not for a mixed-topology mesh (a prism has both triangular and
+    # quadrilateral facets). To support it, walk `f_to_v.offsets` facet by facet and build
+    # the pairs from a ragged array instead of a rectangular one. Nothing downstream has
+    # to change: every array from here on carries one entry per pair, never one per facet.
+    num_facet_vertices = int(f_to_v.offsets[1] - f_to_v.offsets[0])
+    # Equivalent to:
+    #     for i, f in enumerate(indicator_facets):
+    #         for j in range(num_facet_vertices):
+    #             facet_vertices[i, j] = f_to_v.links(f)[j]
+    facet_vertices = f_to_v.array[
+        (
+            f_to_v.offsets[indicator_facets][:, None]
+            + np.arange(num_facet_vertices, dtype=np.int32)
+        ).reshape(-1)
+    ].reshape(len(indicator_facets), num_facet_vertices)
+    facet_vertex_positions = position_in_indicator_vertices[facet_vertices]
+    num_unmarked = int(np.count_nonzero(facet_vertex_positions == -1))
+    if comm.allreduce(num_unmarked, op=MPI.SUM) > 0:
+        raise RuntimeError(
+            "A facet on the seam has a vertex that is not marked for replacement."
+            " `indicator_facets` and `indicator_vertices` have to agree for the facet to"
+            " be identified with another one."
+        )
+
+    # one (facet, rank) pair per distinct destination among the facet's vertices.
+    # Equivalent to:
+    #     pairs = set()
+    #     for i in range(len(indicator_facets)):
+    #         for j in range(num_facet_vertices):
+    #             src = src_owner[facet_vertex_positions[i, j]]
+    #             for rank in owners_from_source[src]:
+    #                 pairs.add((i, rank))
+    #     facet_pairs = sorted(pairs)
+    # `np.unique(..., axis=0)` both de-duplicates and sorts lexicographically by
+    # (facet, rank), which is the order the packing downstream expects.
+    facet_vertex_source = src_owner[facet_vertex_positions]
+    pair_facet, pair_rank = [], []
+    for src, owners in owners_from_source.items():
+        hit_facet = np.nonzero(facet_vertex_source == src)[0].astype(np.int32)
+        if hit_facet.size and owners.size:
+            pair_facet.append(np.repeat(hit_facet, owners.size))
+            pair_rank.append(np.tile(owners, hit_facet.size))
+    if not pair_facet:
+        return np.zeros((0, 2), dtype=np.int32)
+    return np.unique(
+        np.stack([np.concatenate(pair_facet), np.concatenate(pair_rank)], axis=1),
+        axis=0,
+    )
+
+
+def _number_new_ghosts(index_map, global_indices, *payloads):
+    """Translate global indices to local, numbering the unknown ones as further ghosts.
+
+    An index `index_map` holds keeps its local number; one it does not is given the next
+    number after the map's existing ghosts. `index_map` itself is not modified -- the
+    caller builds the replacement from `new_ghosts` and the gathered owners -- but the
+    numbering assumes the new ghosts are appended to it in the order returned.
+
+    Local; no communication.
+
+    Args:
+        index_map: The map to translate against.
+        global_indices: Flat array of global indices, repeats allowed.
+        payloads: Arrays indexed like `global_indices`, each carrying one value per entry.
+            All occurrences of an index must carry the same value, which is asserted.
+
+    Returns:
+        ``(local, new_ghosts, first_occurrence, gathered)``: `global_indices` in local
+        numbering; the global indices of the new ghosts, ascending; the position in
+        `global_indices` where each of them first occurs, so that an array not available
+        yet can be reduced later with ``values[first_occurrence]``; and `payloads` so
+        reduced, as a tuple.
+    """
+    local = index_map.global_to_local(global_indices)
+    missing = np.flatnonzero(local == -1)
+    new_ghosts, pos, inverse = np.unique(
+        global_indices[missing], return_index=True, return_inverse=True
+    )
+    first = index_map.size_local + index_map.num_ghosts
+    local[missing] = (first + np.arange(len(new_ghosts), dtype=np.int32))[inverse]
+
+    gathered = []
+    for values in payloads:
+        occurrences = np.asarray(values)[missing]
+        chosen = occurrences[pos]
+        assert np.array_equal(occurrences, chosen[inverse]), (
+            "occurrences of the same global index disagree on an accompanying value"
+        )
+        gathered.append(chosen)
+    return local, new_ghosts, missing[pos], tuple(gathered)
 
 
 def _build_periodic_mesh(
@@ -580,9 +751,6 @@ def _build_periodic_mesh(
 
     mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
-
-    vertex_map = mesh.topology.index_map(0)
-    num_vertices_local = vertex_map.size_local + vertex_map.num_ghosts
 
     # The mesh without the vertices that are being replaced, and the partners resolved
     # against it: everything below is expressed in this reduced numbering.
@@ -837,35 +1005,14 @@ def _build_periodic_mesh(
     # become ghosts, and the index map has to be extended with them before the incoming
     # dofmap can be expressed locally at all. `cell_filter` has already dropped the cells
     # that are not actually new, so only their vertices are in question here.
-    filtered_top_dm = new_top_dm_on_proc[cell_filter]
-
-    # -1 from `global_to_local` marks a vertex this process does not hold yet.
-    local_dm = sub_map_without_ghosts.global_to_local(filtered_top_dm.reshape(-1))
-    new_vertex_indicator = local_dm == -1
-    shared_facet_vertices = filtered_top_dm.reshape(-1)[new_vertex_indicator]
-
-    # One vertex is shared by several of the incoming cells, so collapse the repeats.
-    # `pos` points at each unique vertex's first occurrence, and `inverse_map` sends every
-    # occurrence back to its position in `new_ghost_vertices`.
-    new_ghost_vertices, pos, inverse_map = np.unique(
-        shared_facet_vertices, return_index=True, return_inverse=True
+    # `cell_filter` has already dropped the cells that are not actually new, so only the
+    # vertices of the genuinely new ones are in question here.
+    local_dm, new_ghost_vertices, _, (new_ghost_owners,) = _number_new_ghosts(
+        sub_map_without_ghosts,
+        new_top_dm_on_proc[cell_filter].reshape(-1),
+        top_dm_ownership[cell_filter].reshape(-1),
     )
-
-    # The owner travelled alongside the vertex in `top_dm_ownership`. Every occurrence of
-    # a vertex reports the same owner -- they all read it off the one submap -- so the
-    # first occurrence stands for the rest, and the assert holds that to account.
-    occurrence_owners = top_dm_ownership[cell_filter].reshape(-1)[new_vertex_indicator]
-    new_ghost_owners = occurrence_owners[pos]
-    assert np.array_equal(occurrence_owners, new_ghost_owners[inverse_map]), (
-        "occurrences of the same vertex disagree on its owner"
-    )
-
-    # Number the new ghosts after the ones the submap already has, and write them into the
-    # dofmap, which is then local throughout and can be used to build the new topology.
     new_local_size = int(sub_map_without_ghosts.size_local)
-    new_ghost_pos = new_local_size + sub_map_without_ghosts.num_ghosts
-    local_ghost_indexing = new_ghost_pos + np.arange(len(new_ghost_vertices))
-    local_dm[new_vertex_indicator] = local_ghost_indexing[inverse_map]
 
     # The ghost list of the index map that supersedes the submap below. The order matches
     # the numbering just assigned: existing ghosts first, then the new ones.
@@ -965,25 +1112,15 @@ def _build_periodic_mesh(
     )
 
     # Compute new ghost nodes
-    filtered_new_geometry_dm = add_geom_dm[cell_filter].flatten()
-    filtered_new_geometry_owners = add_geom_own[cell_filter].flatten()
-    igi_from_new_owner_on_subset = recv_igi[cell_filter].flatten()
-    assert len(filtered_new_geometry_dm) == len(filtered_new_geometry_owners)
-    local_geometry_dm = geom_im.global_to_local(filtered_new_geometry_dm)
-    new_local_nodes = np.flatnonzero(local_geometry_dm == -1)
-    new_ghost_nodes, gpos, ginverse_map = np.unique(
-        filtered_new_geometry_dm[new_local_nodes],
-        return_index=True,
-        return_inverse=True,
+    local_geometry_dm, new_ghost_nodes, first_new_node, (new_ghost_owners, new_igi) = (
+        _number_new_ghosts(
+            geom_im,
+            add_geom_dm[cell_filter].flatten(),
+            add_geom_own[cell_filter].flatten(),
+            recv_igi[cell_filter].flatten(),
+        )
     )
-
-    new_igi = igi_from_new_owner_on_subset[new_local_nodes][gpos]
-    new_ghost_owners = filtered_new_geometry_owners[new_local_nodes][gpos]
     num_local_nodes = geom_im.size_local
-    new_node_pos = num_local_nodes + geom_im.num_ghosts
-    local_geometry_dm[new_local_nodes] = (
-        new_node_pos + np.arange(len(new_ghost_nodes), dtype=np.int32)
-    )[ginverse_map]
 
     # Communicate geometry coordinates (to process that has lost vertex)
     node_coordinates = mesh.geometry.x[new_cell_geom_dm.reshape(-1)].flatten()
@@ -1006,98 +1143,19 @@ def _build_periodic_mesh(
     # --- 3 --- Communicate cells from process that has lost vertex to process that has taken over vertex
 
     # Where each seam facet's cell has to go comes from the vertex correspondence.
-    #
-    # The first destination is `src_owner`, the rank owning one of the cells the partner
-    # vertex belongs to. It has to be a cell owner, not the owner of the replacement
-    # vertex: the rank holding the cell on the far side of the seam may only ghost that
-    # vertex, and would then never receive this cell. `src_owner` names only one such
-    # rank, which is why the block below widens the set.
-    mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
+    # `src_owner` names a cell owner, not the owner of the replacement vertex: the rank
+    # holding the cell on the far side of the seam may only ghost that vertex, and would
+    # then never receive this cell. It names only one such rank, so the set is widened
+    # from what phase 1 already shipped back.
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
-    f_to_v = mesh.topology.connectivity(mesh.topology.dim - 1, 0)
     f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
-
-    # position of a local vertex in `indicator_vertices`, which is the index that
-    # `src_owner` and `global_replacement_*` are keyed on: entry k describes the k-th
-    # local vertex that will be replaced.
-    position_in_indicator_vertices = np.full(num_vertices_local, -1, dtype=np.int32)
-    position_in_indicator_vertices[indicator_vertices] = np.arange(
-        len(indicator_vertices), dtype=np.int32
+    facet_pairs = _seam_facet_destinations(
+        mesh,
+        indicator_vertices,
+        indicator_facets,
+        src_owner,
+        _owners_from_source(vertex_sources, recv_num_cells, recv_potential_cell_owners),
     )
-
-    # NOTE: assumes every facet has the same number of vertices. That holds for a single
-    # cell type but not for a mixed-topology mesh (a prism has both triangular and
-    # quadrilateral facets). To support it, walk `f_to_v.offsets` facet by facet and build
-    # the (facet, rank) pairs from a ragged array instead of a rectangular one. Nothing
-    # after that has to change: every array from `facet_pairs` onwards carries one entry
-    # per (facet, destination rank) pair, never one per facet.
-    num_facet_vertices = int(f_to_v.offsets[1] - f_to_v.offsets[0])
-    # Equivalent to:
-    #     for i, f in enumerate(indicator_facets):
-    #         for j in range(num_facet_vertices):
-    #             facet_vertices[i, j] = f_to_v.links(f)[j]
-    facet_vertices = f_to_v.array[
-        (
-            f_to_v.offsets[indicator_facets][:, None]
-            + np.arange(num_facet_vertices, dtype=np.int32)
-        ).reshape(-1)
-    ].reshape(len(indicator_facets), num_facet_vertices)
-    facet_vertex_positions = position_in_indicator_vertices[facet_vertices]
-    num_unmarked = int(np.count_nonzero(facet_vertex_positions == -1))
-    if comm.allreduce(num_unmarked, op=MPI.SUM) > 0:
-        raise RuntimeError(
-            "A facet on the seam has a vertex that is not marked for replacement."
-            " `indicator_facets` and `indicator_vertices` have to agree for the facet to"
-            " be identified with another one."
-        )
-
-    # Destinations per replacement vertex.
-    #
-    # `src_owner` names one cell -- the one `determine_point_ownership` happened to pick for
-    # the mapped point. That point lands exactly on a vertex, which several cells share, so
-    # the choice among them is arbitrary. Every process owning a cell incident to that
-    # replacement vertex owns part of the merged facet and needs this cell, so picking one
-    # leaves the others short. It shows up as a seam facet with a single incident cell, and
-    # whether it happens at all depends on how the partition lines up.
-    #
-    # Phase 1 already shipped those cells here together with their owners, grouped by the
-    # process that sent them. So the processes to reach, for a vertex handled by `src`, are
-    # the owners of the cells `src` sent, plus `src` itself.
-    source_offsets = np.zeros(len(recv_num_cells) + 1, dtype=np.int64)
-    np.cumsum(recv_num_cells, out=source_offsets[1:])
-    owners_from_source = {
-        int(src): np.union1d(
-            recv_potential_cell_owners[source_offsets[j] : source_offsets[j + 1]],
-            np.array([src], dtype=np.int32),
-        ).astype(np.int32)
-        for j, src in enumerate(vertex_sources)
-    }
-
-    # one (facet, rank) pair per distinct destination among the facet's vertices.
-    # Equivalent to:
-    #     pairs = set()
-    #     for i in range(len(indicator_facets)):
-    #         for j in range(num_facet_vertices):
-    #             src = src_owner[facet_vertex_positions[i, j]]
-    #             for rank in owners_from_source[src]:
-    #                 pairs.add((i, rank))
-    #     facet_pairs = sorted(pairs)
-    # `np.unique(..., axis=0)` both de-duplicates and sorts lexicographically by
-    # (facet, rank), which is the order the packing below expects.
-    facet_vertex_source = src_owner[facet_vertex_positions]
-    pair_facet, pair_rank = [], []
-    for src, owners in owners_from_source.items():
-        hit_facet = np.nonzero(facet_vertex_source == src)[0].astype(np.int32)
-        if hit_facet.size and owners.size:
-            pair_facet.append(np.repeat(hit_facet, owners.size))
-            pair_rank.append(np.tile(owners, hit_facet.size))
-    if pair_facet:
-        facet_pairs = np.unique(
-            np.stack([np.concatenate(pair_facet), np.concatenate(pair_rank)], axis=1),
-            axis=0,
-        )
-    else:
-        facet_pairs = np.zeros((0, 2), dtype=np.int32)
 
     lost_facet_position = facet_pairs[:, 0]
     lost_dest_ranks = np.ascontiguousarray(facet_pairs[:, 1], dtype=np.int32)
@@ -1493,9 +1551,11 @@ def _build_periodic_mesh(
     extended_geom_owners = np.hstack(
         [geom_im.owners, new_ghost_owners, ext_ghost_owners]
     ).astype(np.int32)
+    # The coordinates arrive after the ghosts are numbered, so they are reduced to one
+    # value per new ghost with the selection `_number_new_ghosts` handed back.
     extra_node_coords = geom_coords.reshape(-1, num_nodes, 3)[cell_filter].reshape(
         -1, 3
-    )[new_local_nodes][gpos]
+    )[first_new_node]
 
     extended_dofmap = np.vstack(
         [mesh.geometry.dofmaps[0], extra_geom_dm, ext_geometry_dm]
