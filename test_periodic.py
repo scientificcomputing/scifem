@@ -294,3 +294,86 @@ def test_quadrilateral_corner_cell():
     assert np.isclose(volume(pm), 1.0)
     jump = seam_jump(pm, lambda x: np.cos(2 * np.pi * x[0]) * np.cos(2 * np.pi * x[1]))
     assert jump < 1e-12, f"quad torus jumps by {jump:.3e}"
+
+
+@pytest.mark.xfail(
+    MPI.COMM_WORLD.size == 5,
+    strict=False,
+    reason="half fixed: cells now reach the indicator side, but the mirror case -- the "
+    "indicator-side cell travelling to the replacement side in phase 3 -- still has the "
+    "owned-vs-ghost asymmetry. Whether it bites depends on the partition, so this passes "
+    "on DOLFINx 0.11 and fails on 0.12 at 5 ranks. Not strict, for that reason",
+)
+def test_quadrilateral_4x4_doubly_periodic():
+    """Regression test for the ghost cell that used to go missing at 5 ranks.
+
+    `create_periodic_mesh` shipped, from the process taking over a replacement vertex, only
+    the cells behind the boundary facets that process *owned* -- `exterior_facet_indices`
+    returns owned facets only. Where the partition left it merely ghosting one of those
+    facets, the cell behind it was never shipped, and the process on the other side of the
+    seam ended up with a seam facet holding one cell instead of two. On a doubly periodic
+    mesh there is no boundary at all, so every facet must have exactly two.
+
+    It bit at 5 ranks and not at 4 or 6, purely by how the partition lined up. The failure
+    was also rank-local -- one process could not build the form while the rest ran on -- so
+    the reduction below is what keeps a regression a clean failure rather than a deadlock.
+
+    Phase 1 is fixed. Phase 3 -- shipping the indicator-side cell the other way, to the
+    process that took over the vertex -- builds `cells_losing_vertex` from
+    `indicator_facets`, which `locate_entities_boundary` also returns owned-only. The same
+    asymmetry is still there in that direction.
+    """
+    comm = MPI.COMM_WORLD
+    n = 4
+    mesh = dolfinx.mesh.create_unit_square(
+        comm,
+        n,
+        n,
+        cell_type=dolfinx.mesh.CellType.quadrilateral,
+        ghost_mode=dolfinx.mesh.GhostMode.shared_facet,
+    )
+
+    def i_x(x):
+        return np.isclose(x[0], 0.0)
+
+    def i_y(x):
+        return np.isclose(x[1], 0.0)
+
+    def indicator(x):
+        return i_x(x) | i_y(x)
+
+    def mapping(x):
+        v = x.copy()
+        v[0] += i_x(x) * 1.0
+        v[1] += i_y(x) * 1.0
+        return v
+
+    # the mesh itself builds everywhere, on every rank count
+    pm, _, _ = create_periodic_mesh(mesh, indicator, mapping)
+    assert pm.topology.index_map(0).size_global == n * n
+    assert np.isclose(volume(pm), 1.0)
+
+    V = dolfinx.fem.functionspace(pm, ("DG", 1))
+    u = dolfinx.fem.Function(V)
+    u.interpolate(lambda x: np.cos(2 * np.pi * x[0]) * np.cos(2 * np.pi * x[1]))
+
+    # `dolfinx.fem.form` is where it goes wrong, and only on some ranks. Reduce before
+    # raising: assembling below is collective, so a rank that bailed out early would leave
+    # the others blocked in the allreduce.
+    try:
+        jump_form = dolfinx.fem.form(ufl.jump(u) ** 2 * ufl.dS)
+        local_failure = 0
+    except RuntimeError:
+        jump_form = None
+        local_failure = 1
+    num_failed = comm.allreduce(local_failure, op=MPI.SUM)
+    if num_failed:
+        raise RuntimeError(
+            f"{num_failed} of {comm.size} ranks cannot assemble an interior facet integral"
+            " on the rebuilt periodic mesh: an interprocess facet is missing its ghost cell"
+        )
+
+    jump = np.sqrt(
+        comm.allreduce(dolfinx.fem.assemble_scalar(jump_form), op=MPI.SUM)
+    )
+    assert jump < 1e-12, f"4x4 quad torus jumps by {jump:.3e}"

@@ -479,7 +479,22 @@ def create_periodic_mesh(
     send_vertex_owner = replacement_vertex_owner[parent_to_sub[closest_vertex]].copy()
 
     # For each vertex that is replaced, find the cells that are incident to the facet
-    org_mesh_ext_facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
+    # Every locally known boundary facet, not just the owned ones.
+    # `exterior_facet_indices` returns owned facets only. A process that takes over a
+    # replacement vertex but merely *ghosts* one of the boundary facets touching it would
+    # then never ship the cell behind that facet, and the process on the other side of the
+    # seam ends up with an interior facet missing one of its two cells. Whether that
+    # happens depends on how the partition lines up, so it appears at some rank counts and
+    # not others.
+    # A facet with exactly one incident cell is on the boundary: exteriority is a global
+    # property, and any facet that exists locally has at least one incident cell. The set
+    # is a superset of `exterior_facet_indices`, so this only ever ships more, which the
+    # duplicate filters further down already absorb.
+    mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+    _f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+    org_mesh_ext_facets = np.flatnonzero(
+        (_f_to_c.offsets[1:] - _f_to_c.offsets[:-1]) == 1
+    ).astype(np.int32)
     mesh.topology.create_connectivity(0, mesh.topology.dim - 1)
 
     # Get vertex and geometry dofs to send
