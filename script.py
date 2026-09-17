@@ -66,7 +66,7 @@ def transfer_meshtags_to_periodic_mesh(
         mesh.topology.dim, 0
     )  # This should exist by default
     periodic_mesh.topology.create_entities(meshtags.dim)  # This has to be created
-    periodic_mesh.geometry.create_connectivity(
+    periodic_mesh.topology.create_connectivity(
         meshtags.dim, 0
     )  # This is requried before distribute entity data
     local_entities, local_values = dolfinx.io.distribute_entity_data(
@@ -148,13 +148,23 @@ def find_position(data, values):
             values = np.array([4, 5, 1, 3, 2], dtype=np.int32)
             data = np.array([1, 2, 3, 4, 5, 2, 1], dtype=np.int32)
             b = find_position(data, values) # [2,4,3,0,1,4 2]
+
+    Note:
+        Where ``values`` repeats an entry, the first occurrence is returned. Uses a sorted
+        search rather than a dense ``len(data) x len(values)`` comparison, so the cost is
+        ``O((n + m) log m)`` in time and ``O(n + m)`` in memory.
     """
     if len(data) == 0:
         return np.zeros(0, dtype=np.int32)
-    matches = values == data[:, None]
-    if not np.all(np.any(matches, axis=1)):
+    # a stable sort makes `searchsorted` land on the first of any repeated value
+    order = np.argsort(values, kind="stable")
+    slot = np.searchsorted(values, data, sorter=order)
+    if np.any(slot >= len(values)):
         raise ValueError("find_position: data contains values not present in values")
-    return matches.argmax(1)
+    position = order[slot]
+    if not np.array_equal(values[position], data):
+        raise ValueError("find_position: data contains values not present in values")
+    return position.astype(np.int32)
 
 
 def compute_insert_position(
@@ -178,22 +188,30 @@ def compute_insert_position(
             insert_position = compute_insert_position(data_owner, destination_ranks, out_size)
 
         Insert position is then ``[1, 4, 5, 2, 0, 3]``
+
+    Note:
+        Uses a sorted search rather than a dense ``len(data_owner) x
+        len(destination_ranks)`` comparison, so the cost is ``O(n log n)`` in time and
+        ``O(n)`` in memory.
     """
-    process_pos_indicator = data_owner.reshape(-1, 1) == destination_ranks
+    if len(data_owner) == 0:
+        return np.zeros(0, dtype=np.int32)
+    # which destination block each item belongs to
+    block = find_position(data_owner, destination_ranks)
 
     # Compute offsets for insertion based on input size
     send_offsets = np.zeros(len(out_size) + 1, dtype=np.intc)
     send_offsets[1:] = np.cumsum(out_size)
     assert send_offsets[-1] == len(data_owner)
 
-    # Compute local insert index on each process
-    proc_row, proc_col = np.nonzero(process_pos_indicator)
-    cum_pos = np.cumsum(process_pos_indicator, axis=0)
-    insert_position = cum_pos[proc_row, proc_col] - 1
+    # Index of each item within its own block, in order of appearance. A stable sort by
+    # block puts each block's items in a contiguous run, in their original order, so the
+    # position within the run is the position within the block.
+    order = np.argsort(block, kind="stable")
+    within_block = np.empty(len(block), dtype=np.int64)
+    within_block[order] = np.arange(len(block)) - np.repeat(send_offsets[:-1], out_size)
 
-    # Add process offset for each local index
-    insert_position += send_offsets[proc_col]
-    return insert_position
+    return (within_block + send_offsets[block]).astype(np.int32)
 
 
 def unroll_insert_position(
@@ -1346,10 +1364,16 @@ def create_periodic_mesh(
 if __name__ == "__main__":
     # N = 189
     # M = 123
-    # N = 15
-    # M = 10
-    # mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=
-    #                                        ,cell_type=dolfinx.mesh.CellType.quadrilateral)
+    N = 15
+    M = 10
+
+    # mesh = dolfinx.mesh.create_unit_square(
+    #     MPI.COMM_WORLD,
+    #     N,
+    #     M,
+    #     ghost_mode=dolfinx.mesh.GhostMode.shared_facet,
+    #     cell_type=dolfinx.mesh.CellType.quadrilateral,
+    # )
 
     max_facet_to_cell_links = 2
     filename = "mesh.msh"
