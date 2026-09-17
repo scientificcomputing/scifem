@@ -7,6 +7,7 @@ import numpy as np
 import dolfinx
 import ufl
 import numpy.typing as npt
+import dataclasses
 import inspect
 import gmsh
 
@@ -250,6 +251,30 @@ def _compat_index_map(comm, size_local, ghosts, owners, tag: int | None = None):
             return dolfinx.common.IndexMap(comm, size_local, ghosts, owners, tag=tag)
 
 
+def broadcast_marked_entities(mesh, dim, entities):
+    """Every local copy of an entity marked on any process that holds it.
+
+    `locate_entities_boundary` and `exterior_facet_indices` return owned entities only,
+    but both sides of the seam have to agree on what is marked, including where one of
+    them merely ghosts the entity. Marking, reducing onto the owner and scattering back
+    achieves that in one round.
+
+    Args:
+        mesh: The mesh the entities belong to.
+        dim: Topological dimension of `entities`.
+        entities: Local indices of the marked entities.
+
+    Returns:
+        Local indices of every entity marked on this process or on its owner, sorted.
+    """
+    marker = dolfinx.la.vector(mesh.topology.index_map(dim), 1, dtype=np.int32)
+    marker.array[:] = 0
+    marker.array[entities] = 1
+    marker.scatter_reverse(dolfinx.la.InsertMode.add)
+    marker.scatter_forward()
+    return np.flatnonzero(marker.array).astype(np.int32)
+
+
 def _extract_cpp_object(obj):
     if hasattr(obj, "_cpp_object"):
         return obj._cpp_object
@@ -257,43 +282,218 @@ def _extract_cpp_object(obj):
         return obj
 
 
-def create_periodic_mesh(
-    mesh, indicator, mapping_function
-) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
+@dataclasses.dataclass
+class VertexCorrespondence:
+    """Which vertices of ``mesh`` are identified with which, and which ranks hold each end.
+
+    This is the input of {py:func}`_build_periodic_mesh`, which consumes nothing else and
+    never evaluates a coordinate.
+
+    Stores the data of {py:class}`dolfinx.geometry.PointOwnershipData` for the
+    `partner_vertex`, over query points that are the images of `indicator_vertices` -- the
+    vertices given up to the partner side -- plus one extra array, `indicator_facets`, the
+    facets given up with them.
+
+    The two halves are keyed independently, so `indicator_vertices[i]` is *not* the vertex
+    replaced by `partner_vertex[i]`: `indicator_vertices` and `src_owner` are keyed on what
+    this process gives up, `dest_owner` and `partner_vertex` on what other processes gave up
+    to it, and the two sides of a pair rarely live on the same process. Splitting a 6x6 unit
+    square over three ranks gives one rank 7 and 0, and another 0 and 8. In serial the two
+    lengths coincide, which makes the assumption easy to form and wrong to act on. They line
+    up only after the exchange, which is what `compute_insert_position` reorders.
+
+    Args:
+        indicator_vertices: Local vertices, owned and ghost, that are to be replaced by
+            their partner vertex. Broadened across processes: a vertex marked on its
+            owner is marked on every process that ghosts it.
+        indicator_facets: Local facets, owned and ghost, lying on the seam, i.e. the
+            exterior facets all of whose vertices are in `indicator_vertices`. Broadened
+            the same way.
+        src_owner: For each entry of `indicator_vertices`, the rank owning *one* of the
+            cells its partner vertex belongs to. A vertex is shared by several cells, so
+            which one this names is arbitrary -- `_build_periodic_mesh` recovers the rest
+            of the ranks holding a cell at that vertex, which all need the seam cells too.
+            Note also that this is a *cell* owner, not the owner of the partner vertex,
+            which the rank in question may merely ghost.
+        dest_owner: For each vertex this process is the far side of, the rank that asked.
+            Must be sorted ascending: the packing groups by destination and relies on it.
+        partner_vertex: For each entry of `dest_owner`, the local vertex that replaces the
+            vertex that rank gave up. Same length as `dest_owner`.
     """
-    Create a periodic mesh that takes all facets that satisfy the `indicator` function,
-    and map the vertices of these facets to the vertices that satisfies the mapping function.
 
-    Note:
-        The cell ownership does not change, only additional ghosts are added to a given process
+    indicator_vertices: npt.NDArray[np.int32]
+    indicator_facets: npt.NDArray[np.int32]
+    src_owner: npt.NDArray[np.int32]
+    dest_owner: npt.NDArray[np.int32]
+    partner_vertex: npt.NDArray[np.int32]
 
-    Note:
-        The vertex ownership does not change, only additional ghosts are added to a given process
+
+def _match_vertices_geometric(
+    mesh, indicator, mapping_function, max_chain_length: int | None = None
+) -> VertexCorrespondence:
+    """Pair up the vertices of the seam by evaluating `mapping_function` on them.
+
+    Selects the seam with `indicator`, moves each selected vertex with `mapping_function`,
+    and snaps the image onto the nearest vertex of the mesh, checking that it actually
+    landed there.
+
+    Args:
+        mesh: The mesh to make periodic.
+        indicator: Marks the vertices to be replaced, given coordinates as ``(3, n)``.
+        mapping_function: Maps a marked vertex to the one it is identified with, given
+            coordinates as ``(3, n)``.
+        max_chain_length: How many times `mapping_function` may be re-applied to reach a
+            vertex outside `indicator`, for a mapping that applies one offset per call and
+            so needs several passes to carry a corner to its root. Defaults to
+            ``mesh.topology.dim``, the number of directions such a mesh can be periodic
+            in. Exceeding it raises, which is how a cyclic mapping is caught.
 
     Returns:
-        A tuple ``(new_mesh, replaced_vertices, replacement_map)`` where ``new_mesh`` is the new mesh with periodicity,
-        ``replaced_vertices`` is a list of vertices of the input mesh that has been replaced (local to process).
-        ``replacement_map`` is a map from the old vertices (local to process) to the new vertices (local to process).
-
-        Note:
-            This map does not contain additional ghost vertices added to the process that has taken over the facet or given away a facet.
-
-    Example:
-
-        .. code-block:: python
-        .. highlight:: python
-
-        mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 7, 19)
-        def indicator(x):
-            return numpy.isclose(x[1], 1)
-
-        def map(x):
-            values = x.copy()
-            values[1] -= 1
-            return values
-
-        periodic_mesh = create_periodic_mesh(mesh, indicator, map)
+        The correspondence {py:func}`_build_periodic_mesh` consumes.
     """
+    comm = mesh.comm
+    if max_chain_length is None:
+        max_chain_length = mesh.topology.dim
+
+    mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
+    mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+
+    # Find the vertices of the seam through the indicator function, and the facets given
+    # up with them. Both are broadened so that the two sides agree on what is replaced.
+    indicator_vertices = broadcast_marked_entities(
+        mesh, 0, dolfinx.mesh.locate_entities_boundary(mesh, 0, indicator)
+    )
+    indicator_facets = broadcast_marked_entities(
+        mesh,
+        mesh.topology.dim - 1,
+        dolfinx.mesh.locate_entities_boundary(mesh, mesh.topology.dim - 1, indicator),
+    )
+
+    geom_index = dolfinx.mesh.entities_to_geometry(mesh, 0, indicator_vertices).reshape(
+        -1
+    )
+    owned_vertex_coords = mesh.geometry.x[geom_index]
+
+    # A geometric tolerance has to be a length. `np.finfo(...).eps` describes relative
+    # precision near 1.0, so as an absolute padding it stops meaning anything once the mesh
+    # sits away from the origin: at coordinates around 1e6 a single representable double is
+    # already 1.2e-10, larger than 10000 * eps. Take a small fraction of the smallest cell
+    # instead, floored by the rounding error of the coordinates themselves, which grows with
+    # distance from the origin.
+    _cell_map = mesh.topology.index_map(mesh.topology.dim)
+    _cell_sizes = dolfinx.cpp.mesh.h(
+        mesh._cpp_object,
+        mesh.topology.dim,
+        np.arange(_cell_map.size_local + _cell_map.num_ghosts, dtype=np.int32),
+    )
+    h_min = comm.allreduce(
+        _cell_sizes.min() if _cell_sizes.size else np.inf, op=MPI.MIN
+    )
+    coord_scale = comm.allreduce(
+        np.abs(mesh.geometry.x).max() if mesh.geometry.x.size else 0.0, op=MPI.MAX
+    )
+    eps = max(
+        1e-6 * h_min,
+        100 * np.finfo(mesh.geometry.x.dtype).eps * max(1.0, coord_scale),
+    )
+
+    # Map vertices to new coordinates
+    mapped_vertex_coords = np.ascontiguousarray(
+        mapping_function(owned_vertex_coords.T).T
+    )
+
+    # Follow the mapping to a vertex outside `indicator`; see `max_chain_length` above.
+    # Entirely local: `indicator` and `mapping_function` are pointwise in the coordinates,
+    # so a process may run out of chains to follow before another does.
+    local_unresolved = False
+    for _ in range(max_chain_length):
+        still_indicated = np.asarray(indicator(mapped_vertex_coords.T), dtype=np.bool_)
+        if not still_indicated.any():
+            break
+        mapped_vertex_coords[still_indicated] = mapping_function(
+            mapped_vertex_coords[still_indicated].T
+        ).T
+    else:
+        local_unresolved = True
+
+    # Collective check to check that all vertex mappings have been resolved.
+    if comm.allreduce(int(local_unresolved), op=MPI.SUM) > 0:
+        raise RuntimeError(
+            f"`mapping_function` did not reach a vertex outside `indicator` within"
+            f" {max_chain_length} applications. Either the two functions disagree, or the"
+            " mapping cycles: an indicator vertex is mapped onto another that maps back."
+        )
+
+    # For each vertex that will be replaced, find which process should take it over
+    vertex_ownership_data = dolfinx.geometry.determine_point_ownership(
+        mesh, mapped_vertex_coords, padding=eps
+    )
+    # On process that has taken over a vertex, find the closest vertex (local to proc) that
+    # will be its replacement
+    acquired_vertex_coords = vertex_ownership_data.dest_points
+    potential_closest_vertices = dolfinx.mesh.compute_incident_entities(
+        mesh.topology, vertex_ownership_data.dest_cells, mesh.topology.dim, 0
+    )
+    closest_vertex_bb_tree = dolfinx.geometry.bb_tree(
+        mesh, 0, entities=potential_closest_vertices, padding=eps
+    )
+    closest_vertex_mid_tree = dolfinx.geometry.create_midpoint_tree(
+        mesh, 0, potential_closest_vertices
+    )
+    closest_vertex = dolfinx.geometry.compute_closest_entity(
+        closest_vertex_bb_tree,
+        closest_vertex_mid_tree,
+        mesh,
+        acquired_vertex_coords,
+    )
+
+    # `compute_closest_entity` returns the closest candidate whether or not it is anywhere
+    # near the query point, so check that the mapped point really landed on it. A mapping
+    # wrong by a whole cell otherwise gives a valid-looking mesh that is not periodic.
+    closest_vertex_coords = mesh.geometry.x[
+        dolfinx.mesh.entities_to_geometry(mesh, 0, closest_vertex).reshape(-1)
+    ]
+    snap_distance = np.linalg.norm(
+        closest_vertex_coords - acquired_vertex_coords, axis=1
+    )
+    num_unsnapped = int(np.count_nonzero(snap_distance > eps))
+    # Collective: the condition is reduced so that either every process raises or none
+    # does. A one-sided raise would leave the others blocked in the rebuild's exchanges.
+    total_unsnapped = comm.allreduce(num_unsnapped, op=MPI.SUM)
+    if total_unsnapped > 0:
+        worst = comm.allreduce(float(np.max(snap_distance, initial=0.0)), op=MPI.MAX)
+        raise RuntimeError(
+            f"`mapping_function` did not map {total_unsnapped} vertices onto a vertex of"
+            f" the mesh; the largest gap between a mapped point and the closest vertex is"
+            f" {worst:.3e}. Every mapped point has to land on the vertex it is meant to be"
+            " identified with, otherwise the result is a mesh with the expected vertex and"
+            " cell counts that is not periodic."
+        )
+
+    return VertexCorrespondence(
+        indicator_vertices=indicator_vertices,
+        indicator_facets=indicator_facets,
+        src_owner=vertex_ownership_data.src_owner,
+        dest_owner=vertex_ownership_data.dest_owner,
+        partner_vertex=closest_vertex,
+    )
+
+
+def _build_periodic_mesh(
+    mesh, correspondence: VertexCorrespondence
+) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
+    """Rebuild `mesh` with the vertex pairs of `correspondence` identified.
+
+    Purely topological: the correspondence already says which vertex replaces which and
+    which ranks are involved, so nothing here evaluates a coordinate or a user function.
+    See {py:func}`create_periodic_mesh` for the return value.
+    """
+    indicator_vertices = correspondence.indicator_vertices
+    indicator_facets = correspondence.indicator_facets
+    src_owner = correspondence.src_owner
+    dest_owner = correspondence.dest_owner
+    partner_vertex = correspondence.partner_vertex
+
     comm = mesh.comm
     geometry = mesh.geometry._cpp_object
     topology = mesh.topology
@@ -304,20 +504,9 @@ def create_periodic_mesh(
     mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
 
-    # Find facets through indicator function and incident vertices
-    indicator_vertices = dolfinx.mesh.locate_entities_boundary(mesh, 0, indicator)
-
-    # Communicate all vertices that are shared on all procs to all other procs
     vertex_map = mesh.topology.index_map(0)
-    vector = dolfinx.la.vector(vertex_map, 1, dtype=np.int32)
-    vector.array[:] = 0
-    vector.array[indicator_vertices] = 1
-    vector.scatter_reverse(dolfinx.la.InsertMode.add)
-    vector.scatter_forward()
-    indicator_vertices = np.flatnonzero(vector.array).astype(np.int32)
-
     num_owned_vertices = vertex_map.size_local
-    num_vertices_local = num_owned_vertices + mesh.topology.index_map(0).num_ghosts
+    num_vertices_local = num_owned_vertices + vertex_map.num_ghosts
 
     # Create first submap for vertices, where all indicated vertices are removed
     keep_vertices = np.ones(num_vertices_local, dtype=np.bool_)
@@ -349,152 +538,40 @@ def create_periodic_mesh(
     parent_to_sub = np.full(num_vertices_local, -1, dtype=np.int32)
     parent_to_sub[sub_to_parent] = np.arange(sub_to_parent.size, dtype=np.int32)
 
-    if len(indicator_vertices) == 0:
-        geom_index = np.zeros(0, dtype=np.int32)
-    else:
-        geom_index = dolfinx.mesh.entities_to_geometry(
-            mesh, 0, indicator_vertices
-        ).reshape(-1)
-    owned_vertex_coords = mesh.geometry.x[geom_index]
+    # The partner vertices in the submap's numbering, -1 where the partner was itself
+    # removed.
+    sub_partner_vertex = parent_to_sub[partner_vertex]
 
-    # A geometric tolerance has to be a length. `np.finfo(...).eps` describes relative
-    # precision near 1.0, so as an absolute padding it stops meaning anything once the mesh
-    # sits away from the origin: at coordinates around 1e6 a single representable double is
-    # already 1.2e-10, larger than 10000 * eps. Take a small fraction of the smallest cell
-    # instead, floored by the rounding error of the coordinates themselves, which grows with
-    # distance from the origin.
-    _cell_map = mesh.topology.index_map(mesh.topology.dim)
-    _cell_sizes = dolfinx.cpp.mesh.h(
-        mesh._cpp_object,
-        mesh.topology.dim,
-        np.arange(_cell_map.size_local + _cell_map.num_ghosts, dtype=np.int32),
-    )
-    h_min = comm.allreduce(
-        _cell_sizes.min() if _cell_sizes.size else np.inf, op=MPI.MIN
-    )
-    coord_scale = comm.allreduce(
-        np.abs(mesh.geometry.x).max() if mesh.geometry.x.size else 0.0, op=MPI.MAX
-    )
-    eps = max(
-        1e-6 * h_min,
-        100 * np.finfo(mesh.geometry.x.dtype).eps * max(1.0, coord_scale),
-    )
-
-    # Map vertices to new coordinates
-    mapped_vertex_coords = np.ascontiguousarray(
-        mapping_function(owned_vertex_coords.T).T
-    )
-
-    # Follow the mapping to a root. With periodicity in more than one direction an
-    # indicator vertex can map onto another indicator vertex -- the corner of a doubly
-    # periodic box is the standard case -- and that replacement has itself been removed
-    # from the reduced index map.
-    # Re-applying the mapping until the image is no longer selected by `indicator` resolves
-    # the chain, so the caller does not have to compose the offsets by hand.
-    # The loop is collective: the termination test is reduced, so every process runs the
-    # same number of iterations.
-    max_chain_length = 16
-    for _ in range(max_chain_length):
-        still_indicated = np.asarray(indicator(mapped_vertex_coords.T), dtype=np.bool_)
-        if comm.allreduce(int(np.count_nonzero(still_indicated)), op=MPI.SUM) == 0:
-            break
-        mapped_vertex_coords[still_indicated] = mapping_function(
-            mapped_vertex_coords[still_indicated].T
-        ).T
-    else:
-        raise RuntimeError(
-            f"`mapping_function` did not reach a vertex outside `indicator` within"
-            f" {max_chain_length} applications. Either the two functions disagree, or the"
-            " mapping cycles: an indicator vertex is mapped onto another that maps back."
-        )
-
-    # For each vertex that will be replaced, find which process should take it over
-    vertex_ownership_data = dolfinx.geometry.determine_point_ownership(
-        mesh, mapped_vertex_coords, padding=eps
-    )
-    # On process that has taken over a vertex, find the closest vertex (local to proc) that
-    # will be its replacement
-    acquired_vertex_coords = vertex_ownership_data.dest_points
-    potential_closest_vertex = dolfinx.mesh.compute_incident_entities(
-        mesh.topology, vertex_ownership_data.dest_cells, mesh.topology.dim, 0
-    )
-    closest_vertex_bb_tree = dolfinx.geometry.bb_tree(
-        mesh, 0, entities=potential_closest_vertex, padding=eps
-    )
-    closest_vertex_mid_tree = dolfinx.geometry.create_midpoint_tree(
-        mesh, 0, potential_closest_vertex
-    )
-    closest_vertex = dolfinx.geometry.compute_closest_entity(
-        closest_vertex_bb_tree,
-        closest_vertex_mid_tree,
-        mesh,
-        acquired_vertex_coords,
-    )
-
-    # Check that the mapped point actually landed on the vertex it snapped to.
-    # `compute_closest_entity` returns the closest vertex among the candidates whether or
-    # not it is anywhere near the query point, so without this a `mapping_function` that is
-    # wrong by a whole cell still yields a structurally valid mesh -- same vertex and cell
-    # counts, same volume -- that simply is not periodic.
-    closest_vertex_coords = mesh.geometry.x[
-        dolfinx.mesh.entities_to_geometry(mesh, 0, closest_vertex).reshape(-1)
-    ]
-    snap_distance = np.linalg.norm(
-        closest_vertex_coords - acquired_vertex_coords, axis=1
-    )
-    num_unsnapped = int(np.count_nonzero(snap_distance > eps))
-    # Collective: the condition is reduced so that either every process raises or none
-    # does. A one-sided raise would leave the others blocked in the exchanges below.
-    total_unsnapped = comm.allreduce(num_unsnapped, op=MPI.SUM)
-    if total_unsnapped > 0:
-        worst = comm.allreduce(float(np.max(snap_distance, initial=0.0)), op=MPI.MAX)
-        raise RuntimeError(
-            f"`mapping_function` did not map {total_unsnapped} vertices onto a vertex of"
-            f" the mesh; the largest gap between a mapped point and the closest vertex is"
-            f" {worst:.3e}. Every mapped point has to land on the vertex it is meant to be"
-            " identified with, otherwise the result is a mesh with the expected vertex and"
-            " cell counts that is not periodic."
-        )
-
-    # Map all vertices that exist on the process to its global index.
     # Collective, like the check above: a one-sided raise here leaves the other ranks
     # blocked in the exchanges below rather than reporting the error.
-    num_missing_replacements = int(
-        np.count_nonzero(parent_to_sub[closest_vertex] == -1)
-    )
+    num_missing_replacements = int(np.count_nonzero(sub_partner_vertex == -1))
     if comm.allreduce(num_missing_replacements, op=MPI.SUM) > 0:
         raise AssertionError(
-            "Closest vertex not in submap: a vertex was mapped onto another vertex that"
-            " `indicator` also selects, so the replacement has itself been removed. Under"
-            " periodicity in several directions the mapping has to carry a corner vertex"
-            " all the way to its root, applying every offset that applies to it."
+            "Partner vertex not in submap: a vertex was paired with another vertex that"
+            " is itself marked for replacement, so the replacement has been removed too."
+            " Under periodicity in several directions the pairing has to carry a corner"
+            " vertex all the way to its root, applying every offset that applies to it."
         )
 
-    # Map the closest vertex to its global index in the reduced submap
-    global_vertices = sub_map_without_ghosts.local_to_global(
-        parent_to_sub[closest_vertex]
-    ).astype(np.int64)
+    # Map the partner vertex to its global index in the reduced submap
+    global_vertices = sub_map_without_ghosts.local_to_global(sub_partner_vertex).astype(
+        np.int64
+    )
 
     replacement_vertex_owner = get_ownership(sub_map_without_ghosts)
-    send_vertex_owner = replacement_vertex_owner[parent_to_sub[closest_vertex]].copy()
+    send_vertex_owner = replacement_vertex_owner[sub_partner_vertex].copy()
 
-    # For each vertex that is replaced, find the cells that are incident to the facet
-    # Every locally known boundary facet, not just the owned ones.
-    # `exterior_facet_indices` returns owned facets only. A process that takes over a
-    # replacement vertex but merely *ghosts* one of the boundary facets touching it would
-    # then never ship the cell behind that facet, and the process on the other side of the
-    # seam ends up with an interior facet missing one of its two cells. Whether that
-    # happens depends on how the partition lines up, so it appears at some rank counts and
-    # not others.
-    # A facet with exactly one incident cell is on the boundary: exteriority is a global
-    # property, and any facet that exists locally has at least one incident cell. The set
-    # is a superset of `exterior_facet_indices`, so this only ever ships more, which the
-    # duplicate filters further down already absorb.
+    # Every boundary facet the process knows of, so it has to be broadened:
+    # `exterior_facet_indices` returns owned facets only, and a process that merely ghosts
+    # a boundary facet at a replacement vertex would never ship the cell behind it,
+    # leaving a seam facet with one cell instead of two on the far side.
+    mesh.topology.create_entities(mesh.topology.dim - 1)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
-    _f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
-    org_mesh_ext_facets = np.flatnonzero(
-        (_f_to_c.offsets[1:] - _f_to_c.offsets[:-1]) == 1
-    ).astype(np.int32)
+    org_mesh_ext_facets = broadcast_marked_entities(
+        mesh,
+        mesh.topology.dim - 1,
+        dolfinx.mesh.exterior_facet_indices(mesh.topology),
+    )
     mesh.topology.create_connectivity(0, mesh.topology.dim - 1)
 
     # Get vertex and geometry dofs to send
@@ -503,12 +580,9 @@ def create_periodic_mesh(
     c_to_v = mesh.topology.connectivity(mesh.topology.dim, 0)
 
     # Pack data from process taking over vertex to process that has lost vertex
-
-    assert np.all(
-        vertex_ownership_data.dest_owner[:-1] <= vertex_ownership_data.dest_owner[1:]
-    ), "Vertex owners are not sorted"
+    assert np.all(dest_owner[:-1] <= dest_owner[1:]), "Vertex owners are not sorted"
     vertex_destinations, send_vertices_per_proc = np.unique(
-        vertex_ownership_data.dest_owner, return_counts=True
+        dest_owner, return_counts=True
     )
     num_cells_per_proc = np.zeros_like(
         send_vertices_per_proc, dtype=np.int32
@@ -517,12 +591,14 @@ def create_periodic_mesh(
     offsets = np.zeros(len(send_vertices_per_proc) + 1, dtype=np.int32)
     np.cumsum(send_vertices_per_proc, out=offsets[1:])
 
-    send_ghost_cells_from_new_owner = []
-    new_cell_topology_dm = []
     # For each replacement vertex, find all facets that are connected to the vertex and is on the boundary.
     # Then, get each cell connected to this facet.
+    # Seeded with an empty array so the concatenations below need no special case for a
+    # process that sends to nobody.
+    send_ghost_cells_from_new_owner = [np.zeros(0, dtype=np.int32)]
+    new_cell_topology_dm = [np.zeros(0, dtype=np.int32)]
     for i in range(len(send_vertices_per_proc)):
-        _vertices = closest_vertex[
+        _vertices = partner_vertex[
             offsets[i] : offsets[i + 1]
         ]  # Works because dest owners are sorted
         connected_facets = dolfinx.mesh.compute_incident_entities(
@@ -532,19 +608,32 @@ def create_periodic_mesh(
         con_ext_cells = dolfinx.mesh.compute_incident_entities(
             mesh.topology, con_ext_facets, mesh.topology.dim - 1, mesh.topology.dim
         )
-        for cell in con_ext_cells:
-            send_ghost_cells_from_new_owner.append(cell)
-            num_cells_per_proc[i] += 1
-            new_cell_topology_dm.extend(c_to_v.links(cell))
-    send_ghost_cells_from_new_owner = np.array(
-        send_ghost_cells_from_new_owner, dtype=np.int32
-    )
-    new_cell_topology_dm = np.asarray(new_cell_topology_dm, dtype=np.int32).reshape(-1)
+        # Equivalent to:
+        #     for c in con_ext_cells:
+        #         send_ghost_cells_from_new_owner.push_back(c);
+        #         num_cells_per_proc[i] += 1;
+        #         for (int j = 0; j < num_vertices; ++j)
+        #             new_cell_topology_dm.push_back(c_to_v.links(c)[j]);
+        # `con_ext_cells` is already sorted and unique, so the gather preserves the order
+        # the loop would append in. As elsewhere, this assumes every cell has the same
+        # number of vertices; the reshape further down assumes it too.
+        num_cells_per_proc[i] = len(con_ext_cells)
+        send_ghost_cells_from_new_owner.append(con_ext_cells)
+        new_cell_topology_dm.append(
+            c_to_v.array[
+                (
+                    c_to_v.offsets[con_ext_cells][:, None]
+                    + np.arange(num_vertices, dtype=np.int32)
+                ).reshape(-1)
+            ]
+        )
+    send_ghost_cells_from_new_owner = np.concatenate(
+        send_ghost_cells_from_new_owner
+    ).astype(np.int32)
+    new_cell_topology_dm = np.concatenate(new_cell_topology_dm).astype(np.int32)
 
     # Create new owner to old owner communicator
-    vertex_sources, recv_vertices_per_proc = np.unique(
-        vertex_ownership_data.src_owner, return_counts=True
-    )
+    vertex_sources, recv_vertices_per_proc = np.unique(src_owner, return_counts=True)
     new_owner_to_old_comm = comm.Create_dist_graph_adjacent(
         vertex_sources, vertex_destinations, reorder=False
     )
@@ -570,24 +659,20 @@ def create_periodic_mesh(
     )
 
     # For the data that will be received, the received has to be
-    # ordered by their initial position in `mapped_vertex_coords`, not by src_rank
+    # ordered by their initial position in `indicator_vertices`, not by src_rank
     current_rank_to_recv = compute_insert_position(
-        vertex_ownership_data.src_owner, vertex_sources, recv_vertices_per_proc
+        src_owner, vertex_sources, recv_vertices_per_proc
     )
     # Invert map so that we can insert the data
-    dest_ranks_to_current = np.zeros(mapped_vertex_coords.shape[0], dtype=np.int64)
+    dest_ranks_to_current = np.zeros(len(indicator_vertices), dtype=np.int64)
     dest_ranks_to_current[current_rank_to_recv] = np.arange(
         len(dest_ranks_to_current), dtype=np.int32
     )
 
     # Global replacement index
-    global_replacement_vertex = np.full(
-        mapped_vertex_coords.shape[0], -1, dtype=np.int64
-    )
+    global_replacement_vertex = np.full(len(indicator_vertices), -1, dtype=np.int64)
     global_replacement_vertex[dest_ranks_to_current] = recv_replacement_vertices
-    global_replacement_owner = np.full(
-        mapped_vertex_coords.shape[0], -1, dtype=np.int64
-    )
+    global_replacement_owner = np.full(len(indicator_vertices), -1, dtype=np.int64)
     global_replacement_owner[dest_ranks_to_current] = recv_replacement_owner
     # Collective, and explicit about the cause: a -1 here means the mapped point was not
     # found in any cell of the mesh, i.e. `mapping_function` moved it outside the domain.
@@ -713,30 +798,53 @@ def create_periodic_mesh(
         num_vertices * recv_num_cells,
     )
 
-    # Compute the vertex ghosts
+    # Compute the vertex ghosts.
+    #
+    # The incoming cells are described by global vertex indices in the reduced (submap)
+    # numbering. Some of those vertices this process already holds; the rest have to
+    # become ghosts, and the index map has to be extended with them before the incoming
+    # dofmap can be expressed locally at all. `cell_filter` has already dropped the cells
+    # that are not actually new, so only their vertices are in question here.
     filtered_top_dm = new_top_dm_on_proc[cell_filter]
 
+    # -1 from `global_to_local` marks a vertex this process does not hold yet.
     local_dm = sub_map_without_ghosts.global_to_local(filtered_top_dm.reshape(-1))
     new_vertex_indicator = local_dm == -1
     shared_facet_vertices = filtered_top_dm.reshape(-1)[new_vertex_indicator]
+
+    # One vertex is shared by several of the incoming cells, so collapse the repeats.
+    # `pos` points at each unique vertex's first occurrence, and `inverse_map` sends every
+    # occurrence back to its position in `new_ghost_vertices`.
     new_ghost_vertices, pos, inverse_map = np.unique(
         shared_facet_vertices, return_index=True, return_inverse=True
     )
 
-    new_ghost_owners = top_dm_ownership[cell_filter].reshape(-1)[new_vertex_indicator][
-        pos
-    ]
+    # The owner travelled alongside the vertex in `top_dm_ownership`. Every occurrence of
+    # a vertex reports the same owner -- they all read it off the one submap -- so the
+    # first occurrence stands for the rest, and the assert holds that to account.
+    occurrence_owners = top_dm_ownership[cell_filter].reshape(-1)[new_vertex_indicator]
+    new_ghost_owners = occurrence_owners[pos]
+    assert np.array_equal(occurrence_owners, new_ghost_owners[inverse_map]), (
+        "occurrences of the same vertex disagree on its owner"
+    )
 
+    # Number the new ghosts after the ones the submap already has, and write them into the
+    # dofmap, which is then local throughout and can be used to build the new topology.
     new_local_size = int(sub_map_without_ghosts.size_local)
     new_ghost_pos = new_local_size + sub_map_without_ghosts.num_ghosts
     local_ghost_indexing = new_ghost_pos + np.arange(len(new_ghost_vertices))
     local_dm[new_vertex_indicator] = local_ghost_indexing[inverse_map]
+
+    # The ghost list of the index map that supersedes the submap below. The order matches
+    # the numbering just assigned: existing ghosts first, then the new ones.
     new_ghosts = np.hstack([sub_map_without_ghosts.ghosts, new_ghost_vertices]).astype(
         np.int64
     )
     new_owners = np.hstack([sub_map_without_ghosts.owners, new_ghost_owners]).astype(
         np.int32
     )
+    # A ghost is owned elsewhere by definition. A self-owned entry here would mean
+    # `global_to_local` failed to find a vertex this process does in fact own.
     assert (new_owners != comm.rank).all()
 
     # Check if index is already in (reduced) vertex map
@@ -800,7 +908,7 @@ def create_periodic_mesh(
         num_nodes * recv_num_cells,
     )
 
-    # Send ownersgpos of potential new ghost nodes
+    # Send owners of potential new ghost nodes
     send_geom_owners = node_owners[new_cell_geom_dm.reshape(-1)]
     add_geom_own = np.empty((recv_num_cells.sum(), num_nodes), dtype=np.int32)
     all_to_allv(
@@ -865,34 +973,21 @@ def create_periodic_mesh(
 
     # --- 3 --- Communicate cells from process that has lost vertex to process that has taken over vertex
 
-    # Pack additional cells to send from process losing facets (by midpoint) to the new owner
-    # Given each indicator facet, find what process that owns the cell with the midpoint of the mapped midpoint
-    indicator_facets = dolfinx.mesh.locate_entities_boundary(
-        mesh, mesh.topology.dim - 1, indicator
-    )
-    # Communicate all vertices that are shared on all procs to all other procs
-    facet_map = mesh.topology.index_map(mesh.topology.dim - 1)
-    fvector = dolfinx.la.vector(facet_map, 1, dtype=np.int32)
-    fvector.array[:] = 0
-    fvector.array[indicator_facets] = 1
-    fvector.scatter_reverse(dolfinx.la.InsertMode.add)
-    fvector.scatter_forward()
-    indicator_facets = np.flatnonzero(fvector.array).astype(np.int32)
-
-    # Where each facet's cell has to go comes from the vertex correspondence of phase 1,
+    # Where each seam facet's cell has to go comes from the vertex correspondence.
     #
-    # The destination is `vertex_ownership_data.src_owner`, the rank owning the cell each
-    # vertex's image landed in. It has to be the cell owner, not the owner of the
-    # replacement vertex: the rank holding the cell on the far side of the seam may only
-    # ghost that vertex, and would then never receive this cell.
+    # The first destination is `src_owner`, the rank owning one of the cells the partner
+    # vertex belongs to. It has to be a cell owner, not the owner of the replacement
+    # vertex: the rank holding the cell on the far side of the seam may only ghost that
+    # vertex, and would then never receive this cell. `src_owner` names only one such
+    # rank, which is why the block below widens the set.
     mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     f_to_v = mesh.topology.connectivity(mesh.topology.dim - 1, 0)
     f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
 
     # position of a local vertex in `indicator_vertices`, which is the index that
-    # `vertex_ownership_data.src_owner` and `global_replacement_*` are keyed on: entry k
-    # describes the k-th local vertex that will be replaced.
+    # `src_owner` and `global_replacement_*` are keyed on: entry k describes the k-th
+    # local vertex that will be replaced.
     position_in_indicator_vertices = np.full(num_vertices_local, -1, dtype=np.int32)
     position_in_indicator_vertices[indicator_vertices] = np.arange(
         len(indicator_vertices), dtype=np.int32
@@ -919,9 +1014,9 @@ def create_periodic_mesh(
     num_unmarked = int(np.count_nonzero(facet_vertex_positions == -1))
     if comm.allreduce(num_unmarked, op=MPI.SUM) > 0:
         raise RuntimeError(
-            "A facet selected by `indicator` has a vertex that `indicator` does not"
-            " select. The facet and vertex markers have to agree for the facet to be"
-            " identified with another one."
+            "A facet on the seam has a vertex that is not marked for replacement."
+            " `indicator_facets` and `indicator_vertices` have to agree for the facet to"
+            " be identified with another one."
         )
 
     # Destinations per replacement vertex.
@@ -957,7 +1052,7 @@ def create_periodic_mesh(
     #     facet_pairs = sorted(pairs)
     # `np.unique(..., axis=0)` both de-duplicates and sorts lexicographically by
     # (facet, rank), which is the order the packing below expects.
-    facet_vertex_source = vertex_ownership_data.src_owner[facet_vertex_positions]
+    facet_vertex_source = src_owner[facet_vertex_positions]
     pair_facet, pair_rank = [], []
     for src, owners in owners_from_source.items():
         hit_facet = np.nonzero(facet_vertex_source == src)[0].astype(np.int32)
@@ -1399,6 +1494,98 @@ def create_periodic_mesh(
     )
     new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim)
     return new_mesh, indicator_vertices, replacement_map
+
+
+def create_periodic_mesh(
+    mesh, indicator, mapping_function
+) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
+    """
+    Create a periodic mesh that takes all facets that satisfy the `indicator` function,
+    and map the vertices of these facets to the vertices that satisfies the mapping function.
+
+    Note:
+        The cell ownership does not change, only additional ghosts are added to a given process
+
+    Note:
+        The vertex ownership does not change, only additional ghosts are added to a given process
+
+    Note:
+        This is {py:func}`_match_vertices_geometric` followed by {py:func}`_build_periodic_mesh`.
+        Only the first half evaluates `indicator` and `mapping_function`; a reader that
+        knows the vertex pairs already, such as one for the ``$Periodic`` section of a gmsh
+        file, builds a {py:class}`VertexCorrespondence` and calls the second half directly.
+
+    Returns:
+        A tuple ``(new_mesh, replaced_vertices, replacement_map)`` where ``new_mesh`` is the new mesh with periodicity,
+        ``replaced_vertices`` is a list of vertices of the input mesh that has been replaced (local to process).
+        ``replacement_map`` is a map from the old vertices (local to process) to the new vertices (local to process).
+
+        Note:
+            This map does not contain additional ghost vertices added to the process that has taken over the facet or given away a facet.
+
+    Example:
+
+        .. code-block:: python
+        .. highlight:: python
+
+        mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 7, 19)
+        def indicator(x):
+            return numpy.isclose(x[1], 1)
+
+        def map(x):
+            values = x.copy()
+            values[1] -= 1
+            return values
+
+        periodic_mesh = create_periodic_mesh(mesh, indicator, map)
+    """
+    return _build_periodic_mesh(
+        mesh, _match_vertices_geometric(mesh, indicator, mapping_function)
+    )
+
+
+def create_periodic_mesh_from_gmsh(
+    mesh, slave_igi, master_igi, num_nodes_global
+) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
+    """Make `mesh` periodic from the node pairs of a gmsh ``$Periodic`` block.
+
+    The point of {py:class}`VertexCorrespondence` is that it is the seam between *finding* the
+    periodic pairs and *rebuilding* the mesh from them. Everything geometric -- the
+    indicator, the mapping function, the tolerance, the point searches -- lives on the
+    {py:func}`_match_vertices_geometric` side of it, and {py:func}`_build_periodic_mesh` sees only
+    the struct. So a reader that already knows the pairing, as gmsh does, fills the same
+    fields and reuses the rebuild unchanged: no `indicator`, no `mapping_function`, and
+    therefore no tolerance to tune and no risk of a snap onto the wrong vertex. It also
+    handles rotational and reflective periodicity, which the coordinate mapping can only
+    express if the caller writes the transform by hand.
+
+    Args:
+        mesh: The mesh read from the same gmsh model.
+        slave_igi, master_igi: Corresponding node pairs, as 0-based gmsh node tags, i.e.
+            values of ``mesh.geometry.input_global_indices``. Held on the reading rank
+            only; empty elsewhere. Every master must be a root -- a node that is not
+            itself a slave -- so chains through a corner have to be resolved first.
+        num_nodes_global: The number of nodes in the gmsh model. Not
+            ``mesh.geometry.index_map().size_global``, which is smaller when
+            ``create_mesh`` drops nodes no cell references.
+
+    Returns:
+        As {py:func}`create_periodic_mesh`.
+
+    Note:
+        ``$Periodic`` gives nodes, not facets, so `indicator_facets` has to be derived.
+        It follows exactly from `indicator_vertices`: the seam facets are the exterior
+        facets all of whose vertices are to be replaced, which is precisely the rule
+        `locate_entities_boundary` applies. Take the exterior facets from
+        `exterior_facet_indices` and broaden the result, rather than from a local "facet
+        with one incident cell" test -- one incident cell locally means the neighbour is
+        not ghosted, which is not the same as the facet being exterior, and the broadening
+        scatter would carry such a false positive to the owner instead of dropping it.
+    """
+    raise NotImplementedError(
+        "Reading the periodic pairs from gmsh is not implemented yet; build a"
+        " `VertexCorrespondence` and call `_build_periodic_mesh` directly."
+    )
 
 
 if __name__ == "__main__":

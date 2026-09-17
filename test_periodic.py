@@ -21,7 +21,7 @@ import ufl
 
 import dolfinx
 
-from script import create_periodic_mesh
+from script import _match_vertices_geometric, create_periodic_mesh
 
 
 def unit_square(n=8, offset=0.0):
@@ -367,7 +367,111 @@ def test_quadrilateral_4x4_doubly_periodic():
             " on the rebuilt periodic mesh: an interprocess facet is missing its ghost cell"
         )
 
-    jump = np.sqrt(
-        comm.allreduce(dolfinx.fem.assemble_scalar(jump_form), op=MPI.SUM)
-    )
+    jump = np.sqrt(comm.allreduce(dolfinx.fem.assemble_scalar(jump_form), op=MPI.SUM))
     assert jump < 1e-12, f"4x4 quad torus jumps by {jump:.3e}"
+
+
+# --------------------------------------------------------------------------- #
+# chain resolution: how many times the mapping may be re-applied
+# --------------------------------------------------------------------------- #
+
+
+def periodic_in(directions, *, per_direction):
+    """An indicator/mapping pair identifying x_d = 0 with x_d = 1 for each d.
+
+    With ``per_direction=False`` the mapping applies every offset that applies to the
+    point, so a corner reaches its root in one application. With ``per_direction=True`` it
+    applies only the first, so a corner needs one application per direction -- the case
+    that fixes how large `max_chain_length` has to be.
+    """
+
+    def indicator(x):
+        marked = np.zeros(x.shape[1], dtype=np.bool_)
+        for d in directions:
+            marked |= np.isclose(x[d], 0.0)
+        return marked
+
+    def mapping(x):
+        v = x.copy()
+        moved = np.zeros(x.shape[1], dtype=np.bool_)
+        for d in directions:
+            on_face = np.isclose(x[d], 0.0)
+            if per_direction:
+                on_face = on_face & ~moved
+                moved |= on_face
+            v[d] += on_face * 1.0
+        return v
+
+    return indicator, mapping
+
+
+def unit_cube(n=3):
+    return dolfinx.mesh.create_unit_cube(
+        MPI.COMM_WORLD, n, n, n, ghost_mode=dolfinx.mesh.GhostMode.shared_facet
+    )
+
+
+CHAIN_CASES = [
+    # (name, mesh factory, directions, per_direction, applications needed)
+    ("2d-single", unit_square, [0], False, 1),
+    ("2d-double-composed", unit_square, [0, 1], False, 1),
+    ("2d-double-per-direction", unit_square, [0, 1], True, 2),
+    ("3d-single", unit_cube, [0], False, 1),
+    ("3d-triple-composed", unit_cube, [0, 1, 2], False, 1),
+    ("3d-triple-per-direction", unit_cube, [0, 1, 2], True, 3),
+]
+
+
+@pytest.mark.parametrize(
+    "name,make_mesh,directions,per_direction,needed",
+    CHAIN_CASES,
+    ids=[c[0] for c in CHAIN_CASES],
+)
+def test_chain_length_bound_is_the_topological_dimension(
+    name, make_mesh, directions, per_direction, needed
+):
+    """`max_chain_length` defaults to `tdim`, which has to be exactly the bound.
+
+    A mapping applying one offset per call needs one application per periodic direction,
+    and a tdim-manifold admits at most tdim independent ones. This pins both halves: the
+    default must suffice for every legitimate mapping, and it must not be slack, or a
+    mapping that never terminates would be allowed extra rounds before being caught.
+
+    It is the *topological* dimension, not the geometric one -- a flat torus in R^3 has
+    gdim 3 and only two directions to be periodic in.
+    """
+    mesh = make_mesh()
+    indicator, mapping = periodic_in(directions, per_direction=per_direction)
+    tdim = mesh.topology.dim
+
+    assert needed <= tdim, f"{name} needs more applications than tdim allows"
+
+    # the default resolves the chain
+    _match_vertices_geometric(mesh, indicator, mapping)
+
+    # and so does exactly the number of applications this case needs
+    _match_vertices_geometric(mesh, indicator, mapping, max_chain_length=needed)
+
+    # one fewer does not: the bound is real, not decorative
+    if needed > 1:
+        with pytest.raises(RuntimeError, match="did not reach a vertex outside"):
+            _match_vertices_geometric(
+                mesh, indicator, mapping, max_chain_length=needed - 1
+            )
+
+
+def test_per_direction_corner_needs_one_application_per_direction():
+    """The worst legitimate case saturates the default exactly.
+
+    Together with the test above this is what licenses `tdim` as the default: the
+    per-direction mapping in the top dimension needs all of it and no more.
+    """
+    for make_mesh, directions in ((unit_square, [0, 1]), (unit_cube, [0, 1, 2])):
+        mesh = make_mesh()
+        indicator, mapping = periodic_in(directions, per_direction=True)
+        tdim = mesh.topology.dim
+        _match_vertices_geometric(mesh, indicator, mapping, max_chain_length=tdim)
+        with pytest.raises(RuntimeError, match="did not reach a vertex outside"):
+            _match_vertices_geometric(
+                mesh, indicator, mapping, max_chain_length=tdim - 1
+            )
