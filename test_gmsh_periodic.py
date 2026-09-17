@@ -359,7 +359,15 @@ def torus_invariants(periodic_mesh):
 
     V = dolfinx.fem.functionspace(periodic_mesh, ("DG", 1))
     u = dolfinx.fem.Function(V)
-    u.interpolate(lambda x: np.cos(2 * np.pi * x[0]) * np.cos(2 * np.pi * x[1]))
+
+    def periodic_field(x):
+        """Periodic under unit translation in every direction the mesh has."""
+        value = np.ones(x.shape[1])
+        for d in range(periodic_mesh.geometry.dim):
+            value = value * np.cos(2 * np.pi * x[d])
+        return value
+
+    u.interpolate(periodic_field)
     jump = np.sqrt(
         comm.allreduce(
             dolfinx.fem.assemble_scalar(dolfinx.fem.form(ufl.jump(u) ** 2 * ufl.dS)),
@@ -542,3 +550,130 @@ def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
     assert (num_vertices, bad) == (33, 0)
     assert np.isclose(volume, 1.0)
     assert jump < 1e-12
+
+
+def periodic_box(comm, res=1.0 / 4, low_is_slave=True):
+    """A distributed unit cube from gmsh, periodic in all three directions.
+
+    Surface tags of ``occ.addBox`` are 1 at x=0, 2 at x=1, 3 at y=0, 4 at y=1, 5 at z=0
+    and 6 at z=1 -- checked against the bounding boxes rather than assumed.
+
+    The default resolution is not arbitrary. At ``1/3`` the glued mesh is not a manifold:
+    206 cells, and 11 owned facets end up with other than two of them, the same way a 2x2
+    doubly periodic square fails because each cell meets its neighbour on both sides. The
+    pairing is still correct there -- the seam jump is 2e-15 -- so this is a property of
+    the mesh, not of the identification. From ``1/4`` on it is clean.
+
+    Returns:
+        ``(mesh, pairs)``, with `pairs` meaningful on rank 0 only.
+    """
+    if comm.rank == 0:
+        if not gmsh.isInitialized():
+            gmsh.initialize()
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add("periodic box")
+        gmsh.model.occ.addBox(0, 0, 0, 1.0, 1.0, 1.0)
+        gmsh.model.occ.synchronize()
+        low, high = (1, 3, 5), (2, 4, 6)
+        for direction in range(3):
+            shift = [0.0, 0.0, 0.0]
+            # gmsh stores the transform as master -> slave, so it points from the side
+            # that survives towards the side that is replaced.
+            shift[direction] = -1.0 if low_is_slave else 1.0
+            slave, master = (
+                ([low[direction]], [high[direction]])
+                if low_is_slave
+                else ([high[direction]], [low[direction]])
+            )
+            gmsh.model.mesh.setPeriodic(
+                2,
+                slave,
+                master,
+                [
+                    1,
+                    0,
+                    0,
+                    shift[0],
+                    0,
+                    1,
+                    0,
+                    shift[1],
+                    0,
+                    0,
+                    1,
+                    shift[2],
+                    0,
+                    0,
+                    0,
+                    1,
+                ],
+            )
+        gmsh.model.addPhysicalGroup(3, [1], 1)
+        gmsh.option.setNumber("Mesh.MeshSizeMin", res)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", res)
+        gmsh.model.mesh.generate(3)
+        pairs = extract_gmsh_periodic_nodes(gmsh.model)
+    else:
+        empty = np.zeros(0, dtype=np.int64)
+        pairs = GmshPeriodicNodes(empty, empty, 0)
+
+    mesh = _model_to_mesh(comm, 0, gdim=3)
+    if comm.rank == 0:
+        gmsh.finalize()
+    return mesh, pairs
+
+
+def test_gmsh_path_in_3d_builds_a_three_torus():
+    """A triply periodic cube, where the corner chain runs through three directions.
+
+    2D only ever exercises a two-hop chain and facets that are edges; here the corner at
+    the origin has to reach (1,1,1), and the seam facets are triangles.
+    """
+    comm = MPI.COMM_WORLD
+    mesh, pairs = periodic_box(comm)
+    correspondence = periodic_correspondence_from_nodes(mesh, pairs)
+    periodic_mesh, _, _ = script._build_periodic_mesh(mesh, correspondence)
+
+    num_vertices, volume, bad, jump = torus_invariants(periodic_mesh)
+    assert bad == 0, f"{bad} owned facet(s) do not carry two cells"
+    assert np.isclose(volume, 1.0)
+    assert jump < 1e-12, f"seam jumps by {jump:.3e}"
+
+    before = mesh.topology.index_map(0).size_global
+    num_slaves = comm.bcast(len(pairs.slave) if comm.rank == 0 else None, root=0)
+    assert num_vertices == before - num_slaves
+
+
+def test_gmsh_and_geometric_paths_agree_in_3d():
+    """The equivalence test in 3D, which is where the corner chain is longest.
+
+    The `mapping` applies every offset that applies to the point, so it reaches the root in
+    one call; gmsh records the same identification as three separate surface pairings that
+    the reader has to compose. That the two agree is the substance of this test.
+    """
+    comm = MPI.COMM_WORLD
+    mesh, pairs = periodic_box(comm, low_is_slave=True)
+
+    def indicator(x):
+        return np.isclose(x[0], 0.0) | np.isclose(x[1], 0.0) | np.isclose(x[2], 0.0)
+
+    def mapping(x):
+        v = x.copy()
+        for d in range(3):
+            v[d] += np.isclose(x[d], 0.0) * 1.0
+        return v
+
+    geometric = script._match_vertices_geometric(mesh, indicator, mapping)
+    from_gmsh = periodic_correspondence_from_nodes(mesh, pairs)
+
+    assert np.array_equal(
+        gathered_igi(mesh, geometric.indicator_vertices),
+        gathered_igi(mesh, from_gmsh.indicator_vertices),
+    ), "the two paths replace different vertices"
+    assert np.array_equal(
+        np.sort(geometric.indicator_facets), np.sort(from_gmsh.indicator_facets)
+    ), "the two paths disagree on the seam facets"
+
+    from_geometric, _, _ = script._build_periodic_mesh(mesh, geometric)
+    from_pairs, _, _ = script._build_periodic_mesh(mesh, from_gmsh)
+    assert torus_invariants(from_geometric)[:3] == torus_invariants(from_pairs)[:3]

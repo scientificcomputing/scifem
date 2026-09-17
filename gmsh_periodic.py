@@ -26,6 +26,7 @@ from mpi4py import MPI
 import dolfinx
 
 import script
+from script import broadcast_marked_entities
 
 
 @dataclasses.dataclass
@@ -297,12 +298,22 @@ def _vertices_that_can_be_paired(mesh):
     # read each vertex's node from.
     mesh.topology.create_connectivity(0, tdim)
     mesh.topology.create_connectivity(tdim, 0)
-    boundary_facets = script.broadcast_marked_entities(
+    boundary_facets = broadcast_marked_entities(
         mesh, tdim - 1, dolfinx.mesh.exterior_facet_indices(mesh.topology)
     )
-    vertices = dolfinx.mesh.compute_incident_entities(
-        mesh.topology, boundary_facets, tdim - 1, 0
-    ).astype(np.int32)
+    # A process can hold a copy of a boundary vertex without holding any boundary facet at
+    # it -- it may ghost a cell at the vertex whose own facets there are all interior --
+    # and it still has to register, or the fan-out will not reach it and it will disagree
+    # with the others about which vertices are replaced. Broadcasting the set closes that:
+    # the processes that do see a boundary facet mark the vertex, and the reduce-then-
+    # scatter carries the mark to every holder.
+    vertices = broadcast_marked_entities(
+        mesh,
+        0,
+        dolfinx.mesh.compute_incident_entities(
+            mesh.topology, boundary_facets, tdim - 1, 0
+        ).astype(np.int32),
+    )
     nodes = dolfinx.mesh.entities_to_geometry(mesh, 0, vertices).reshape(-1)
     return vertices, mesh.geometry.input_global_indices[nodes].astype(np.int64)
 
@@ -349,7 +360,7 @@ def _seam_facets_from_vertices(mesh, indicator_vertices):
         ).reshape(-1)
     ].reshape(len(exterior), num_facet_vertices)
     on_seam = exterior[is_indicator[facet_vertices].all(axis=1)]
-    return script.broadcast_marked_entities(mesh, tdim - 1, on_seam)
+    return broadcast_marked_entities(mesh, tdim - 1, on_seam)
 
 
 def periodic_correspondence_from_nodes(

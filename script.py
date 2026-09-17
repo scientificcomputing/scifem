@@ -501,9 +501,17 @@ def _reduced_vertex_map(mesh, indicator_vertices):
     """
     vertex_map = mesh.topology.index_map(0)
     num_vertices_local = vertex_map.size_local + vertex_map.num_ghosts
+
+    # The removed set has to be the same on every process that holds the vertex, or
+    # `create_sub_index_map` moves ownership of what is left. Broadcast what is *removed*,
+    # not what is kept: a vertex goes if any holder says so, which is a union, and that is
+    # what the reduce-then-scatter computes. Marking the kept ones instead would take the
+    # union of the keeps and so hold on to a vertex any one process wanted gone.
+    # A no-op when the caller has already broadcast, which the geometric path has.
+    removed = broadcast_marked_entities(mesh, 0, indicator_vertices)
     keep_vertices = np.ones(num_vertices_local, dtype=np.bool_)
-    keep_vertices[indicator_vertices] = False
-    reduced_vertices = np.flatnonzero(keep_vertices)
+    keep_vertices[removed] = False
+    reduced_vertices = np.flatnonzero(keep_vertices).astype(np.int32)
     # Compat: 0.12 moved `create_sub_index_map` to `dolfinx.common` and made it report
     # ownership changes instead of taking a flag. Once only that form is supported the
     # branch goes away and this function is the four lines around the call.
