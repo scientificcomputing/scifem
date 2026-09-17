@@ -568,6 +568,6 @@ def read_periodic_mesh_from_msh(
             gmsh.finalize()
 
     mesh = getattr(mesh_data, "mesh", mesh_data)
-    return script._build_periodic_mesh(
-        mesh, periodic_correspondence_from_nodes(mesh, pairs, root=rank)
+    return script.create_periodic_mesh_from_gmsh(
+        mesh, pairs.slave, pairs.master, pairs.num_nodes_global, root=rank
     )

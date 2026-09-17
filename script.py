@@ -1691,46 +1691,53 @@ def create_periodic_mesh(
 
 
 def create_periodic_mesh_from_gmsh(
-    mesh, slave_igi, master_igi, num_nodes_global
+    mesh, slave_igi, master_igi, num_nodes_global, root: int = 0
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
     """Make `mesh` periodic from the node pairs of a gmsh ``$Periodic`` block.
 
-    The point of {py:class}`VertexCorrespondence` is that it is the seam between *finding* the
-    periodic pairs and *rebuilding* the mesh from them. Everything geometric -- the
+    The point of {py:class}`VertexCorrespondence` is that it is the seam between *finding*
+    the periodic pairs and *rebuilding* the mesh from them. Everything geometric -- the
     indicator, the mapping function, the tolerance, the point searches -- lives on the
-    {py:func}`_match_vertices_geometric` side of it, and {py:func}`_build_periodic_mesh` sees only
-    the struct. So a reader that already knows the pairing, as gmsh does, fills the same
-    fields and reuses the rebuild unchanged: no `indicator`, no `mapping_function`, and
-    therefore no tolerance to tune and no risk of a snap onto the wrong vertex. It also
-    handles rotational and reflective periodicity, which the coordinate mapping can only
-    express if the caller writes the transform by hand.
+    {py:func}`_match_vertices_geometric` side of it, and {py:func}`_build_periodic_mesh`
+    sees only the struct. So a reader that already knows the pairing, as gmsh does, fills
+    the same fields and reuses the rebuild unchanged: no `indicator`, no
+    `mapping_function`, and therefore no tolerance to tune and no risk of a snap onto the
+    wrong vertex. It also handles rotational and reflective periodicity, which the
+    coordinate mapping can only express if the caller writes the transform by hand.
+
+    Collective.
 
     Args:
-        mesh: The mesh read from the same gmsh model.
-        slave_igi, master_igi: Corresponding node pairs, as 0-based gmsh node tags, i.e.
-            values of ``mesh.geometry.input_global_indices``. Held on the reading rank
-            only; empty elsewhere. Every master must be a root -- a node that is not
-            itself a slave -- so chains through a corner have to be resolved first.
+        mesh: The mesh read from the same gmsh model, so that
+            ``mesh.geometry.input_global_indices`` is the node numbering the pairs use.
+        slave_igi, master_igi: Corresponding node pairs, as 0-based gmsh node tags. Held
+            on `root` only; ignored elsewhere. Every master must be a root -- a node that
+            is not itself a slave -- so chains through a corner have to be resolved first,
+            which {py:func}`gmsh_periodic.extract_gmsh_periodic_nodes` does.
         num_nodes_global: The number of nodes in the gmsh model. Not
             ``mesh.geometry.index_map().size_global``, which is smaller when
             ``create_mesh`` drops nodes no cell references.
+        root: The rank holding the pairs.
 
     Returns:
         As {py:func}`create_periodic_mesh`.
 
     Note:
-        ``$Periodic`` gives nodes, not facets, so `indicator_facets` has to be derived.
-        It follows exactly from `indicator_vertices`: the seam facets are the exterior
-        facets all of whose vertices are to be replaced, which is precisely the rule
-        `locate_entities_boundary` applies. Take the exterior facets from
-        `exterior_facet_indices` and broaden the result, rather than from a local "facet
-        with one incident cell" test -- one incident cell locally means the neighbour is
-        not ghosted, which is not the same as the facet being exterior, and the broadening
-        scatter would carry such a false positive to the owner instead of dropping it.
+        To go straight from a ``.msh`` file, use
+        {py:func}`gmsh_periodic.read_periodic_mesh_from_msh`, which reads the pairs out of
+        the model before the reader finalizes it.
     """
-    raise NotImplementedError(
-        "Reading the periodic pairs from gmsh is not implemented yet; build a"
-        " `VertexCorrespondence` and call `_build_periodic_mesh` directly."
+    # Imported here rather than at module scope: `gmsh_periodic` builds the correspondence
+    # this module consumes, so it imports `script`, and a top-level import would cycle.
+    import gmsh_periodic
+
+    pairs = gmsh_periodic.GmshPeriodicNodes(
+        np.asarray(slave_igi, dtype=np.int64),
+        np.asarray(master_igi, dtype=np.int64),
+        int(num_nodes_global),
+    )
+    return _build_periodic_mesh(
+        mesh, gmsh_periodic.periodic_correspondence_from_nodes(mesh, pairs, root=root)
     )
 
 

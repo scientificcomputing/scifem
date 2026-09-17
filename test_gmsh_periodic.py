@@ -253,6 +253,7 @@ import script  # noqa: E402
 from gmsh_periodic import (  # noqa: E402
     GmshPeriodicNodes,
     periodic_correspondence_from_nodes,
+    read_periodic_mesh_from_msh,
 )
 
 
@@ -474,3 +475,70 @@ def test_gmsh_path_replaces_the_same_vertices_as_the_geometric_path():
     from_geometric, _, _ = script._build_periodic_mesh(mesh, geometric)
     from_pairs, _, _ = script._build_periodic_mesh(mesh, from_gmsh)
     assert torus_invariants(from_geometric)[:3] == torus_invariants(from_pairs)[:3]
+
+
+def test_public_entry_point_matches_the_pieces_it_composes():
+    """`create_periodic_mesh_from_gmsh` is the two halves, and has to stay that."""
+    comm = MPI.COMM_WORLD
+    mesh, pairs = periodic_square(comm)
+    expected, _, _ = script._build_periodic_mesh(
+        mesh, periodic_correspondence_from_nodes(mesh, pairs)
+    )
+    got, _, _ = script.create_periodic_mesh_from_gmsh(
+        mesh, pairs.slave, pairs.master, pairs.num_nodes_global
+    )
+    assert torus_invariants(got)[:3] == torus_invariants(expected)[:3]
+
+
+def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
+    """Straight from a file on disk, which is how a caller would actually use this.
+
+    The path is chosen on rank 0 and broadcast: under MPI every process has its own
+    ``tmp_path``, so letting each pick its own would have them writing and reading
+    different files.
+    """
+    comm = MPI.COMM_WORLD
+    filename = comm.bcast(str(tmp_path / "periodic.msh") if comm.rank == 0 else None, 0)
+
+    if comm.rank == 0:
+        if not gmsh.isInitialized():
+            gmsh.initialize()
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add("to file")
+        gmsh.model.occ.addRectangle(0, 0, 0, 1.0, 1.0)
+        gmsh.model.occ.synchronize()
+        gmsh.model.mesh.setPeriodic(
+            1, [2], [4], [1, 0, 0, 1.0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+        )
+        gmsh.model.mesh.setPeriodic(
+            1, [3], [1], [1, 0, 0, 0, 0, 1, 0, 1.0, 0, 0, 1, 0, 0, 0, 0, 1]
+        )
+        gmsh.model.addPhysicalGroup(2, [1], 1)
+        gmsh.option.setNumber("Mesh.MeshSizeMin", 1.0 / 5)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", 1.0 / 5)
+        gmsh.model.mesh.generate(2)
+        gmsh.write(filename)
+        gmsh.finalize()
+    comm.Barrier()
+
+    ghost_mode = dolfinx.mesh.GhostMode.shared_facet
+    if "ghost_mode" in inspect.signature(dolfinx.io.gmsh.model_to_mesh).parameters:
+        kwargs = {"ghost_mode": ghost_mode}
+    else:
+        part_sig = inspect.signature(dolfinx.mesh.create_cell_partitioner)
+        part_kwargs = (
+            {"max_facet_to_cell_links": 2}
+            if "max_facet_to_cell_links" in part_sig.parameters
+            else {}
+        )
+        kwargs = {
+            "partitioner": dolfinx.mesh.create_cell_partitioner(
+                ghost_mode, **part_kwargs
+            )
+        }
+    periodic_mesh, _, _ = read_periodic_mesh_from_msh(filename, comm, gdim=2, **kwargs)
+
+    num_vertices, volume, bad, jump = torus_invariants(periodic_mesh)
+    assert (num_vertices, bad) == (33, 0)
+    assert np.isclose(volume, 1.0)
+    assert jump < 1e-12
