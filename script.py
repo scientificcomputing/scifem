@@ -51,7 +51,7 @@ def transfer_meshtags_to_periodic_mesh(
         values = []
         for entity, value in zip(meshtags.indices, meshtags.values):
             # Keep entities with at least one retained vertex.
-            if not np.allclose(new_adj.links(entity), -1):
+            if np.any(new_adj.links(entity) != -1):
                 indices.append(entity)
                 values.append(value)
         indices = np.array(indices, dtype=np.int32)
@@ -62,12 +62,17 @@ def transfer_meshtags_to_periodic_mesh(
     geom_indices = dolfinx.mesh.entities_to_geometry(mesh, meshtags.dim, indices)
     igi_indices = mesh.geometry.input_global_indices[geom_indices]
 
+    periodic_mesh.topology.create_connectivity(
+        mesh.topology.dim, 0
+    )  # This should exist by default
+    periodic_mesh.topology.create_entities(meshtags.dim)  # This has to be created
+    periodic_mesh.geometry.create_connectivity(
+        meshtags.dim, 0
+    )  # This is requried before distribute entity data
     local_entities, local_values = dolfinx.io.distribute_entity_data(
         periodic_mesh, meshtags.dim, igi_indices, values
     )
-    periodic_mesh.topology.create_connectivity(mesh.topology.dim, 0)
     adj = dolfinx.graph.adjacencylist(local_entities)
-    periodic_mesh.topology.create_entities(meshtags.dim)
     return dolfinx.mesh.meshtags_from_entities(
         periodic_mesh, meshtags.dim, adj, local_values.astype(np.int32, copy=False)
     )
@@ -91,14 +96,22 @@ def all_to_allv(comm, send_data, num_send_data, recv_data, num_recv_data):
 
 
 def all_to_all(comm, send_data, recv_data):
-    """Workaround for openmpi #14452 (https://github.com/open-mpi/ompi/issues/14452).
-
+    """
     Exchange a single item with each neighbor in a distributed graph communicator.
 
     Note:
-        The count is passed explicitly. Left implicit, mpi4py derives it as
-        ``buffer size // degree``, which is ill-defined for a process with no
-        sources or no destinations and raises ``MPI_ERR_TRUNCATE`` under Open MPI.
+        The count is passed explicitly, and is 1 on every process. MPI-4.1 9.6.2 requires
+        the type signature of ``sendcount``/``sendtype`` at a process to equal that of
+        ``recvcount``/``recvtype`` at *any other* process in the communicator, not just at
+        its neighbors, so the count must be identical on every process whatever its degree.
+        Left implicit, mpi4py derives it as ``buffer size // degree`` and falls back to the
+        whole buffer when the degree is zero, making it rank-local: 1 where the degree is
+        nonzero, 0 where it is zero. Such a call is erroneous; Open MPI rejects it with
+        ``MPI_ERR_TRUNCATE`` while MPICH happens to accept it. See
+        https://github.com/open-mpi/ompi/issues/14452 for the discussion.
+
+        ``all_to_allv`` is not affected: the vector variant is only required to match
+        pairwise along each edge, so per-process counts may legitimately differ there.
     """
     dtype = mpi_dtype[send_data.dtype.type]
     assert recv_data.dtype == send_data.dtype, (
@@ -326,7 +339,28 @@ def create_periodic_mesh(
         ).reshape(-1)
     owned_vertex_coords = mesh.geometry.x[geom_index]
 
-    eps = 10000 * np.finfo(mesh.geometry.x.dtype).eps
+    # A geometric tolerance has to be a length. `np.finfo(...).eps` describes relative
+    # precision near 1.0, so as an absolute padding it stops meaning anything once the mesh
+    # sits away from the origin: at coordinates around 1e6 a single representable double is
+    # already 1.2e-10, larger than 10000 * eps. Take a small fraction of the smallest cell
+    # instead, floored by the rounding error of the coordinates themselves, which grows with
+    # distance from the origin.
+    _cell_map = mesh.topology.index_map(mesh.topology.dim)
+    _cell_sizes = dolfinx.cpp.mesh.h(
+        mesh._cpp_object,
+        mesh.topology.dim,
+        np.arange(_cell_map.size_local + _cell_map.num_ghosts, dtype=np.int32),
+    )
+    h_min = comm.allreduce(
+        _cell_sizes.min() if _cell_sizes.size else np.inf, op=MPI.MIN
+    )
+    coord_scale = comm.allreduce(
+        np.abs(mesh.geometry.x).max() if mesh.geometry.x.size else 0.0, op=MPI.MAX
+    )
+    eps = max(
+        1e-6 * h_min,
+        100 * np.finfo(mesh.geometry.x.dtype).eps * max(1.0, coord_scale),
+    )
 
     # Map vertices to new coordinates
     mapped_vertex_coords = mapping_function(owned_vertex_coords.T).T
@@ -354,8 +388,42 @@ def create_periodic_mesh(
         acquired_vertex_coords,
     )
 
-    # Map all vertices that exist on the process to its global index
-    assert (parent_to_sub[closest_vertex] != -1).all(), "Closest vertex not in submap"
+    # Check that the mapped point actually landed on the vertex it snapped to.
+    # `compute_closest_entity` returns the closest vertex among the candidates whether or
+    # not it is anywhere near the query point, so without this a `mapping_function` that is
+    # wrong by a whole cell still yields a structurally valid mesh -- same vertex and cell
+    # counts, same volume -- that simply is not periodic.
+    closest_vertex_coords = mesh.geometry.x[
+        dolfinx.mesh.entities_to_geometry(mesh, 0, closest_vertex).reshape(-1)
+    ]
+    snap_distance = np.linalg.norm(
+        closest_vertex_coords - acquired_vertex_coords, axis=1
+    )
+    num_unsnapped = int(np.count_nonzero(snap_distance > eps))
+    # Collective: the condition is reduced so that either every process raises or none
+    # does. A one-sided raise would leave the others blocked in the exchanges below.
+    total_unsnapped = comm.allreduce(num_unsnapped, op=MPI.SUM)
+    if total_unsnapped > 0:
+        worst = comm.allreduce(float(np.max(snap_distance, initial=0.0)), op=MPI.MAX)
+        raise RuntimeError(
+            f"`mapping_function` did not map {total_unsnapped} vertices onto a vertex of"
+            f" the mesh; the largest gap between a mapped point and the closest vertex is"
+            f" {worst:.3e}. Every mapped point has to land on the vertex it is meant to be"
+            " identified with, otherwise the result is a mesh with the expected vertex and"
+            " cell counts that is not periodic."
+        )
+
+    # Map all vertices that exist on the process to its global index.
+    # Collective, like the check above: a one-sided raise here leaves the other ranks
+    # blocked in the exchanges below rather than reporting the error.
+    num_replaced_masters = int(np.count_nonzero(parent_to_sub[closest_vertex] == -1))
+    if comm.allreduce(num_replaced_masters, op=MPI.SUM) > 0:
+        raise AssertionError(
+            "Closest vertex not in submap: a vertex was mapped onto another vertex that"
+            " `indicator` also selects, so the master has itself been removed. Under"
+            " periodicity in several directions the mapping has to carry a corner vertex"
+            " all the way to its root, applying every offset that applies to it."
+        )
 
     # Map the closest vertex to its global index in the reduced submap
     global_vertices = sub_map_without_ghosts.local_to_global(
@@ -744,7 +812,6 @@ def create_periodic_mesh(
         mesh, mesh.topology.dim - 1, indicator_facets
     )
     mapping_facet_midpoints = mapping_function(facet_midpoints.T).T
-    eps = 1000 * np.finfo(mesh.geometry.x.dtype).eps
     mapped_midpoint_owner = dolfinx.geometry.determine_point_ownership(
         mesh, mapping_facet_midpoints, padding=eps
     )
