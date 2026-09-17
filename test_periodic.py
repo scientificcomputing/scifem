@@ -203,12 +203,13 @@ def test_doubly_periodic_mesh_is_periodic():
     assert jump < 1e-12, f"doubly periodic mesh jumps by {jump:.3e}"
 
 
-def test_per_direction_corner_mapping_is_rejected():
-    """The same domain with each offset applied on its own.
+def test_per_direction_corner_mapping_resolves_to_the_same_mesh():
+    """Each offset applied on its own, which sends the corner onto another slave.
 
-    The corner then maps onto another slave vertex, which has already been removed from
-    the reduced index map. This documents that corner handling is the caller's
-    responsibility -- it is not something `create_periodic_mesh` arranges.
+    The corner (0,0) maps to (1,0), which `indicator` also selects, so its master has
+    already been removed from the reduced index map. `create_periodic_mesh` follows the
+    mapping again, reaching (1,1), and the result is the same torus the composed mapping
+    gives. Corner handling is not the caller's problem.
     """
     n = 8
     mesh = unit_square(n)
@@ -229,5 +230,65 @@ def test_per_direction_corner_mapping_is_rejected():
         v[1] += (~on_x & i_y(x)) * 1.0
         return v
 
-    with pytest.raises(AssertionError, match="Closest vertex not in submap"):
+    pm, _, _ = create_periodic_mesh(mesh, indicator, mapping)
+
+    assert pm.topology.index_map(0).size_global == n * n
+    assert np.isclose(volume(pm), 1.0)
+    jump = seam_jump(pm, lambda x: np.cos(2 * np.pi * x[0]) * np.cos(2 * np.pi * x[1]))
+    assert jump < 1e-12, f"chain-resolved mapping jumps by {jump:.3e}"
+
+
+def test_cyclic_mapping_is_rejected():
+    """A mapping that never leaves `indicator` has to stop, not spin."""
+    n = 4
+    mesh = unit_square(n)
+
+    def indicator(x):
+        return np.isclose(x[0], 0.0) | np.isclose(x[0], 1.0)
+
+    def mapping(x):
+        # swaps the two sides forever: neither image is ever outside `indicator`
+        v = x.copy()
+        v[0] = np.where(np.isclose(x[0], 0.0), 1.0, 0.0)
+        return v
+
+    with pytest.raises(RuntimeError, match="did not reach a vertex outside"):
         create_periodic_mesh(mesh, indicator, mapping)
+
+
+def test_quadrilateral_corner_cell():
+    """A quad corner cell carries an indicator facet on x=0 *and* on y=0.
+
+    The cell-per-facet packing has to stay indexed by facet: there are more indicator
+    facets than distinct incident cells, so collapsing to the unique set of cells breaks
+    the alignment.
+    """
+    n = 4
+    mesh = dolfinx.mesh.create_unit_square(
+        MPI.COMM_WORLD,
+        n,
+        n,
+        cell_type=dolfinx.mesh.CellType.quadrilateral,
+        ghost_mode=dolfinx.mesh.GhostMode.shared_facet,
+    )
+
+    def i_x(x):
+        return np.isclose(x[0], 0.0)
+
+    def i_y(x):
+        return np.isclose(x[1], 0.0)
+
+    def indicator(x):
+        return i_x(x) | i_y(x)
+
+    def mapping(x):
+        v = x.copy()
+        v[0] += i_x(x) * 1.0
+        v[1] += i_y(x) * 1.0
+        return v
+
+    pm, _, _ = create_periodic_mesh(mesh, indicator, mapping)
+    assert pm.topology.index_map(0).size_global == n * n
+    assert np.isclose(volume(pm), 1.0)
+    jump = seam_jump(pm, lambda x: np.cos(2 * np.pi * x[0]) * np.cos(2 * np.pi * x[1]))
+    assert jump < 1e-12, f"quad torus jumps by {jump:.3e}"

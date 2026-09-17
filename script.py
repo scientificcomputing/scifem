@@ -363,7 +363,31 @@ def create_periodic_mesh(
     )
 
     # Map vertices to new coordinates
-    mapped_vertex_coords = mapping_function(owned_vertex_coords.T).T
+    mapped_vertex_coords = np.ascontiguousarray(
+        mapping_function(owned_vertex_coords.T).T
+    )
+
+    # Follow the mapping to a root. With periodicity in more than one direction a slave
+    # vertex can map onto another slave -- the corner of a doubly periodic box is the
+    # standard case -- and that master has itself been removed from the reduced index map.
+    # Re-applying the mapping until the image is no longer selected by `indicator` resolves
+    # the chain, so the caller does not have to compose the offsets by hand.
+    # The loop is collective: the termination test is reduced, so every process runs the
+    # same number of iterations.
+    max_chain_length = 16
+    for _ in range(max_chain_length):
+        still_slave = np.asarray(indicator(mapped_vertex_coords.T), dtype=np.bool_)
+        if comm.allreduce(int(np.count_nonzero(still_slave)), op=MPI.SUM) == 0:
+            break
+        mapped_vertex_coords[still_slave] = mapping_function(
+            mapped_vertex_coords[still_slave].T
+        ).T
+    else:
+        raise RuntimeError(
+            f"`mapping_function` did not reach a vertex outside `indicator` within"
+            f" {max_chain_length} applications. Either the two functions disagree, or the"
+            " mapping cycles: a slave vertex is mapped onto another slave that maps back."
+        )
 
     # For each vertex that will be replaced, find which process should take it over
     vertex_ownership_data = dolfinx.geometry.determine_point_ownership(
@@ -529,8 +553,19 @@ def create_periodic_mesh(
         mapped_vertex_coords.shape[0], -1, dtype=np.int64
     )
     global_replacement_owner[dest_ranks_to_current] = recv_replacement_owner
-    assert (global_replacement_vertex != -1).all()
-    assert (global_replacement_owner != -1).all()
+    # Collective, and explicit about the cause: a -1 here means the mapped point was not
+    # found in any cell of the mesh, i.e. `mapping_function` moved it outside the domain.
+    num_unowned = int(
+        np.count_nonzero(
+            (global_replacement_vertex == -1) | (global_replacement_owner == -1)
+        )
+    )
+    if comm.allreduce(num_unowned, op=MPI.SUM) > 0:
+        raise RuntimeError(
+            f"{comm.allreduce(num_unowned, op=MPI.SUM)} mapped vertices were not found in"
+            " any cell of the mesh. `mapping_function` has to land inside the domain; a"
+            " point that leaves it has no owner and no replacement vertex."
+        )
     # print(MPI.COMM_WORLD.rank, global_replacement_vertex, global_replacement_owner)
     # Set up ownership structure of cells, nodes and vertices on the process
     cell_map = mesh.topology.index_map(mesh.topology.dim)
@@ -817,9 +852,22 @@ def create_periodic_mesh(
     )
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+    # One cell per indicator facet. `locate_entities_boundary` returns exterior facets and
+    # exteriority is a global property, so the scatter that broadens `indicator_facets`
+    # preserves it -- but the packing below is indexed per facet, so check rather than
+    # assume. Taking the unique set of incident cells instead would break that indexing
+    # wherever one cell carries two indicator facets, e.g. a corner cell of a quad mesh.
+    cells_per_facet = (
+        f_to_c.offsets[indicator_facets + 1] - f_to_c.offsets[indicator_facets]
+    )
+    num_interior = int(np.count_nonzero(cells_per_facet != 1))
+    if comm.allreduce(num_interior, op=MPI.SUM) > 0:
+        raise RuntimeError(
+            f"{comm.allreduce(num_interior, op=MPI.SUM)} facets selected by `indicator`"
+            " are not exterior. Periodicity can only identify boundary facets, so every"
+            " facet `indicator` selects must have exactly one incident cell."
+        )
     cells_losing_vertex = f_to_c.array[f_to_c.offsets[indicator_facets]]
-    assert (cells_losing_vertex > -1).all()
-    assert (cells_losing_vertex < cell_map.size_local + cell_map.num_ghosts).all()
     cells_losing_vertex_gl = cell_map.local_to_global(cells_losing_vertex)
 
     # Pack dofmap for each of these cells, replacing the vertices that are removed with mapped vertices
