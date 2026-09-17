@@ -727,6 +727,56 @@ def _number_new_ghosts(index_map, global_indices, *payloads):
     return local, new_ghosts, missing[pos], tuple(gathered)
 
 
+def _compat_topology(
+    comm, cell_type, tdim, vertex_map, cell_map, c_to_v, v_to_v, original_cell_index
+):
+    """Construct a ``dolfinx.cpp.mesh.Topology`` across the supported DOLFINx versions.
+
+    The constructor has changed shape more than once and none of the forms is
+    introspectable, so they are told apart by the `TypeError` the call itself raises:
+
+    1. communicator and cell type only, everything else through setters;
+    2. the same with the maps, dofmap and original cell index passed positionally;
+    3. as (2) without the communicator.
+
+    Args:
+        comm: The communicator of the new topology.
+        cell_type: Its cell type.
+        tdim: Its topological dimension, for the index map and connectivity it is set at.
+        vertex_map: Index map for dimension 0.
+        cell_map: Index map for dimension `tdim`.
+        c_to_v: Cell-to-vertex connectivity, in the local numbering of `vertex_map`.
+        v_to_v: Vertex-to-vertex connectivity, i.e. the identity over `vertex_map`. Used
+            by form (1) only, which cannot derive it.
+        original_cell_index: Input global index of each cell. Used by forms (2) and (3),
+            which take it directly; form (1) does not accept it.
+
+    Returns:
+        The topology, with both index maps and both connectivities set.
+    """
+    try:
+        topology = dolfinx.cpp.mesh.Topology(comm, cell_type)
+        topology.set_index_map(0, vertex_map)
+        topology.set_index_map(tdim, cell_map)
+        topology.set_connectivity(v_to_v, 0, 0)
+        topology.set_connectivity(c_to_v, tdim, 0)
+        return topology
+    except TypeError:
+        pass
+
+    args = (
+        cell_type,
+        _extract_cpp_object(vertex_map),
+        _extract_cpp_object(cell_map),
+        _extract_cpp_object(c_to_v),
+        original_cell_index,
+    )
+    try:
+        return dolfinx.cpp.mesh.Topology(comm, *args)
+    except TypeError:
+        return dolfinx.cpp.mesh.Topology(*args)
+
+
 def _build_periodic_mesh(
     mesh, correspondence: VertexCorrespondence
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
@@ -1495,40 +1545,16 @@ def _build_periodic_mesh(
         new_c_to_v.array < new_vertex_map.size_local + new_vertex_map.num_ghosts
     ).all(), "Cell to vertex map is out of bounds"
 
-    try:
-        topology = dolfinx.cpp.mesh.Topology(comm, mesh.topology.cell_type)
-        topology.set_index_map(0, new_vertex_map)
-        topology.set_index_map(mesh.topology.dim, new_cell_map)
-        topology.set_connectivity(new_v_to_v, 0, 0)
-        topology.set_connectivity(new_c_to_v, mesh.topology.dim, 0)
-    except TypeError:
-        try:
-            topology = dolfinx.cpp.mesh.Topology(
-                comm,
-                mesh.topology.cell_type,
-                _extract_cpp_object(new_vertex_map),
-                _extract_cpp_object(new_cell_map),
-                _extract_cpp_object(new_c_to_v),
-                all_cell_oci,
-            )
-        except TypeError:
-            try:
-                topology = dolfinx.cpp.mesh.Topology(
-                    comm,
-                    mesh.topology.cell_type,
-                    _extract_cpp_object(new_vertex_map),
-                    _extract_cpp_object(new_cell_map),
-                    _extract_cpp_object(new_c_to_v),
-                    all_cell_oci,
-                )
-            except TypeError:
-                topology = dolfinx.cpp.mesh.Topology(
-                    mesh.topology.cell_type,
-                    _extract_cpp_object(new_vertex_map),
-                    _extract_cpp_object(new_cell_map),
-                    _extract_cpp_object(new_c_to_v),
-                    all_cell_oci,
-                )
+    topology = _compat_topology(
+        comm,
+        mesh.topology.cell_type,
+        mesh.topology.dim,
+        new_vertex_map,
+        new_cell_map,
+        new_c_to_v,
+        new_v_to_v,
+        all_cell_oci,
+    )
     c_el = dolfinx.fem.coordinate_element(
         mesh._ufl_domain.ufl_coordinate_element().basix_element
     )
