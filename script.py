@@ -479,6 +479,83 @@ def _match_vertices_geometric(
     )
 
 
+def _reduced_vertex_map(mesh, indicator_vertices):
+    """The vertex index map of `mesh` with the replaced vertices taken out.
+
+    Args:
+        mesh: The mesh being made periodic.
+        indicator_vertices: Local vertices that are to be replaced by their partner.
+
+    Returns:
+        ``(sub_map, parent_to_sub)``: the reduced index map, and the map from a local
+        vertex of `mesh` to its index in `sub_map`, ``-1`` at the removed vertices.
+
+    Raises:
+        RuntimeError: If removing the vertices would move ownership of another vertex,
+            which the rest of the algorithm assumes does not happen.
+    """
+    vertex_map = mesh.topology.index_map(0)
+    num_vertices_local = vertex_map.size_local + vertex_map.num_ghosts
+    keep_vertices = np.ones(num_vertices_local, dtype=np.bool_)
+    keep_vertices[indicator_vertices] = False
+    reduced_vertices = np.flatnonzero(keep_vertices)
+    # Compat: 0.12 moved `create_sub_index_map` to `dolfinx.common` and made it report
+    # ownership changes instead of taking a flag. Once only that form is supported the
+    # branch goes away and this function is the four lines around the call.
+    if hasattr(dolfinx.common, "create_sub_index_map"):
+        sub_map, sub_to_parent, changed_owner = dolfinx.common.create_sub_index_map(
+            vertex_map, reduced_vertices
+        )
+        if vertex_map.comm.allreduce(changed_owner, op=MPI.LOR):
+            raise RuntimeError(
+                "Vertex ownership has changed, which is not supported. "
+                "Please report this issue to the dolfinx developers."
+            )
+    else:
+        sub_map, sub_to_parent = dolfinx.cpp.common.create_sub_index_map(
+            vertex_map, reduced_vertices, allow_owner_change=False
+        )
+
+    parent_to_sub = np.full(num_vertices_local, -1, dtype=np.int32)
+    parent_to_sub[sub_to_parent] = np.arange(sub_to_parent.size, dtype=np.int32)
+    return sub_map, parent_to_sub
+
+
+def _partner_in_reduced_map(comm, sub_map, parent_to_sub, partner_vertex):
+    """Where each partner vertex sits in the reduced map, and who owns it.
+
+    Args:
+        comm: The mesh communicator. The membership check below is collective.
+        sub_map: The reduced vertex map from :func:`_reduced_vertex_map`.
+        parent_to_sub: Its index map, as returned alongside it.
+        partner_vertex: Local vertices that replace the ones other processes gave up.
+
+    Returns:
+        ``(global_vertices, owners)``, both indexed like `partner_vertex`: the global
+        index of each partner in `sub_map`, and the rank owning it.
+
+    Raises:
+        AssertionError: If a partner vertex is itself marked for replacement, so that the
+            reduced map no longer contains it.
+    """
+    sub_partner_vertex = parent_to_sub[partner_vertex]
+
+    # Collective, so that either every process raises or none does. A one-sided raise
+    # would leave the others blocked in the exchanges that follow.
+    num_missing_replacements = int(np.count_nonzero(sub_partner_vertex == -1))
+    if comm.allreduce(num_missing_replacements, op=MPI.SUM) > 0:
+        raise AssertionError(
+            "Partner vertex not in submap: a vertex was paired with another vertex that"
+            " is itself marked for replacement, so the replacement has been removed too."
+            " Under periodicity in several directions the pairing has to carry a corner"
+            " vertex all the way to its root, applying every offset that applies to it."
+        )
+
+    global_vertices = sub_map.local_to_global(sub_partner_vertex).astype(np.int64)
+    owners = get_ownership(sub_map)[sub_partner_vertex].copy()
+    return global_vertices, owners
+
+
 def _build_periodic_mesh(
     mesh, correspondence: VertexCorrespondence
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
@@ -505,61 +582,16 @@ def _build_periodic_mesh(
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
 
     vertex_map = mesh.topology.index_map(0)
-    num_owned_vertices = vertex_map.size_local
-    num_vertices_local = num_owned_vertices + vertex_map.num_ghosts
+    num_vertices_local = vertex_map.size_local + vertex_map.num_ghosts
 
-    # Create first submap for vertices, where all indicated vertices are removed
-    keep_vertices = np.ones(num_vertices_local, dtype=np.bool_)
-    keep_vertices[indicator_vertices] = False
-    reduced_vertices = np.flatnonzero(keep_vertices)
-    if hasattr(dolfinx.common, "create_sub_index_map"):
-        sub_map_without_ghosts, sub_to_parent, changed_owner = (
-            dolfinx.common.create_sub_index_map(
-                mesh.topology.index_map(0), reduced_vertices
-            )
-        )
-        changed_any = mesh.topology.index_map(0).comm.allreduce(
-            changed_owner, op=MPI.LOR
-        )
-        if changed_any:
-            raise RuntimeError(
-                "Vertex ownership has changed, which is not supported. "
-                "Please report this issue to the dolfinx developers."
-            )
-    else:
-        sub_map_without_ghosts, sub_to_parent = dolfinx.cpp.common.create_sub_index_map(
-            mesh.topology.index_map(0), reduced_vertices, allow_owner_change=False
-        )
-
-    # Compute reduced index map without indicator vertices
-    num_vertices_local = (
-        mesh.topology.index_map(0).size_local + mesh.topology.index_map(0).num_ghosts
+    # The mesh without the vertices that are being replaced, and the partners resolved
+    # against it: everything below is expressed in this reduced numbering.
+    sub_map_without_ghosts, parent_to_sub = _reduced_vertex_map(
+        mesh, indicator_vertices
     )
-    parent_to_sub = np.full(num_vertices_local, -1, dtype=np.int32)
-    parent_to_sub[sub_to_parent] = np.arange(sub_to_parent.size, dtype=np.int32)
-
-    # The partner vertices in the submap's numbering, -1 where the partner was itself
-    # removed.
-    sub_partner_vertex = parent_to_sub[partner_vertex]
-
-    # Collective, like the check above: a one-sided raise here leaves the other ranks
-    # blocked in the exchanges below rather than reporting the error.
-    num_missing_replacements = int(np.count_nonzero(sub_partner_vertex == -1))
-    if comm.allreduce(num_missing_replacements, op=MPI.SUM) > 0:
-        raise AssertionError(
-            "Partner vertex not in submap: a vertex was paired with another vertex that"
-            " is itself marked for replacement, so the replacement has been removed too."
-            " Under periodicity in several directions the pairing has to carry a corner"
-            " vertex all the way to its root, applying every offset that applies to it."
-        )
-
-    # Map the partner vertex to its global index in the reduced submap
-    global_vertices = sub_map_without_ghosts.local_to_global(sub_partner_vertex).astype(
-        np.int64
+    global_vertices, send_vertex_owner = _partner_in_reduced_map(
+        comm, sub_map_without_ghosts, parent_to_sub, partner_vertex
     )
-
-    replacement_vertex_owner = get_ownership(sub_map_without_ghosts)
-    send_vertex_owner = replacement_vertex_owner[sub_partner_vertex].copy()
 
     # Every boundary facet the process knows of, so it has to be broadened:
     # `exterior_facet_indices` returns owned facets only, and a process that merely ghosts
