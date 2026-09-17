@@ -777,6 +777,74 @@ def _compat_topology(
         return dolfinx.cpp.mesh.Topology(*args)
 
 
+def _pack_cells_at_vertices(mesh, vertices, boundary_facets, vertices_per_dest):
+    """Gather, per destination, the boundary cells meeting a group of vertices.
+
+    `vertices` is one flat array split into consecutive groups by `vertices_per_dest`. For
+    each group this collects the cells behind the facets of `boundary_facets` that touch
+    any of its vertices, so the caller can ship them to the matching destination.
+
+    Local; no communication.
+
+    Args:
+        mesh: The mesh `vertices` and `boundary_facets` are local to.
+        vertices: Local vertices, grouped by destination and in that order.
+        boundary_facets: Local facets to restrict the incident cells to.
+        vertices_per_dest: How many of `vertices` belong to each destination, in order.
+
+    Returns:
+        ``(cells, dofmap, cells_per_dest)``: the local cells for every destination
+        concatenated in the same order; their vertices, flat and with a fixed number per
+        cell; and how many cells fell to each destination. A cell appears once per
+        destination that needs it.
+    """
+    num_vertices = dolfinx.cpp.mesh.cell_num_vertices(mesh.topology.cell_type)
+    tdim = mesh.topology.dim
+    c_to_v = mesh.topology.connectivity(tdim, 0)
+
+    offsets = np.zeros(len(vertices_per_dest) + 1, dtype=np.int32)
+    np.cumsum(vertices_per_dest, out=offsets[1:])
+    cells_per_dest = np.zeros_like(vertices_per_dest, dtype=np.int32)
+
+    # Seeded with an empty array so the concatenations need no special case for a process
+    # that sends to nobody.
+    cells = [np.zeros(0, dtype=np.int32)]
+    dofmap = [np.zeros(0, dtype=np.int32)]
+    for i in range(len(vertices_per_dest)):
+        group = vertices[offsets[i] : offsets[i + 1]]
+        connected_facets = dolfinx.mesh.compute_incident_entities(
+            mesh.topology, group, 0, tdim - 1
+        )
+        con_ext_facets = np.intersect1d(connected_facets, boundary_facets)
+        con_ext_cells = dolfinx.mesh.compute_incident_entities(
+            mesh.topology, con_ext_facets, tdim - 1, tdim
+        )
+        # Equivalent to:
+        #     for c in con_ext_cells:
+        #         cells.push_back(c);
+        #         cells_per_dest[i] += 1;
+        #         for (int j = 0; j < num_vertices; ++j)
+        #             dofmap.push_back(c_to_v.links(c)[j]);
+        # `con_ext_cells` is already sorted and unique, so the gather preserves the order
+        # the loop would append in. As elsewhere, this assumes every cell has the same
+        # number of vertices; the callers reshape by `num_vertices` on that basis.
+        cells_per_dest[i] = len(con_ext_cells)
+        cells.append(con_ext_cells)
+        dofmap.append(
+            c_to_v.array[
+                (
+                    c_to_v.offsets[con_ext_cells][:, None]
+                    + np.arange(num_vertices, dtype=np.int32)
+                ).reshape(-1)
+            ]
+        )
+    return (
+        np.concatenate(cells).astype(np.int32),
+        np.concatenate(dofmap).astype(np.int32),
+        cells_per_dest,
+    )
+
+
 def _build_periodic_mesh(
     mesh, correspondence: VertexCorrespondence
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
@@ -834,53 +902,13 @@ def _build_periodic_mesh(
     vertex_destinations, send_vertices_per_proc = np.unique(
         dest_owner, return_counts=True
     )
-    num_cells_per_proc = np.zeros_like(
-        send_vertices_per_proc, dtype=np.int32
-    )  # Each vertex might be connected to multiple cells
-    # Packing offset
-    offsets = np.zeros(len(send_vertices_per_proc) + 1, dtype=np.int32)
-    np.cumsum(send_vertices_per_proc, out=offsets[1:])
-
-    # For each replacement vertex, find all facets that are connected to the vertex and is on the boundary.
-    # Then, get each cell connected to this facet.
-    # Seeded with an empty array so the concatenations below need no special case for a
-    # process that sends to nobody.
-    send_ghost_cells_from_new_owner = [np.zeros(0, dtype=np.int32)]
-    new_cell_topology_dm = [np.zeros(0, dtype=np.int32)]
-    for i in range(len(send_vertices_per_proc)):
-        _vertices = partner_vertex[
-            offsets[i] : offsets[i + 1]
-        ]  # Works because dest owners are sorted
-        connected_facets = dolfinx.mesh.compute_incident_entities(
-            mesh.topology, _vertices, 0, mesh.topology.dim - 1
+    # The grouping works because `dest_owner` is sorted, so `partner_vertex` is already
+    # laid out in blocks of one destination each.
+    send_ghost_cells_from_new_owner, new_cell_topology_dm, num_cells_per_proc = (
+        _pack_cells_at_vertices(
+            mesh, partner_vertex, org_mesh_ext_facets, send_vertices_per_proc
         )
-        con_ext_facets = np.intersect1d(connected_facets, org_mesh_ext_facets)
-        con_ext_cells = dolfinx.mesh.compute_incident_entities(
-            mesh.topology, con_ext_facets, mesh.topology.dim - 1, mesh.topology.dim
-        )
-        # Equivalent to:
-        #     for c in con_ext_cells:
-        #         send_ghost_cells_from_new_owner.push_back(c);
-        #         num_cells_per_proc[i] += 1;
-        #         for (int j = 0; j < num_vertices; ++j)
-        #             new_cell_topology_dm.push_back(c_to_v.links(c)[j]);
-        # `con_ext_cells` is already sorted and unique, so the gather preserves the order
-        # the loop would append in. As elsewhere, this assumes every cell has the same
-        # number of vertices; the reshape further down assumes it too.
-        num_cells_per_proc[i] = len(con_ext_cells)
-        send_ghost_cells_from_new_owner.append(con_ext_cells)
-        new_cell_topology_dm.append(
-            c_to_v.array[
-                (
-                    c_to_v.offsets[con_ext_cells][:, None]
-                    + np.arange(num_vertices, dtype=np.int32)
-                ).reshape(-1)
-            ]
-        )
-    send_ghost_cells_from_new_owner = np.concatenate(
-        send_ghost_cells_from_new_owner
-    ).astype(np.int32)
-    new_cell_topology_dm = np.concatenate(new_cell_topology_dm).astype(np.int32)
+    )
 
     # Create new owner to old owner communicator
     vertex_sources, recv_vertices_per_proc = np.unique(src_owner, return_counts=True)
