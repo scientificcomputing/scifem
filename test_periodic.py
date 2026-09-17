@@ -263,7 +263,9 @@ def test_quadrilateral_corner_cell():
     facets than distinct incident cells, so collapsing to the unique set of cells breaks
     the alignment.
     """
-    n = 4
+    # enough cells that every rank keeps a shared-facet halo: the rebuilt mesh does not
+    # guarantee one for an interprocess facet when a rank owns only a couple of cells
+    n = 8
     mesh = dolfinx.mesh.create_unit_square(
         MPI.COMM_WORLD,
         n,

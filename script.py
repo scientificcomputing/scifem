@@ -367,26 +367,27 @@ def create_periodic_mesh(
         mapping_function(owned_vertex_coords.T).T
     )
 
-    # Follow the mapping to a root. With periodicity in more than one direction a slave
-    # vertex can map onto another slave -- the corner of a doubly periodic box is the
-    # standard case -- and that master has itself been removed from the reduced index map.
+    # Follow the mapping to a root. With periodicity in more than one direction an
+    # indicator vertex can map onto another indicator vertex -- the corner of a doubly
+    # periodic box is the standard case -- and that replacement has itself been removed
+    # from the reduced index map.
     # Re-applying the mapping until the image is no longer selected by `indicator` resolves
     # the chain, so the caller does not have to compose the offsets by hand.
     # The loop is collective: the termination test is reduced, so every process runs the
     # same number of iterations.
     max_chain_length = 16
     for _ in range(max_chain_length):
-        still_slave = np.asarray(indicator(mapped_vertex_coords.T), dtype=np.bool_)
-        if comm.allreduce(int(np.count_nonzero(still_slave)), op=MPI.SUM) == 0:
+        still_indicated = np.asarray(indicator(mapped_vertex_coords.T), dtype=np.bool_)
+        if comm.allreduce(int(np.count_nonzero(still_indicated)), op=MPI.SUM) == 0:
             break
-        mapped_vertex_coords[still_slave] = mapping_function(
-            mapped_vertex_coords[still_slave].T
+        mapped_vertex_coords[still_indicated] = mapping_function(
+            mapped_vertex_coords[still_indicated].T
         ).T
     else:
         raise RuntimeError(
             f"`mapping_function` did not reach a vertex outside `indicator` within"
             f" {max_chain_length} applications. Either the two functions disagree, or the"
-            " mapping cycles: a slave vertex is mapped onto another slave that maps back."
+            " mapping cycles: an indicator vertex is mapped onto another that maps back."
         )
 
     # For each vertex that will be replaced, find which process should take it over
@@ -440,11 +441,13 @@ def create_periodic_mesh(
     # Map all vertices that exist on the process to its global index.
     # Collective, like the check above: a one-sided raise here leaves the other ranks
     # blocked in the exchanges below rather than reporting the error.
-    num_replaced_masters = int(np.count_nonzero(parent_to_sub[closest_vertex] == -1))
-    if comm.allreduce(num_replaced_masters, op=MPI.SUM) > 0:
+    num_missing_replacements = int(
+        np.count_nonzero(parent_to_sub[closest_vertex] == -1)
+    )
+    if comm.allreduce(num_missing_replacements, op=MPI.SUM) > 0:
         raise AssertionError(
             "Closest vertex not in submap: a vertex was mapped onto another vertex that"
-            " `indicator` also selects, so the master has itself been removed. Under"
+            " `indicator` also selects, so the replacement has itself been removed. Under"
             " periodicity in several directions the mapping has to carry a corner vertex"
             " all the way to its root, applying every offset that applies to it."
         )
@@ -843,31 +846,87 @@ def create_periodic_mesh(
     fvector.scatter_forward()
     indicator_facets = np.flatnonzero(fvector.array).astype(np.int32)
 
-    facet_midpoints = dolfinx.mesh.compute_midpoints(
-        mesh, mesh.topology.dim - 1, indicator_facets
-    )
-    mapping_facet_midpoints = mapping_function(facet_midpoints.T).T
-    mapped_midpoint_owner = dolfinx.geometry.determine_point_ownership(
-        mesh, mapping_facet_midpoints, padding=eps
-    )
+    # Where each facet's cell has to go comes from the vertex correspondence of phase 1,
+    #
+    # The destination is `vertex_ownership_data.src_owner`, the rank owning the cell each
+    # vertex's image landed in. It has to be the cell owner, not the owner of the
+    # replacement vertex: the rank holding the cell on the far side of the seam may only
+    # ghost that vertex, and would then never receive this cell.
+    mesh.topology.create_connectivity(mesh.topology.dim - 1, 0)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+    f_to_v = mesh.topology.connectivity(mesh.topology.dim - 1, 0)
     f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
-    # One cell per indicator facet. `locate_entities_boundary` returns exterior facets and
-    # exteriority is a global property, so the scatter that broadens `indicator_facets`
-    # preserves it -- but the packing below is indexed per facet, so check rather than
-    # assume. Taking the unique set of incident cells instead would break that indexing
-    # wherever one cell carries two indicator facets, e.g. a corner cell of a quad mesh.
-    cells_per_facet = (
-        f_to_c.offsets[indicator_facets + 1] - f_to_c.offsets[indicator_facets]
+
+    # position of a local vertex in `indicator_vertices`, which is the index that
+    # `vertex_ownership_data.src_owner` and `global_replacement_*` are keyed on: entry k
+    # describes the k-th local vertex that will be replaced.
+    position_in_indicator_vertices = np.full(num_vertices_local, -1, dtype=np.int32)
+    position_in_indicator_vertices[indicator_vertices] = np.arange(
+        len(indicator_vertices), dtype=np.int32
     )
-    num_interior = int(np.count_nonzero(cells_per_facet != 1))
-    if comm.allreduce(num_interior, op=MPI.SUM) > 0:
+
+    # NOTE: assumes every facet has the same number of vertices. That holds for a single
+    # cell type but not for a mixed-topology mesh (a prism has both triangular and
+    # quadrilateral facets). To support it, walk `f_to_v.offsets` facet by facet and build
+    # the (facet, rank) pairs from a ragged array instead of a rectangular one. Nothing
+    # after that has to change: every array from `facet_pairs` onwards carries one entry
+    # per (facet, destination rank) pair, never one per facet.
+    num_facet_vertices = int(f_to_v.offsets[1] - f_to_v.offsets[0])
+    # Equivalent to:
+    #     for i, f in enumerate(indicator_facets):
+    #         for j in range(num_facet_vertices):
+    #             facet_vertices[i, j] = f_to_v.links(f)[j]
+    facet_vertices = f_to_v.array[
+        (
+            f_to_v.offsets[indicator_facets][:, None]
+            + np.arange(num_facet_vertices, dtype=np.int32)
+        ).reshape(-1)
+    ].reshape(len(indicator_facets), num_facet_vertices)
+    facet_vertex_positions = position_in_indicator_vertices[facet_vertices]
+    num_unmarked = int(np.count_nonzero(facet_vertex_positions == -1))
+    if comm.allreduce(num_unmarked, op=MPI.SUM) > 0:
         raise RuntimeError(
-            f"{comm.allreduce(num_interior, op=MPI.SUM)} facets selected by `indicator`"
-            " are not exterior. Periodicity can only identify boundary facets, so every"
-            " facet `indicator` selects must have exactly one incident cell."
+            "A facet selected by `indicator` has a vertex that `indicator` does not"
+            " select. The facet and vertex markers have to agree for the facet to be"
+            " identified with another one."
         )
-    cells_losing_vertex = f_to_c.array[f_to_c.offsets[indicator_facets]]
+
+    # one (facet, rank) pair per distinct destination among the facet's vertices.
+    # Equivalent to:
+    #     pairs = set()
+    #     for i in range(len(indicator_facets)):
+    #         for j in range(num_facet_vertices):
+    #             pairs.add((i, src_owner[facet_vertex_positions[i, j]]))
+    #     facet_pairs = sorted(pairs)
+    # `np.unique(..., axis=0)` both de-duplicates and sorts lexicographically by
+    # (facet, rank), which is the order the packing below expects.
+    facet_pairs = np.unique(
+        np.stack(
+            [
+                np.repeat(
+                    np.arange(len(indicator_facets), dtype=np.int32), num_facet_vertices
+                ),
+                vertex_ownership_data.src_owner[facet_vertex_positions]
+                .reshape(-1)
+                .astype(np.int32),
+            ],
+            axis=1,
+        ),
+        axis=0,
+    )
+    lost_facet_position = facet_pairs[:, 0]
+    lost_dest_ranks = np.ascontiguousarray(facet_pairs[:, 1], dtype=np.int32)
+
+    # Taking only the first incident cell is safe here: `indicator_facets` comes from
+    # `locate_entities_boundary`, so every facet is exterior and has exactly one cell.
+    # Exteriority is a global property, so the scatter that broadens the set above
+    # preserves it. One entry per (facet, destination) pair, so a cell repeats once per
+    # rank it must reach; everything packed below stays indexed by this array.
+    cells_losing_vertex = f_to_c.array[f_to_c.offsets[indicator_facets]][
+        lost_facet_position
+    ]
+    assert (cells_losing_vertex > -1).all()
+    assert (cells_losing_vertex < cell_map.size_local + cell_map.num_ghosts).all()
     cells_losing_vertex_gl = cell_map.local_to_global(cells_losing_vertex)
 
     # Pack dofmap for each of these cells, replacing the vertices that are removed with mapped vertices
@@ -891,11 +950,10 @@ def create_periodic_mesh(
     lost_geom_igi = mesh.geometry.input_global_indices[org_geom_dm_cells_losing_vertex]
 
     # Compute insertion position based on cell ownership
-    lost_src_ranks, num_send_lost_cells = np.unique(
-        mapped_midpoint_owner.src_owner, return_counts=True
-    )
+    lost_src_ranks, num_send_lost_cells = np.unique(lost_dest_ranks, return_counts=True)
+    num_send_lost_cells = num_send_lost_cells.astype(np.int32)
     lost_cell_insert_pos = compute_insert_position(
-        mapped_midpoint_owner.src_owner, lost_src_ranks, num_send_lost_cells
+        lost_dest_ranks, lost_src_ranks, num_send_lost_cells
     )
 
     # Pack cells data
@@ -942,12 +1000,20 @@ def create_periodic_mesh(
     lost_cells_coords_buffer[lost_insert_pos_geom_coord] = lost_geom_coords
 
     # Create communicator
-    recv_lost_cells_ranks, num_recv_lost_cells = np.unique(
-        mapped_midpoint_owner.dest_owner, return_counts=True
+    # `Create_dist_graph` only needs the edges leaving this process; MPI works out who
+    # sends to me, so no separate discovery exchange is needed. The counts per source then
+    # come from one neighborhood exchange on that graph.
+    assert isinstance(comm, MPI.Intracomm)
+    lost_cells_to_gainer_comm = comm.Create_dist_graph(
+        [comm.rank], [len(lost_src_ranks)], lost_src_ranks.tolist(), reorder=False
     )
-    lost_cells_to_gainer_comm = comm.Create_dist_graph_adjacent(
-        recv_lost_cells_ranks.tolist(), lost_src_ranks.tolist(), reorder=False
+    recv_lost_cells_ranks, sent_to_ranks, _ = (
+        lost_cells_to_gainer_comm.Get_dist_neighbors()
     )
+    recv_lost_cells_ranks = np.asarray(recv_lost_cells_ranks, dtype=np.int32)
+    assert np.array_equal(np.asarray(sent_to_ranks, dtype=np.int32), lost_src_ranks)
+    num_recv_lost_cells = np.zeros(len(recv_lost_cells_ranks), dtype=np.int32)
+    all_to_all(lost_cells_to_gainer_comm, num_send_lost_cells, num_recv_lost_cells)
 
     total_recv_lost_cells = num_recv_lost_cells.sum()
     lost_cells_recv_buffer = np.empty(total_recv_lost_cells, dtype=np.int64)
