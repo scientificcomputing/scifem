@@ -7,7 +7,8 @@ import numpy as np
 import dolfinx
 import ufl
 import numpy.typing as npt
-
+import inspect
+import gmsh
 
 mpi_dtype = {
     np.float64: MPI.DOUBLE,
@@ -87,6 +88,30 @@ def all_to_allv(comm, send_data, num_send_data, recv_data, num_recv_data):
     send_msg = [send_data, num_send_data, dtype]
     recv_msg = [recv_data, num_recv_data, dtype]
     comm.Neighbor_alltoallv(send_msg, recv_msg)
+
+
+def all_to_all(comm, send_data, recv_data):
+    """Workaround for openmpi #14452 (https://github.com/open-mpi/ompi/issues/14452).
+
+    Exchange a single item with each neighbor in a distributed graph communicator.
+
+    Note:
+        The count is passed explicitly. Left implicit, mpi4py derives it as
+        ``buffer size // degree``, which is ill-defined for a process with no
+        sources or no destinations and raises ``MPI_ERR_TRUNCATE`` under Open MPI.
+    """
+    dtype = mpi_dtype[send_data.dtype.type]
+    assert recv_data.dtype == send_data.dtype, (
+        f"Data types do not match, {recv_data.dtype} != {send_data.dtype}"
+    )
+    indegree, outdegree, _ = comm.Get_dist_neighbors_count()
+    assert (d_size := send_data.size) == outdegree, (
+        f"Number of send data {d_size} does not match number of destinations {outdegree}"
+    )
+    assert (d_size := recv_data.size) == indegree, (
+        f"Number of recv data {d_size} does not match number of sources {indegree}"
+    )
+    comm.Neighbor_alltoall([send_data, 1, dtype], [recv_data, 1, dtype])
 
 
 def get_ownership(imap) -> npt.NDArray[np.int32]:
@@ -180,6 +205,27 @@ def unroll_insert_position(
     return unrolled_ip
 
 
+def _compat_index_map(comm, size_local, ghosts, owners, tag: int | None = None):
+    if dolfinx.common.IndexMap != dolfinx.cpp.common.IndexMap:
+        assert tag is not None, "Tag must be provided for dolfinx.common.index_map"
+        return dolfinx.common.index_map(
+            comm, size_local, ghosts=(ghosts, owners), tag=tag
+        )
+    else:
+        try:
+            return dolfinx.common.IndexMap(comm, size_local, ghosts, owners)
+        except TypeError:
+            assert tag is not None, "Tag must be provided for dolfinx.common.IndexMap"
+            return dolfinx.common.IndexMap(comm, size_local, ghosts, owners, tag=tag)
+
+
+def _extract_cpp_object(obj):
+    if hasattr(obj, "_cpp_object"):
+        return obj._cpp_object
+    else:
+        return obj
+
+
 def create_periodic_mesh(
     mesh, indicator, mapping_function
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
@@ -246,9 +292,24 @@ def create_periodic_mesh(
     keep_vertices = np.ones(num_vertices_local, dtype=np.bool_)
     keep_vertices[indicator_vertices] = False
     reduced_vertices = np.flatnonzero(keep_vertices)
-    sub_map_without_ghosts, sub_to_parent = dolfinx.cpp.common.create_sub_index_map(
-        mesh.topology.index_map(0), reduced_vertices, allow_owner_change=False
-    )
+    if hasattr(dolfinx.common, "create_sub_index_map"):
+        sub_map_without_ghosts, sub_to_parent, changed_owner = (
+            dolfinx.common.create_sub_index_map(
+                mesh.topology.index_map(0), reduced_vertices
+            )
+        )
+        changed_any = mesh.topology.index_map(0).comm.allreduce(
+            changed_owner, op=MPI.LOR
+        )
+        if changed_any:
+            raise RuntimeError(
+                "Vertex ownership has changed, which is not supported. "
+                "Please report this issue to the dolfinx developers."
+            )
+    else:
+        sub_map_without_ghosts, sub_to_parent = dolfinx.cpp.common.create_sub_index_map(
+            mesh.topology.index_map(0), reduced_vertices, allow_owner_change=False
+        )
 
     # Compute reduced index map without indicator vertices
     num_vertices_local = (
@@ -450,7 +511,7 @@ def create_periodic_mesh(
 
     # Compute number of cells to send and receive
     recv_num_cells = np.zeros_like(recv_vertices_per_proc, dtype=np.int32)
-    new_owner_to_old_comm.Neighbor_alltoall(num_cells_per_proc, recv_num_cells)
+    all_to_all(new_owner_to_old_comm, num_cells_per_proc, recv_num_cells)
 
     # Send cells and owners to process that lost vertex
     recv_potential_ghost_cells = np.empty(recv_num_cells.sum(), dtype=np.int64)
@@ -461,7 +522,6 @@ def create_periodic_mesh(
         recv_potential_ghost_cells,
         recv_num_cells,
     )
-
     recv_potential_cell_owners = np.empty(recv_num_cells.sum(), dtype=np.int32)
     send_ghost_cell_owners = cell_owners[send_ghost_cells_from_new_owner].copy()
     all_to_allv(
@@ -548,15 +608,9 @@ def create_periodic_mesh(
     existing_vertices = np.flatnonzero(is_local_indicator)
 
     # Vertex map is temporary, as we need to extend it with additional ghosts on the process taking over facets
-    try:
-        tmp_vertex_map = dolfinx.common.IndexMap(
-            comm, new_local_size, new_ghosts, new_owners
-        )
-    except TypeError:
-        tmp_vertex_map = dolfinx.common.IndexMap(
-            comm, new_local_size, new_ghosts, new_owners, tag=1102
-        )
-
+    tmp_vertex_map = _compat_index_map(
+        comm, new_local_size, new_ghosts, new_owners, tag=1102
+    )
     tmp_vertex_ownership = get_ownership(tmp_vertex_map)
 
     # Create replacement map
@@ -709,9 +763,9 @@ def create_periodic_mesh(
     lost_cells_dm_owners = tmp_vertex_ownership[renumbered_dm]
 
     # Pack dofmap,owners and igi of geometry, not in sorted by communication proc
-    org_geom_dm_cells_losing_vertex = mesh.geometry.dofmaps[0][cells_losing_vertex].reshape(
-        -1
-    )
+    org_geom_dm_cells_losing_vertex = mesh.geometry.dofmaps[0][
+        cells_losing_vertex
+    ].reshape(-1)
     lost_geom_dm = geom_im.local_to_global(org_geom_dm_cells_losing_vertex)
     assert (org_geom_dm_cells_losing_vertex > -1).all()
     assert (
@@ -1000,23 +1054,12 @@ def create_periodic_mesh(
     assert (all_owners != comm.rank).all(), "Ghosted vertices on owned process"
 
     # Create new cell and vertex map
-    try:
-        new_cell_map = dolfinx.common.IndexMap(
-            comm, cell_map.size_local, all_cell_ghosts, all_cell_owners
-        )
-    except TypeError:
-        new_cell_map = dolfinx.common.IndexMap(
-            comm, cell_map.size_local, all_cell_ghosts, all_cell_owners, tag=1103
-        )
-
-    try:
-        new_vertex_map = dolfinx.common.IndexMap(
-            comm, tmp_vertex_map.size_local, all_ghosts, all_owners
-        )
-    except TypeError:
-        new_vertex_map = dolfinx.common.IndexMap(
-            comm, tmp_vertex_map.size_local, all_ghosts, all_owners, tag=1104
-        )
+    new_cell_map = _compat_index_map(
+        comm, cell_map.size_local, all_cell_ghosts, all_cell_owners, tag=1103
+    )
+    new_vertex_map = _compat_index_map(
+        comm, tmp_vertex_map.size_local, all_ghosts, all_owners, tag=1104
+    )
 
     new_c_to_v = dolfinx.graph.adjacencylist(
         np.vstack([new_c, extra_dm, lost_cells_dofs_as_local.reshape(-1, num_vertices)])
@@ -1039,19 +1082,29 @@ def create_periodic_mesh(
             topology = dolfinx.cpp.mesh.Topology(
                 comm,
                 mesh.topology.cell_type,
-                new_vertex_map,
-                new_cell_map,
-                new_c_to_v,
+                _extract_cpp_object(new_vertex_map),
+                _extract_cpp_object(new_cell_map),
+                _extract_cpp_object(new_c_to_v),
                 all_cell_oci,
             )
         except TypeError:
-            topology = dolfinx.cpp.mesh.Topology(
-                mesh.topology.cell_type,
-                new_vertex_map,
-                new_cell_map,
-                new_c_to_v._cpp_object,
-                all_cell_oci,
-            )
+            try:
+                topology = dolfinx.cpp.mesh.Topology(
+                    comm,
+                    mesh.topology.cell_type,
+                    _extract_cpp_object(new_vertex_map),
+                    _extract_cpp_object(new_cell_map),
+                    _extract_cpp_object(new_c_to_v),
+                    all_cell_oci,
+                )
+            except TypeError:
+                topology = dolfinx.cpp.mesh.Topology(
+                    mesh.topology.cell_type,
+                    _extract_cpp_object(new_vertex_map),
+                    _extract_cpp_object(new_cell_map),
+                    _extract_cpp_object(new_c_to_v),
+                    all_cell_oci,
+                )
     c_el = dolfinx.fem.coordinate_element(
         mesh._ufl_domain.ufl_coordinate_element().basix_element
     )
@@ -1084,18 +1137,9 @@ def create_periodic_mesh(
     extended_coords = np.vstack(
         [mesh.geometry.x, extra_node_coords, filtered_geometry_coords]
     ).astype(mesh.geometry.x.dtype)[:, : mesh.geometry.dim]
-    try:
-        new_node_im = dolfinx.common.IndexMap(
-            comm, num_local_nodes, extended_geom_ghosts, extended_geom_owners
-        )
-    except TypeError:
-        new_node_im = dolfinx.common.IndexMap(
-            comm,
-            num_local_nodes,
-            extended_geom_ghosts,
-            extended_geom_owners,
-            tag=1105,
-        )
+    new_node_im = _compat_index_map(
+        comm, num_local_nodes, extended_geom_ghosts, extended_geom_owners, tag=1105
+    )
 
     extended_igi = np.hstack(
         [mesh.geometry.input_global_indices, new_igi, filtered_geometry_igi]
@@ -1105,13 +1149,9 @@ def create_periodic_mesh(
         new_node_im, extended_dofmap, c_el, extended_coords, extended_igi
     )
     if mesh.geometry.x.dtype == np.float64:
-        cpp_mesh = dolfinx.cpp.mesh.Mesh_float64(
-            comm, topology, geometry._cpp_object
-        )
+        cpp_mesh = dolfinx.cpp.mesh.Mesh_float64(comm, topology, geometry._cpp_object)
     elif mesh.geometry.x.dtype == np.float32:
-        cpp_mesh = dolfinx.cpp.mesh.Mesh_float32(
-            comm, topology, geometry._cpp_object
-        )
+        cpp_mesh = dolfinx.cpp.mesh.Mesh_float32(comm, topology, geometry._cpp_object)
     else:
         raise RuntimeError(f"Unsupported dtype for mesh {mesh.geometry.x.dtype}")
 
@@ -1127,15 +1167,49 @@ if __name__ == "__main__":
     # M = 123
     # N = 15
     # M = 10
-    # mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=dolfinx.mesh.GhostMode.shared_facet
+    # mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, M,  ghost_mode=
     #                                        ,cell_type=dolfinx.mesh.CellType.quadrilateral)
+
     max_facet_to_cell_links = 2
-    partitioner = dolfinx.cpp.mesh.create_cell_partitioner(
-        dolfinx.mesh.GhostMode.shared_facet, 
-        max_facet_to_cell_links=max_facet_to_cell_links
-    )
-    mesh_data = dolfinx.io.gmsh.read_from_msh(
-        "mesh.msh", MPI.COMM_WORLD, 0, gdim=2, partitioner=partitioner)
+    filename = "mesh.msh"
+    gdim = 2
+    comm = MPI.COMM_WORLD
+    rank = 0
+    ghost_mode = dolfinx.mesh.GhostMode.shared_facet
+
+    if not hasattr(dolfinx.mesh, "create_cell_partitioner"):
+        partitioner = dolfinx.graph.partitioner()
+    else:
+        sig = inspect.signature(dolfinx.mesh.create_cell_partitioner)
+        part_kwargs = {}
+        if "max_facet_to_cell_links" in sig.parameters:
+            part_kwargs["max_facet_to_cell_links"] = max_facet_to_cell_links
+            partitioner = dolfinx.mesh.create_cell_partitioner(
+                ghost_mode, **part_kwargs
+            )
+
+    # NOTE: Add ghost mode once https://github.com/FEniCS/dolfinx/pull/4537 is merged
+    sig = inspect.signature(dolfinx.io.gmsh.model_to_mesh)
+    if "ghost_mode" in sig.parameters:
+        if comm.rank == rank:
+            gmsh.initialize()
+            gmsh.model.add("Mesh from file")
+            gmsh.merge(str(filename))
+        mesh_data = dolfinx.io.gmsh.model_to_mesh(
+            gmsh.model,
+            comm,
+            rank,
+            gdim=gdim,
+            partitioner=partitioner,
+            ghost_mode=ghost_mode,
+        )
+        gmsh.finalize()
+
+    else:
+        mesh_data = dolfinx.io.gmsh.read_from_msh(
+            filename, MPI.COMM_WORLD, 0, gdim=gdim, partitioner=partitioner
+        )
+
     mesh = mesh_data.mesh
     ct = mesh_data.cell_tags
     ft = mesh_data.facet_tags
@@ -1286,7 +1360,7 @@ if __name__ == "__main__":
             "pc_type": "lu",
             "pc_factor_mat_solver_type": "mumps",
             "ksp_error_if_not_converged": True,
-            "ksp_monitor": None
+            "ksp_monitor": None,
         },
     )
     uh = problem.solve()
