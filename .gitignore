@@ -3,3 +3,5 @@ __pycache__
 *.h5
 *.xdmf
 *.msh
+_audit
+_probe*.py
