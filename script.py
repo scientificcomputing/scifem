@@ -1376,7 +1376,7 @@ if __name__ == "__main__":
     # )
 
     max_facet_to_cell_links = 2
-    filename = "mesh.msh"
+    filename = "mesh.msh"  # python3 create_mesh.py --periodic --res=0.01
     gdim = 2
     comm = MPI.COMM_WORLD
     rank = 0
