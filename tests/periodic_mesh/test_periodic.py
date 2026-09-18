@@ -25,6 +25,8 @@ from scifem.periodic.geometrical_search import match_vertices_geometric
 from scifem.periodic.mesh import create_periodic_mesh
 from scifem.periodic.mesh import (
     DEFAULT_TAG_BASE,
+    VertexCorrespondence,
+    _build_periodic_mesh,
     NUM_CONSENSUS_TAGS,
     check_facet_ghosting,
 )
@@ -547,3 +549,44 @@ def test_consecutive_tag_bases_do_not_overlap():
     )
     assert first.topology.index_map(0).size_global == second.topology.index_map(0).size_global
     assert np.isclose(volume(first), volume(second))
+
+
+def test_a_correspondence_that_misses_a_ghost_copy_is_rejected():
+    """Every process holding a replaced vertex has to name it, and saying so is cheap.
+
+    `_reduced_vertex_map` drops the *broadcast* set, so a correspondence that names a
+    vertex on its owner but not on a rank that merely ghosts it leaves that rank with a
+    `-1` in `replacement_map` -- which would go straight into the cell dofmap. Before the
+    check this did not fail, it **hung**, and it hung *before* reaching the replacement
+    map: the neighbourhood exchanges are built from the correspondence, so the ranks that
+    agree sit waiting for the one that does not. The check therefore lives in
+    `_reduced_vertex_map`, ahead of every exchange.
+
+    The geometric and gmsh paths both broadcast, so this can only be reached by a caller
+    building a correspondence by hand. That is exactly who the message is for.
+    """
+    if MPI.COMM_WORLD.size == 1:
+        pytest.skip("a serial mesh has no ghost copies to leave out")
+    comm = MPI.COMM_WORLD
+    n = 6
+    mesh = unit_square(n)
+    indicator, mapping = x_periodic(n=n)
+    correspondence = _match_vertices_geometric(mesh, indicator, mapping)
+
+    # Drop the ghost indicator vertices on rank 0: a caller that forgot to broadcast.
+    vertex_map = mesh.topology.index_map(0)
+    keep = np.ones(len(correspondence.indicator_vertices), dtype=np.bool_)
+    if comm.rank == 0:
+        keep = correspondence.indicator_vertices < vertex_map.size_local
+    if comm.allreduce(int((~keep).sum()), op=MPI.SUM) == 0:
+        pytest.skip("this partition gives rank 0 no ghost indicator vertices to drop")
+
+    incomplete = VertexCorrespondence(
+        indicator_vertices=correspondence.indicator_vertices[keep],
+        indicator_facets=correspondence.indicator_facets,
+        src_owner=correspondence.src_owner[keep],
+        dest_owner=correspondence.dest_owner,
+        partner_vertex=correspondence.partner_vertex,
+    )
+    with pytest.raises(RuntimeError, match="not on every process that holds them"):
+        _build_periodic_mesh(mesh, incomplete)

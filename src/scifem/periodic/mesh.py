@@ -152,6 +152,19 @@ def _reduced_vertex_map(mesh, indicator_vertices):
     # union of the keeps and so hold on to a vertex any one process wanted gone.
     # A no-op when the caller has already broadcast, which the geometric path has.
     removed = broadcast_marked_entities(mesh, 0, indicator_vertices)
+    # Checked here rather than downstream: the exchanges are built from the correspondence,
+    # so a disagreement deadlocks instead of failing. Against `np.unique` so that a rank
+    # repeating a vertex cannot report a negative count and cancel out a rank missing one.
+    num_missing = len(removed) - len(np.unique(indicator_vertices))
+    total_missing = mesh.comm.allreduce(num_missing, op=MPI.SUM)
+    if total_missing > 0:
+        raise RuntimeError(
+            f"{total_missing} vertices are named for replacement on some processes but not"
+            " on every process that holds them. A vertex has to be named by all of its"
+            " holders, ghost copies included, or the two sides of the seam disagree about"
+            " what was removed. Pass `indicator_vertices` through"
+            " `broadcast_marked_entities(mesh, 0, ...)` when building the correspondence."
+        )
     keep_vertices = np.ones(num_vertices_local, dtype=np.bool_)
     keep_vertices[removed] = False
     reduced_vertices = np.flatnonzero(keep_vertices).astype(np.int32)
@@ -900,6 +913,10 @@ def _build_periodic_mesh(
         replacement_map[indicator_vertices[is_new_replacement]] = (
             new_local_size + local_replacement_position
         )
+
+    # No -1 is left, so `new_c` below needs no further pass: `parent_to_sub` is -1 exactly
+    # on the set `_reduced_vertex_map` has required to equal `indicator_vertices`, and the
+    # two branches above partition that between them.
 
     geom_im = mesh.geometry.index_map()
     node_owners = get_ownership(geom_im)
