@@ -190,9 +190,7 @@ def unit_square_block(comm, n):
 def split_seam_mesh(comm, n):
     """An ``n x n`` quadrilateral unit square partitioned by `seam_split_partitioner`."""
     if comm.size > num_bands(n):
-        pytest.skip(
-            f"{comm.size} ranks but only {num_bands(n)} bands on a {n}x{n} grid"
-        )
+        pytest.skip(f"{comm.size} ranks but only {num_bands(n)} bands on a {n}x{n} grid")
     cells, x = unit_square_block(comm, n)
     element = basix.ufl.element("Lagrange", "quadrilateral", 1, shape=(2,))
     partitioner = dolfinx.mesh.create_hybrid_cell_partitioner(
@@ -275,9 +273,7 @@ def test_partition_splits_the_seam(n):
         mesh, tdim - 1, lambda x: np.isclose(x[0], 1.0) | np.isclose(x[1], 1.0)
     )
     num_owned_facets = mesh.topology.index_map(tdim - 1).size_local
-    ghosted = comm.allreduce(
-        int(np.count_nonzero(seam_facets >= num_owned_facets)), MPI.SUM
-    )
+    ghosted = comm.allreduce(int(np.count_nonzero(seam_facets >= num_owned_facets)), MPI.SUM)
     if comm.size > 1:
         assert ghosted > 0, (
             "every seam boundary facet is owned by the rank that holds it:"

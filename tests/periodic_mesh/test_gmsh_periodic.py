@@ -17,7 +17,6 @@ import pytest
 
 from scifem.periodic.gmsh import extract_gmsh_periodic_nodes
 import scifem.periodic.mesh
-from scifem.periodic.mesh import create_periodic_mesh_from_igi
 
 
 @pytest.fixture

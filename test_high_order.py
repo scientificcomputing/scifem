@@ -38,9 +38,7 @@ def linear_mesh(cell_name, n):
     """A unit square or cube of `cell_name` cells, with the ghosting the rebuild needs."""
     ghost_mode = dolfinx.mesh.GhostMode.shared_facet
     if cell_name == "tetrahedron":
-        return dolfinx.mesh.create_unit_cube(
-            MPI.COMM_WORLD, n, n, n, ghost_mode=ghost_mode
-        )
+        return dolfinx.mesh.create_unit_cube(MPI.COMM_WORLD, n, n, n, ghost_mode=ghost_mode)
     return dolfinx.mesh.create_unit_square(
         MPI.COMM_WORLD,
         n,
@@ -182,9 +180,7 @@ def test_higher_order_geometry_survives_the_merge(cell_name, degree):
 
     assert geometry_degree(periodic) == degree, "the merge lowered the geometry degree"
     assert np.isclose(volume(periodic), 1.0)
-    assert facets_without_two_cells(periodic) == 0, (
-        "the merged mesh still has a boundary"
-    )
+    assert facets_without_two_cells(periodic) == 0, "the merged mesh still has a boundary"
     assert seam_jump(periodic, periodic_field) < 1e-10
 
 
@@ -292,9 +288,7 @@ def test_geometry_can_be_raised_after_the_merge_with_a_discontinuous_element():
     periodic = create_periodic_mesh(mesh, *x_periodic())[0]
 
     element = discontinuous_element("triangle", 2)
-    raised = dolfinx.fem.interpolate_geometry(
-        periodic, dolfinx.fem.coordinate_element(element)
-    )
+    raised = dolfinx.fem.interpolate_geometry(periodic, dolfinx.fem.coordinate_element(element))
 
     num_cells = periodic.topology.index_map(periodic.topology.dim).size_global
     assert raised.geometry.index_map().size_global == num_cells * element.dim, (
