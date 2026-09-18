@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import dolfinx
 import numpy as np
-from .mesh import create_periodic_mesh_from_igi
+from .mesh import create_periodic_mesh_from_igi, DEFAULT_TAG_BASE
 from .utils import PeriodicNodes, resolve_to_roots
 
 
@@ -98,7 +98,13 @@ def extract_gmsh_periodic_nodes(
 
 
 def read_periodic_mesh_from_msh(
-    filename, comm, rank: int = 0, gdim: int = 3, partitioner=None, **kwargs
+    filename,
+    comm,
+    rank: int = 0,
+    gdim: int = 3,
+    partitioner=None,
+    tag_base: int = DEFAULT_TAG_BASE,
+    **kwargs,
 ):
     """Read a ``.msh`` file and make the mesh periodic from its ``$Periodic`` section.
 
@@ -113,6 +119,7 @@ def read_periodic_mesh_from_msh(
         rank: The rank that reads the file.
         gdim: Geometric dimension of the mesh.
         partitioner: Cell partitioner, passed through to ``model_to_mesh``.
+        tag_base: Passed through to :func:`script.create_periodic_mesh_from_gmsh`.
         kwargs: Further arguments for ``model_to_mesh``, such as ``ghost_mode`` where the
             installed DOLFINx takes it there.
 
@@ -144,5 +151,10 @@ def read_periodic_mesh_from_msh(
 
     mesh = getattr(mesh_data, "mesh", mesh_data)
     return create_periodic_mesh_from_igi(
-        mesh, pairs.slave, pairs.master, pairs.num_nodes_global, root=rank
+        mesh,
+        pairs.slave,
+        pairs.master,
+        pairs.num_nodes_global,
+        root=rank,
+        tag_base=tag_base,
     )
