@@ -4,15 +4,18 @@
 """Turn a gmsh model's ``$Periodic`` section into a vertex correspondence.
 
 gmsh already knows which nodes a periodic boundary identifies -- it built the mesh that
-way -- so the pairing need not be recovered by mapping coordinates and searching for the
-nearest vertex. That also makes rotational and reflective periodicity work without the
-caller writing the transform by hand.
-
-What gmsh stores is a *relation*, not a function. Pairs are recorded per model entity,
-including the dimension-0 point entities, so a corner node appears several times with
-different masters: on a doubly periodic square the node at (1,1) is paired with (0,1)
+way -- but what it stores is a *relation*, not a function. Pairs are recorded per model
+entity, including the dimension-0 point entities, so a node can appear several times with
+different partners: on a doubly periodic square the node at (1,1) is paired with (0,1)
 through the right-hand curve and with (1,0) through the top curve. Both routes lead to
 (0,0), and resolving to that common root is what this module does.
+
+A note on names. Each pair has a node that is kept and a node that is identified with it
+and disappears; this module calls them the `partner` and the `replaced` node, matching
+`partner_vertex` and `replaced_vertices` in {py:mod}`script`. gmsh's own API calls them
+the master and the slave -- ``getPeriodicNodes`` returns ``masterNodeTags``, and
+``setPeriodic`` takes the replaced entities first and their partners second -- so that is
+what a reader of the gmsh documentation will see.
 """
 
 from __future__ import annotations

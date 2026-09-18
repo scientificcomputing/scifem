@@ -73,7 +73,7 @@ def volume(mesh):
 def x_periodic(offset=0.0, seam_shift=0.0, n=8):
     """indicator/mapping for x-periodicity.
 
-    `seam_shift` slides the master selection along the seam by that many cells,
+    `seam_shift` slides the partner selection along the seam by that many cells,
     wrapped so every mapped point stays strictly inside the domain. Any nonzero
     value is a wrong mapping that still lands exactly on a real vertex.
     """
@@ -131,7 +131,7 @@ def test_mapping_that_misses_a_vertex_is_rejected(seam_shift):
 def test_lattice_aligned_shift_is_a_different_gluing(seam_shift):
     """The limit of specifying periodicity geometrically -- not a defect to be fixed.
 
-    Sliding the master selection by a whole number of cells still lands exactly on a real
+    Sliding the partner selection by a whole number of cells still lands exactly on a real
     vertex, so the snap distance is zero and no local check can object. Nor should it:
     the seam is mapped onto itself, so the result is a genuine periodic mesh, glued with
     a twist. It is wrong only relative to what the caller meant, and `create_periodic_mesh`
@@ -184,8 +184,8 @@ def test_domain_far_from_origin():
 
 
 def test_doubly_periodic_mesh_is_periodic():
-    """Both offsets composed on the corner. The corner's master is then the opposite
-    corner, which is not itself a slave."""
+    """Both offsets composed on the corner. The corner's partner is then the opposite
+    corner, which is not itself a replaced."""
     n = 8
     mesh = unit_square(n)
 
@@ -214,9 +214,9 @@ def test_doubly_periodic_mesh_is_periodic():
 
 
 def test_per_direction_corner_mapping_resolves_to_the_same_mesh():
-    """Each offset applied on its own, which sends the corner onto another slave.
+    """Each offset applied on its own, which sends the corner onto another replaced.
 
-    The corner (0,0) maps to (1,0), which `indicator` also selects, so its master has
+    The corner (0,0) maps to (1,0), which `indicator` also selects, so its partner has
     already been removed from the reduced index map. `create_periodic_mesh` follows the
     mapping again, reaching (1,1), and the result is the same torus the composed mapping
     gives. Corner handling is not the caller's problem.
@@ -696,7 +696,7 @@ def test_a_facet_with_three_distinct_cells_is_not_a_collapse():
     mesh.topology.create_connectivity(1, 2)
     f_to_c = mesh.topology.connectivity(1, 2)
     num_owned = mesh.topology.index_map(1).size_local
-    per_facet = (f_to_c.offsets[1:] - f_to_c.offsets[:-1])[:num_owned]
+    per_facet = np.diff(f_to_c.offsets)[:num_owned]
     # Reduced: whichever rank owns the shared edge sees the 3, and the others see nothing
     # of it. `initial=0` because a rank can own no facet at all at these cell counts.
     busiest = comm.allreduce(int(per_facet.max(initial=0)), op=MPI.MAX)
@@ -718,6 +718,6 @@ def test_a_remaining_boundary_is_not_non_manifold():
     periodic.topology.create_connectivity(tdim - 1, tdim)
     f_to_c = periodic.topology.connectivity(tdim - 1, tdim)
     num_owned = periodic.topology.index_map(tdim - 1).size_local
-    per_facet = (f_to_c.offsets[1:] - f_to_c.offsets[:-1])[:num_owned]
+    per_facet = np.diff(f_to_c.offsets)[:num_owned]
     with_one = MPI.COMM_WORLD.allreduce(int(np.count_nonzero(per_facet == 1)), op=MPI.SUM)
     assert with_one == 12, "the two non-periodic edges should still be a boundary"

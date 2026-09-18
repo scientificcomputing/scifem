@@ -126,7 +126,7 @@ def facets_without_two_cells(mesh):
     mesh.topology.create_connectivity(tdim - 1, tdim)
     f_to_c = mesh.topology.connectivity(tdim - 1, tdim)
     num_owned = mesh.topology.index_map(tdim - 1).size_local
-    per_facet = (f_to_c.offsets[1:] - f_to_c.offsets[:-1])[:num_owned]
+    per_facet = np.diff(f_to_c.offsets)[:num_owned]
     return mesh.comm.allreduce(int(np.count_nonzero(per_facet != 2)), op=MPI.SUM)
 
 

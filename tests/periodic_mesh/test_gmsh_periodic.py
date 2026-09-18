@@ -33,7 +33,7 @@ def gmsh_session():
 def _rectangle(model, L=1.0, res=1.0 / 3.0, directions=("x", "y"), order=1):
     """A meshed unit rectangle, periodic in the requested directions.
 
-    The right curve is the slave of the left one, the top of the bottom, matching how a
+    The right curve is replaced by the left one, the top by the bottom, matching how a
     caller would usually write it. Curve tags of ``addRectangle`` are 1 bottom, 2 right,
     3 top, 4 left.
     """
@@ -60,8 +60,8 @@ def _coords(model, tags_zero_based):
 def test_no_periodicity_gives_no_pairs(gmsh_session):
     model = _rectangle(gmsh_session, directions=())
     pairs = extract_gmsh_periodic_nodes(model)
-    assert len(pairs.slave) == 0
-    assert len(pairs.master) == 0
+    assert len(pairs.replaced) == 0
+    assert len(pairs.partner) == 0
     assert pairs.num_nodes_global > 0
 
 
@@ -69,27 +69,27 @@ def test_single_direction_pairs_opposite_sides(gmsh_session):
     model = _rectangle(gmsh_session, directions=("x",))
     pairs = extract_gmsh_periodic_nodes(model)
 
-    assert len(pairs.slave) > 0
-    xs = _coords(model, pairs.slave)
-    xm = _coords(model, pairs.master)
-    assert np.allclose(xs[:, 0], 1.0), "slaves are not on x=1"
-    assert np.allclose(xm[:, 0], 0.0), "masters are not on x=0"
+    assert len(pairs.replaced) > 0
+    xs = _coords(model, pairs.replaced)
+    xm = _coords(model, pairs.partner)
+    assert np.allclose(xs[:, 0], 1.0), "the replaced nodes are not on x=1"
+    assert np.allclose(xm[:, 0], 0.0), "the partner nodes are not on x=0"
     assert np.allclose(xs[:, 1], xm[:, 1]), "pairing does not preserve y"
 
 
-def test_every_master_is_a_root(gmsh_session):
-    """The contract the rebuild depends on: a master is never itself replaced."""
+def test_every_partner_is_a_root(gmsh_session):
+    """The contract the rebuild depends on: a partner is never itself replaced."""
     model = _rectangle(gmsh_session, directions=("x", "y"))
     pairs = extract_gmsh_periodic_nodes(model)
-    assert not np.isin(pairs.master, pairs.slave).any()
+    assert not np.isin(pairs.partner, pairs.replaced).any()
 
 
-def test_slaves_are_unique_and_sorted(gmsh_session):
+def test_replaced_nodes_are_unique_and_sorted(gmsh_session):
     model = _rectangle(gmsh_session, directions=("x", "y"))
     pairs = extract_gmsh_periodic_nodes(model)
-    assert len(np.unique(pairs.slave)) == len(pairs.slave)
-    assert (np.diff(pairs.slave) > 0).all()
-    assert len(pairs.slave) == len(pairs.master)
+    assert len(np.unique(pairs.replaced)) == len(pairs.replaced)
+    assert (np.diff(pairs.replaced) > 0).all()
+    assert len(pairs.replaced) == len(pairs.partner)
 
 
 def test_corner_resolves_through_the_chain(gmsh_session):
@@ -101,21 +101,21 @@ def test_corner_resolves_through_the_chain(gmsh_session):
     model = _rectangle(gmsh_session, directions=("x", "y"))
     pairs = extract_gmsh_periodic_nodes(model)
 
-    xs = _coords(model, pairs.slave)
-    xm = _coords(model, pairs.master)
+    xs = _coords(model, pairs.replaced)
+    xm = _coords(model, pairs.partner)
     corner = np.flatnonzero(np.isclose(xs[:, 0], 1.0) & np.isclose(xs[:, 1], 1.0))
-    assert len(corner) == 1, "the (1,1) corner is not a slave exactly once"
+    assert len(corner) == 1, "the (1,1) corner is not replaced exactly once"
     assert np.allclose(xm[corner[0]][:2], [0.0, 0.0]), (
         f"corner resolved to {xm[corner[0]][:2]} instead of the opposite corner"
     )
 
 
 def test_doubly_periodic_pairing_is_geometrically_consistent(gmsh_session):
-    """Every slave differs from its master by whole periods in x and y."""
+    """Every replaced differs from its partner by whole periods in x and y."""
     model = _rectangle(gmsh_session, directions=("x", "y"))
     pairs = extract_gmsh_periodic_nodes(model)
 
-    offset = _coords(model, pairs.slave) - _coords(model, pairs.master)
+    offset = _coords(model, pairs.replaced) - _coords(model, pairs.partner)
     assert np.allclose(offset, np.round(offset)), (
         "a pair is not separated by a whole number of periods"
     )
@@ -127,8 +127,8 @@ def test_node_count_is_the_gmsh_count(gmsh_session):
     pairs = extract_gmsh_periodic_nodes(model)
     tags, _, _ = model.mesh.getNodes()
     assert pairs.num_nodes_global == int(np.asarray(tags).max())
-    assert pairs.slave.max() < pairs.num_nodes_global
-    assert pairs.master.max() < pairs.num_nodes_global
+    assert pairs.replaced.max() < pairs.num_nodes_global
+    assert pairs.partner.max() < pairs.num_nodes_global
 
 
 def test_high_order_flag_adds_only_non_vertex_nodes(gmsh_session):
@@ -141,10 +141,10 @@ def test_high_order_flag_adds_only_non_vertex_nodes(gmsh_session):
     without = extract_gmsh_periodic_nodes(model, include_high_order=False)
     with_ = extract_gmsh_periodic_nodes(model, include_high_order=True)
 
-    assert len(with_.slave) > len(without.slave), "P2 added no extra nodes"
-    keep = np.isin(with_.slave, without.slave)
-    assert np.array_equal(with_.slave[keep], without.slave)
-    assert np.array_equal(with_.master[keep], without.master)
+    assert len(with_.replaced) > len(without.replaced), "P2 added no extra nodes"
+    keep = np.isin(with_.replaced, without.replaced)
+    assert np.array_equal(with_.replaced[keep], without.replaced)
+    assert np.array_equal(with_.partner[keep], without.partner)
 
 
 def test_affine_violation_is_reported(monkeypatch, gmsh_session):
@@ -160,15 +160,24 @@ def test_affine_violation_is_reported(monkeypatch, gmsh_session):
     real = model.mesh.getPeriodicNodes
 
     def wrong_affine(dim, tag, include_high_order=False):
-        master_tag, nodes, masters, affine = real(dim, tag, include_high_order)
-        if master_tag != tag and len(affine) == 16:
+        partner_tag, nodes, partner_nodes, affine = real(dim, tag, include_high_order)
+        if partner_tag != tag and len(affine) == 16:
             affine = list(affine)
             affine[3] = 2.0  # claim a translation of 2 where the geometry has 1
-        return master_tag, nodes, masters, affine
+        return partner_tag, nodes, partner_nodes, affine
 
     monkeypatch.setattr(model.mesh, "getPeriodicNodes", wrong_affine)
     with pytest.raises(RuntimeError, match="affine transform"):
         extract_gmsh_periodic_nodes(model)
+
+    # `tol=None` turns the check off, and the pairs themselves are unaffected by it: the
+    # transform is only ever read to be verified, never to derive anything.
+    monkeypatch.setattr(model.mesh, "getPeriodicNodes", real)
+    honest = extract_gmsh_periodic_nodes(model)
+    monkeypatch.setattr(model.mesh, "getPeriodicNodes", wrong_affine)
+    unchecked = extract_gmsh_periodic_nodes(model, tol=None)
+    assert np.array_equal(unchecked.replaced, honest.replaced)
+    assert np.array_equal(unchecked.partner, honest.partner)
 
 
 def test_missing_affine_is_tolerated(monkeypatch, gmsh_session):
@@ -179,13 +188,13 @@ def test_missing_affine_is_tolerated(monkeypatch, gmsh_session):
     real = model.mesh.getPeriodicNodes
 
     def no_affine(dim, tag, include_high_order=False):
-        master_tag, nodes, masters, _ = real(dim, tag, include_high_order)
-        return master_tag, nodes, masters, []
+        partner_tag, nodes, partner_nodes, _ = real(dim, tag, include_high_order)
+        return partner_tag, nodes, partner_nodes, []
 
     monkeypatch.setattr(model.mesh, "getPeriodicNodes", no_affine)
     pairs = extract_gmsh_periodic_nodes(model)
-    assert np.array_equal(pairs.slave, expected.slave)
-    assert np.array_equal(pairs.master, expected.master)
+    assert np.array_equal(pairs.replaced, expected.replaced)
+    assert np.array_equal(pairs.partner, expected.partner)
 
 
 def test_cycle_is_rejected(monkeypatch, gmsh_session):
@@ -194,16 +203,16 @@ def test_cycle_is_rejected(monkeypatch, gmsh_session):
     real = model.mesh.getPeriodicNodes
 
     def cyclic(dim, tag, include_high_order=False):
-        master_tag, nodes, masters, affine = real(dim, tag, include_high_order)
-        if master_tag != tag and len(nodes):
+        partner_tag, nodes, partner_nodes, affine = real(dim, tag, include_high_order)
+        if partner_tag != tag and len(nodes):
             # send the pairing back on itself, so nothing is ever a root
             return (
-                master_tag,
-                list(nodes) + list(masters),
-                list(masters) + list(nodes),
+                partner_tag,
+                list(nodes) + list(partner_nodes),
+                list(partner_nodes) + list(nodes),
                 [],
             )
-        return master_tag, nodes, masters, affine
+        return partner_tag, nodes, partner_nodes, affine
 
     monkeypatch.setattr(model.mesh, "getPeriodicNodes", cyclic)
     with pytest.raises(RuntimeError, match="cycle|do not end|different roots"):
@@ -216,18 +225,18 @@ def test_inconsistent_pairs_are_rejected(monkeypatch, gmsh_session):
     real = model.mesh.getPeriodicNodes
 
     def contradictory(dim, tag, include_high_order=False):
-        master_tag, nodes, masters, affine = real(dim, tag, include_high_order)
-        if master_tag != tag and len(nodes) >= 2:
-            # give the first slave a second, unrelated master that is not a slave
-            extra_master = max(masters) + 1 if max(masters) + 1 not in nodes else None
-            if extra_master is not None:
+        partner_tag, nodes, partner_nodes, affine = real(dim, tag, include_high_order)
+        if partner_tag != tag and len(nodes) >= 2:
+            # give the first replaced node a second, unrelated partner of its own
+            extra_partner = max(partner_nodes) + 1 if max(partner_nodes) + 1 not in nodes else None
+            if extra_partner is not None:
                 return (
-                    master_tag,
+                    partner_tag,
                     list(nodes) + [nodes[0]],
-                    list(masters) + [extra_master],
+                    list(partner_nodes) + [extra_partner],
                     [],
                 )
-        return master_tag, nodes, masters, affine
+        return partner_tag, nodes, partner_nodes, affine
 
     monkeypatch.setattr(model.mesh, "getPeriodicNodes", contradictory)
     with pytest.raises(RuntimeError, match="different roots"):
@@ -277,14 +286,14 @@ def _model_to_mesh(comm, rank, gdim):
     return getattr(mesh_data, "mesh", mesh_data)
 
 
-def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_slave=False, order=1):
+def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_replaced=False, order=1):
     """A distributed unit square from gmsh, with the pairs read off its model.
 
     Args:
         comm: Communicator to distribute over.
         res: Target cell size.
         directions: Which directions to identify.
-        low_is_slave: Replace the vertices at ``x=0``/``y=0`` rather than at 1. Matching
+        low_is_replaced: Replace the vertices at ``x=0``/``y=0`` rather than at 1. Matching
             the direction matters only when comparing against an `indicator`/`mapping`
             pair, which fixes which side is replaced.
         order: Geometry degree. Above 1 the mesh gains nodes that are not vertices, which
@@ -304,21 +313,21 @@ def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_slave=False
         gmsh.model.occ.addRectangle(0, 0, 0, L, L)
         gmsh.model.occ.synchronize()
         # curve tags: 1 bottom, 2 right, 3 top, 4 left
-        sign = -1.0 if low_is_slave else 1.0
+        sign = -1.0 if low_is_replaced else 1.0
         if "x" in directions:
-            slave, master = ([4], [2]) if low_is_slave else ([2], [4])
+            replaced, partner = ([4], [2]) if low_is_replaced else ([2], [4])
             gmsh.model.mesh.setPeriodic(
                 1,
-                slave,
-                master,
+                replaced,
+                partner,
                 [1, 0, 0, sign * L, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
             )
         if "y" in directions:
-            slave, master = ([1], [3]) if low_is_slave else ([3], [1])
+            replaced, partner = ([1], [3]) if low_is_replaced else ([3], [1])
             gmsh.model.mesh.setPeriodic(
                 1,
-                slave,
-                master,
+                replaced,
+                partner,
                 [1, 0, 0, 0, 0, 1, 0, sign * L, 0, 0, 1, 0, 0, 0, 0, 1],
             )
         # model_to_mesh refuses a model with no physical groups
@@ -362,7 +371,7 @@ def torus_invariants(periodic_mesh):
     periodic_mesh.topology.create_connectivity(tdim - 1, tdim)
     f_to_c = periodic_mesh.topology.connectivity(tdim - 1, tdim)
     num_owned = periodic_mesh.topology.index_map(tdim - 1).size_local
-    per_facet = (f_to_c.offsets[1:] - f_to_c.offsets[:-1])[:num_owned]
+    per_facet = np.diff(f_to_c.offsets)[:num_owned]
     bad = comm.allreduce(int(np.count_nonzero(per_facet != 2)), op=MPI.SUM)
 
     V = dolfinx.fem.functionspace(periodic_mesh, ("DG", 1))
@@ -438,14 +447,14 @@ def test_gmsh_path_builds_a_torus():
 def test_gmsh_path_does_not_depend_on_the_partition():
     """The same answer at any rank count, which is what the numbers below pin.
 
-    They are not free parameters: 44 gmsh nodes, 11 of them slaves. Run this file at 1, 2,
+    They are not free parameters: 44 gmsh nodes, 11 of them replaced_nodes. Run this file at 1, 2,
     3 and 4 ranks and the assertions are identical.
     """
     comm = MPI.COMM_WORLD
     mesh, pairs = periodic_square(comm)
     if comm.rank == 0:
         assert pairs.num_nodes_global == 44
-        assert len(pairs.slave) == 11
+        assert len(pairs.replaced) == 11
 
     correspondence = periodic_correspondence_from_nodes(mesh, pairs)
     replaced = comm.allreduce(len(correspondence.indicator_vertices), op=MPI.SUM)
@@ -466,8 +475,8 @@ def test_gmsh_path_single_direction():
 
     before = mesh.topology.index_map(0).size_global
     after = periodic_mesh.topology.index_map(0).size_global
-    num_slaves = comm.bcast(len(pairs.slave) if comm.rank == 0 else None, root=0)
-    assert after == before - num_slaves
+    num_replaced = comm.bcast(len(pairs.replaced) if comm.rank == 0 else None, root=0)
+    assert after == before - num_replaced
 
     volume = comm.allreduce(
         dolfinx.fem.assemble_scalar(dolfinx.fem.form(1 * ufl.dx(domain=periodic_mesh))),
@@ -481,11 +490,11 @@ def test_gmsh_path_replaces_the_same_vertices_as_the_geometric_path():
 
     Compared in input global indices, not local ones, so the comparison says nothing about
     how the mesh happens to be partitioned. The gmsh model is built with the low side as
-    the slave so that the two conventions agree on *which* side is replaced -- otherwise
+    the replaced so that the two conventions agree on *which* side is replaced -- otherwise
     both are right and the sets are disjoint.
     """
     comm = MPI.COMM_WORLD
-    mesh, pairs = periodic_square(comm, low_is_slave=True)
+    mesh, pairs = periodic_square(comm, low_is_replaced=True)
 
     def indicator(x):
         return np.isclose(x[0], 0.0) | np.isclose(x[1], 0.0)
@@ -528,8 +537,8 @@ def test_public_entry_point_matches_the_pieces_it_composes():
     expected, _, _ = scifem.periodic.mesh._build_periodic_mesh(
         mesh, periodic_correspondence_from_nodes(mesh, pairs)
     )
-    got, _, _ = scifem.periodic.mesh.create_periodic_mesh_from_igi(
-        mesh, pairs.slave, pairs.master, pairs.num_nodes_global
+    got, _, _ = scifem.periodic.mesh.create_periodic_mesh_from_gmsh(
+        mesh, pairs.replaced, pairs.partner, pairs.num_nodes_global
     )
     assert torus_invariants(got)[:3] == torus_invariants(expected)[:3]
 
@@ -583,7 +592,7 @@ def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
     assert jump < 1e-12
 
 
-def periodic_box(comm, res=1.0 / 4, low_is_slave=True, order=1):
+def periodic_box(comm, res=1.0 / 4, low_is_replaced=True, order=1):
     """A distributed unit cube from gmsh, periodic in all three directions.
 
     Surface tags of ``occ.addBox`` are 1 at x=0, 2 at x=1, 3 at y=0, 4 at y=1, 5 at z=0
@@ -610,18 +619,18 @@ def periodic_box(comm, res=1.0 / 4, low_is_slave=True, order=1):
         low, high = (1, 3, 5), (2, 4, 6)
         for direction in range(3):
             shift = [0.0, 0.0, 0.0]
-            # gmsh stores the transform as master -> slave, so it points from the side
+            # gmsh stores the transform as partner -> replaced, so it points from the side
             # that survives towards the side that is replaced.
-            shift[direction] = -1.0 if low_is_slave else 1.0
-            slave, master = (
+            shift[direction] = -1.0 if low_is_replaced else 1.0
+            replaced, partner = (
                 ([low[direction]], [high[direction]])
-                if low_is_slave
+                if low_is_replaced
                 else ([high[direction]], [low[direction]])
             )
             gmsh.model.mesh.setPeriodic(
                 2,
-                slave,
-                master,
+                replaced,
+                partner,
                 [
                     1,
                     0,
@@ -674,8 +683,8 @@ def test_gmsh_path_in_3d_builds_a_three_torus():
     assert jump < 1e-12, f"seam jumps by {jump:.3e}"
 
     before = mesh.topology.index_map(0).size_global
-    num_slaves = comm.bcast(len(pairs.slave) if comm.rank == 0 else None, root=0)
-    assert num_vertices == before - num_slaves
+    num_replaced = comm.bcast(len(pairs.replaced) if comm.rank == 0 else None, root=0)
+    assert num_vertices == before - num_replaced
 
 
 def test_gmsh_and_geometric_paths_agree_in_3d():
@@ -686,7 +695,7 @@ def test_gmsh_and_geometric_paths_agree_in_3d():
     the reader has to compose. That the two agree is the substance of this test.
     """
     comm = MPI.COMM_WORLD
-    mesh, pairs = periodic_box(comm, low_is_slave=True)
+    mesh, pairs = periodic_box(comm, low_is_replaced=True)
 
     def indicator(x):
         return np.isclose(x[0], 0.0) | np.isclose(x[1], 0.0) | np.isclose(x[2], 0.0)
@@ -739,8 +748,8 @@ def test_gmsh_path_on_a_second_order_mesh(order):
     else:
         assert num_nodes > num_vertices, f"P{order} added no nodes beyond the vertices"
 
-    periodic = create_periodic_mesh_from_igi(
-        mesh, pairs.slave, pairs.master, pairs.num_nodes_global
+    periodic = scifem.periodic.mesh.create_periodic_mesh_from_gmsh(
+        mesh, pairs.replaced, pairs.partner, pairs.num_nodes_global
     )[0]
     _, volume, bad, jump = torus_invariants(periodic)
 
@@ -769,8 +778,8 @@ def test_raising_the_mesh_order_does_not_change_which_vertices_are_replaced():
     node_count = {}
     for order in (1, 2):
         mesh, pairs = periodic_square(comm, order=order)
-        _, replaced_vertices, _ = create_periodic_mesh_from_igi(
-            mesh, pairs.slave, pairs.master, pairs.num_nodes_global
+        _, replaced_vertices, _ = scifem.periodic.mesh.create_periodic_mesh_from_gmsh(
+            mesh, pairs.replaced, pairs.partner, pairs.num_nodes_global
         )
         owned = replaced_vertices[replaced_vertices < mesh.topology.index_map(0).size_local]
         nodes = dolfinx.mesh.entities_to_geometry(mesh, 0, owned).reshape(-1)
@@ -792,11 +801,11 @@ def test_the_empty_correspondence_needs_no_arguments():
     than something each caller assembles.
     """
     pairs = PeriodicNodes()
-    assert len(pairs.slave) == 0 and len(pairs.master) == 0
-    assert pairs.slave.dtype == np.int64 and pairs.master.dtype == np.int64
+    assert len(pairs.replaced) == 0 and len(pairs.partner) == 0
+    assert pairs.replaced.dtype == np.int64 and pairs.partner.dtype == np.int64
     assert pairs.num_nodes_global == 0
     # a default_factory, not a shared array: two instances must not alias
-    assert PeriodicNodes().slave is not pairs.slave
+    assert PeriodicNodes().replaced is not pairs.replaced
 
 
 def test_a_node_count_too_small_for_the_pairs_is_rejected():
@@ -808,11 +817,12 @@ def test_a_node_count_too_small_for_the_pairs_is_rejected():
     comm = MPI.COMM_WORLD
     mesh, pairs = periodic_square(comm)
     largest = comm.bcast(
-        int(max(pairs.slave.max(), pairs.master.max())) if comm.rank == 0 else None, 0
+        int(max(pairs.replaced.max(), pairs.partner.max())) if comm.rank == 0 else None,
+        0,
     )
     too_small = PeriodicNodes(
-        pairs.slave,
-        pairs.master,
+        pairs.replaced,
+        pairs.partner,
         largest,  # one short: tags are 0-based
     )
     with pytest.raises(RuntimeError, match="num_nodes_global"):

@@ -63,19 +63,19 @@ def transfer_meshtags_to_periodic_mesh(
     if meshtags.dim != mesh.topology.dim:
         mesh.topology.create_connectivity(meshtags.dim, 0)
         e_to_v = mesh.topology.connectivity(meshtags.dim, 0)
-        e_to_v_new = e_to_v.array.copy()
-        replacement_indicator = np.isin(e_to_v_new, replaced_vertices)
-        e_to_v_new[replacement_indicator] = -1
-        new_adj = dolfinx.graph.adjacencylist(e_to_v_new, e_to_v.offsets)
-        indices = []
-        values = []
-        for entity, value in zip(meshtags.indices, meshtags.values):
-            # Keep entities with at least one retained vertex.
-            if np.any(new_adj.links(entity) != -1):
-                indices.append(entity)
-                values.append(value)
-        indices = np.array(indices, dtype=np.int32)
-        values = np.array(values, dtype=meshtags.values.dtype)
+        # One cell type, so the offsets are a constant stride and the connectivity can be
+        # read as a rectangular array. The assert is where a mixed-topology mesh stops.
+        stride = np.diff(e_to_v.offsets)
+        assert np.all(stride == stride[:1]), (
+            f"entities of dimension {meshtags.dim} do not all have the same number of"
+            " vertices, so the connectivity cannot be read as a rectangular array"
+        )
+        # Dropped when every vertex is replaced: the entity has been merged into its
+        # partner, and its input global indices no longer name anything.
+        entity_vertices = e_to_v.array.reshape(len(e_to_v.offsets) - 1, -1)
+        dropped = np.isin(entity_vertices[meshtags.indices], replaced_vertices).all(axis=1)
+        indices = meshtags.indices[~dropped]
+        values = meshtags.values[~dropped]
     else:
         indices = meshtags.indices
         values = meshtags.values
@@ -233,7 +233,7 @@ def _seam_facet_destinations(
 ):
     """Expand each facet into one pair per rank reachable through its vertices.
 
-    Each of a facet's vertices is replaced by a master vertex that a set of ranks holds;
+    Each of a facet's vertices is replaced by a partner vertex that a set of ranks holds;
     the facet is paired with the union of those sets over its vertices. Those are the ranks
     that will hold the cell on the far side of the seam, so they are the ones the cell on
     this side has to reach.
@@ -248,7 +248,7 @@ def _seam_facet_destinations(
         indicator_facets: Local facets to expand.
         vertex_offsets: Into `vertex_holders`, one per entry of `indicator_vertices` plus a
             final total.
-        vertex_holders: The ranks holding the master vertex of each of
+        vertex_holders: The ranks holding the partner vertex of each of
             `indicator_vertices`, grouped by it.
 
     Returns:
@@ -364,21 +364,21 @@ def _number_new_ghosts(index_map, global_indices, *payloads):
 
 @dataclasses.dataclass
 class PartnerHolders:
-    """Which ranks hold each master vertex, seen from both ends of the seam.
+    """Which ranks hold each partner vertex, seen from both ends of the seam.
 
-    The two halves answer the two questions the rebuild asks of a master vertex: what this
+    The two halves answer the two questions the rebuild asks of a partner vertex: what this
     process has to serve, and who will serve it. They are keyed independently, like the
     halves of {py:class}`VertexCorrespondence`.
     """
 
-    #: Local master vertices this process has to pack cells at, grouped by destination.
+    #: Local partner vertices this process has to pack cells at, grouped by destination.
     vertices: npt.NDArray[np.int32]
     #: The rank each of `vertices` is served to, ascending.
     destinations: npt.NDArray[np.int32]
     #: The ranks that will serve this one, ascending and without repeats. The transpose of
     #: `destinations` across the communicator.
     sources: npt.NDArray[np.int32]
-    #: Master vertices replacing a vertex of this process, as global indices into the
+    #: Partner vertices replacing a vertex of this process, as global indices into the
     #: parent vertex map, ascending and without repeats.
     served: npt.NDArray[np.int64]
     #: Into `holders`, one entry per entry of `served` plus a final total.
@@ -388,9 +388,9 @@ class PartnerHolders:
 
 
 def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner, tag: int):
-    """Spread each ``(master vertex, destination)`` pair to every rank holding the vertex.
+    """Spread each ``(partner vertex, destination)`` pair to every rank holding the vertex.
 
-    `partner_vertex` names one holder of each master vertex -- whichever rank answered
+    `partner_vertex` names one holder of each partner vertex -- whichever rank answered
     :func:`dolfinx.geometry.determine_point_ownership` for it -- but the cells meeting that
     vertex are spread over every rank that holds it, and none of them sees the whole star:
     with `shared_facet` ghosting a rank ghosts its facet neighbours, which in 3D is a small
@@ -402,7 +402,7 @@ def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner, tag: int):
 
     Args:
         mesh: The mesh `partner_vertex` is local to.
-        partner_vertex: Local master vertices, one per vertex taken over.
+        partner_vertex: Local partner vertices, one per vertex taken over.
         dest_owner: The rank each of them is taken over from, in the same order.
         tag: MPI tag for the consensus exchange behind `index_to_dest_ranks`.
 
@@ -415,7 +415,7 @@ def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner, tag: int):
     vertex_map = mesh.topology.index_map(0)
     size_local = vertex_map.size_local
 
-    # --- to the owner of the master vertex. A ghost names its owner outright, so there is
+    # --- to the owner of the partner vertex. A ghost names its owner outright, so there is
     # nothing to look up.
     owner = np.full(len(partner_vertex), comm.rank, dtype=np.int32)
     is_ghost = partner_vertex >= size_local
@@ -475,7 +475,7 @@ def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner, tag: int):
         ),
         axis=0,
     )
-    # The same rows read from the receiving end: which ranks hold each master vertex that
+    # The same rows read from the receiving end: which ranks hold each partner vertex that
     # replaces one of this process's. Lexicographic again, so the holders come out grouped
     # by the vertex they belong to.
     incoming = np.unique(delivered[delivered[:, 1] == comm.rank][:, [0, 2]], axis=0)
@@ -727,7 +727,7 @@ def _build_periodic_mesh(
     vertex_destinations, vertices_per_dest = np.unique(dest_owner, return_counts=True)
     vertex_sources, vertices_per_source = np.unique(src_owner, return_counts=True)
 
-    # The cells at a master vertex are spread over every rank that holds it, and the rank
+    # The cells at a partner vertex are spread over every rank that holds it, and the rank
     # that answered for it sees only its own share, so the pairs are fanned out to all
     # holders before any cell is packed. The cell graph is therefore wider than the vertex
     # graph: a rank can owe cells to a destination it answered nothing for.
@@ -774,7 +774,7 @@ def _build_periodic_mesh(
     )
 
     # And its index in the parent vertex map, which is the key `PartnerHolders.served` is
-    # sorted on and so the only way back from a replaced vertex to who holds its master.
+    # sorted on and so the only way back from a replaced vertex to who holds its partner.
     recv_replacement_parent = np.empty(recv_vertices_per_proc.sum(), dtype=np.int64)
     all_to_allv(
         new_owner_to_old_comm,
@@ -1047,11 +1047,11 @@ def _build_periodic_mesh(
 
     # --- 3 --- Communicate cells from process that has lost vertex to process that has taken over vertex
 
-    # Where each seam facet's cell has to go: to every rank holding the master vertex that
+    # Where each seam facet's cell has to go: to every rank holding the partner vertex that
     # replaces one of its own, because those are the ranks that can hold the cell on the
     # far side. `src_owner` will not do -- it names the one rank that answered for the
     # vertex, and the cell across the seam may be owned by any other holder of it.
-    # Re-indexed here from `served`, which is keyed on the master's parent global index,
+    # Re-indexed here from `served`, which is keyed on the partner's parent global index,
     # onto the order of `indicator_vertices`, which is what the facets are expanded in.
     position_in_served = np.searchsorted(partner_holders.served, global_replacement_parent)
     assert (partner_holders.served[position_in_served] == global_replacement_parent).all(), (
@@ -1504,7 +1504,7 @@ def create_periodic_mesh(
 
 def create_periodic_mesh_from_igi(
     mesh,
-    replace_igi,
+    replaced_igi,
     partner_igi,
     num_nodes_global,
     root: int = 0,
@@ -1527,9 +1527,9 @@ def create_periodic_mesh_from_igi(
     Args:
         mesh: The mesh read from the same gmsh model, so that
             ``mesh.geometry.input_global_indices`` is the node numbering the pairs use.
-        replace_igi, partner_igi: Corresponding node pairs, as 0-based gmsh node tags. Held
-            on `root` only; ignored elsewhere. Every master must be a root -- a node that
-            is not itself a slave -- so chains through a corner have to be resolved first,
+        replaced_igi, partner_igi: Corresponding node pairs, as 0-based gmsh node tags. Held
+            on `root` only; ignored elsewhere. Every partner must be a root -- a node that
+            is not itself a replaced -- so chains through a corner have to be resolved first,
             which {py:func}`gmsh_periodic.extract_gmsh_periodic_nodes` does.
         num_nodes_global: The number of nodes in the gmsh model. Not
             ``mesh.geometry.index_map().size_global``, which is smaller when
@@ -1553,7 +1553,7 @@ def create_periodic_mesh_from_igi(
     # this module consumes, so it imports `script`, and a top-level import would cycle.
 
     pairs = PeriodicNodes(
-        np.asarray(replace_igi, dtype=np.int64),
+        np.asarray(replaced_igi, dtype=np.int64),
         np.asarray(partner_igi, dtype=np.int64),
         int(num_nodes_global),
     )

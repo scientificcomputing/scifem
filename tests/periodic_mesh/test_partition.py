@@ -164,7 +164,10 @@ def unit_square_block(comm, n):
     `_centroids` both depend on that numbering. Cells and points are dealt out over the
     ranks in contiguous blocks, independently of each other, as `create_mesh` expects.
     """
-    first, last = (n * n * comm.rank) // comm.size, (n * n * (comm.rank + 1)) // comm.size
+    first, last = (
+        (n * n * comm.rank) // comm.size,
+        (n * n * (comm.rank + 1)) // comm.size,
+    )
     c = np.arange(first, last, dtype=np.int64)
     cj, ci = np.divmod(c, n)
 
@@ -187,7 +190,9 @@ def unit_square_block(comm, n):
 def split_seam_mesh(comm, n):
     """An ``n x n`` quadrilateral unit square partitioned by `seam_split_partitioner`."""
     if comm.size > num_bands(n):
-        pytest.skip(f"{comm.size} ranks but only {num_bands(n)} bands on a {n}x{n} grid")
+        pytest.skip(
+            f"{comm.size} ranks but only {num_bands(n)} bands on a {n}x{n} grid"
+        )
     cells, x = unit_square_block(comm, n)
     element = basix.ufl.element("Lagrange", "quadrilateral", 1, shape=(2,))
     partitioner = dolfinx.mesh.create_hybrid_cell_partitioner(
@@ -270,7 +275,9 @@ def test_partition_splits_the_seam(n):
         mesh, tdim - 1, lambda x: np.isclose(x[0], 1.0) | np.isclose(x[1], 1.0)
     )
     num_owned_facets = mesh.topology.index_map(tdim - 1).size_local
-    ghosted = comm.allreduce(int(np.count_nonzero(seam_facets >= num_owned_facets)), MPI.SUM)
+    ghosted = comm.allreduce(
+        int(np.count_nonzero(seam_facets >= num_owned_facets)), MPI.SUM
+    )
     if comm.size > 1:
         assert ghosted > 0, (
             "every seam boundary facet is owned by the rank that holds it:"
@@ -315,7 +322,7 @@ def test_doubly_periodic_torus_has_no_boundary(n):
     pm.topology.create_connectivity(tdim - 1, tdim)
     f_to_c = pm.topology.connectivity(tdim - 1, tdim)
     num_owned_facets = pm.topology.index_map(tdim - 1).size_local
-    cells_per_facet = (f_to_c.offsets[1:] - f_to_c.offsets[:-1])[:num_owned_facets]
+    cells_per_facet = np.diff(f_to_c.offsets)[:num_owned_facets]
     local_bad = int(np.count_nonzero(cells_per_facet != 2))
     num_bad = comm.allreduce(local_bad, op=MPI.SUM)
     assert num_bad == 0, (
