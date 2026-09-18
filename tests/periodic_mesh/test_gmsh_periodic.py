@@ -537,7 +537,7 @@ def test_public_entry_point_matches_the_pieces_it_composes():
     expected, _, _ = scifem.periodic.mesh._build_periodic_mesh(
         mesh, periodic_correspondence_from_nodes(mesh, pairs)
     )
-    got, _, _ = scifem.periodic.mesh.create_periodic_mesh_from_gmsh(
+    got, _, _ = scifem.periodic.mesh.create_periodic_mesh_from_igi(
         mesh, pairs.replaced, pairs.partner, pairs.num_nodes_global
     )
     assert torus_invariants(got)[:3] == torus_invariants(expected)[:3]
@@ -748,7 +748,7 @@ def test_gmsh_path_on_a_second_order_mesh(order):
     else:
         assert num_nodes > num_vertices, f"P{order} added no nodes beyond the vertices"
 
-    periodic = scifem.periodic.mesh.create_periodic_mesh_from_gmsh(
+    periodic = scifem.periodic.mesh.create_periodic_mesh_from_igi(
         mesh, pairs.replaced, pairs.partner, pairs.num_nodes_global
     )[0]
     _, volume, bad, jump = torus_invariants(periodic)
@@ -778,7 +778,7 @@ def test_raising_the_mesh_order_does_not_change_which_vertices_are_replaced():
     node_count = {}
     for order in (1, 2):
         mesh, pairs = periodic_square(comm, order=order)
-        _, replaced_vertices, _ = scifem.periodic.mesh.create_periodic_mesh_from_gmsh(
+        _, replaced_vertices, _ = scifem.periodic.mesh.create_periodic_mesh_from_igi(
             mesh, pairs.replaced, pairs.partner, pairs.num_nodes_global
         )
         owned = replaced_vertices[replaced_vertices < mesh.topology.index_map(0).size_local]

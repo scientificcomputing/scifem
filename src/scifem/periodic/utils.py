@@ -1,11 +1,6 @@
 import numpy as np
 import numpy.typing as npt
 import dataclasses
-import dolfinx
-
-from ..mpi_utils import (
-    broadcast_marked_entities,
-)
 
 
 @dataclasses.dataclass
@@ -28,10 +23,10 @@ class PeriodicNodes:
             :func:`periodic_correspondence_from_nodes` checks that it was.
     """
 
-    slave: npt.NDArray[np.int64] = dataclasses.field(
+    replaced: npt.NDArray[np.int64] = dataclasses.field(
         default_factory=lambda: np.zeros(0, dtype=np.int64)
     )
-    master: npt.NDArray[np.int64] = dataclasses.field(
+    partner: npt.NDArray[np.int64] = dataclasses.field(
         default_factory=lambda: np.zeros(0, dtype=np.int64)
     )
     num_nodes_global: int = 0
@@ -83,34 +78,34 @@ class VertexCorrespondence:
     partner_vertex: npt.NDArray[np.int32]
 
 
-def resolve_to_roots(slave, master):
+def resolve_to_roots(replaced, partner):
     """Follow every pair to a node that is not itself replaced.
 
     Args:
-        slave: 0-based node tags, with repeats and possibly several masters each.
-        master: The node paired with each entry of `slave`.
+        replaced: 0-based node tags, with repeats and possibly several partners each.
+        partner: The node paired with each entry of `replaced`.
 
     Returns:
-        ``(unique_slave, root)``: each distinct slave once, and the node it ultimately
+        ``(unique_replaced, root)``: each distinct replaced once, and the node it ultimately
         resolves to.
 
     Raises:
         RuntimeError: If the pairs cycle, or if two routes out of one node disagree on
             where it ends up.
     """
-    unique_slave, first = np.unique(slave, return_index=True)
-    # One master per slave to iterate on. Where a node has several -- a corner -- any one
+    unique_replaced, first = np.unique(replaced, return_index=True)
+    # One partner per node to iterate on. Where a node has several -- a corner -- any one
     # will do, because the agreement check below proves they all lead to the same place.
-    next_of = master[first]
+    next_of = partner[first]
 
-    # `position[n]` is where node n sits in `unique_slave`, or -1 if it is already a root.
-    lookup = np.full(int(max(unique_slave.max(), master.max())) + 2, -1, dtype=np.int64)
-    lookup[unique_slave] = np.arange(len(unique_slave), dtype=np.int64)
+    # `position[n]` is where node n sits in `unique_replaced`, or -1 if it is already a root.
+    lookup = np.full(int(max(unique_replaced.max(), partner.max())) + 2, -1, dtype=np.int64)
+    lookup[unique_replaced] = np.arange(len(unique_replaced), dtype=np.int64)
 
     # Pointer doubling: each pass at least halves the remaining chain length, so
     # ``ceil(log2(n)) + 1`` passes suffice unless the pairs cycle.
     root = next_of.copy()
-    max_passes = int(np.ceil(np.log2(max(len(unique_slave), 2)))) + 1
+    max_passes = int(np.ceil(np.log2(max(len(unique_replaced), 2)))) + 1
     for _ in range(max_passes):
         position = lookup[root]
         moving = position != -1
@@ -122,7 +117,7 @@ def resolve_to_roots(slave, master):
         raise RuntimeError(
             f"{int(np.count_nonzero(still))} periodic node chains do not end: the"
             " `$Periodic` pairs cycle, so no node is a root. First offending node tag"
-            f" (1-based): {int(unique_slave[np.flatnonzero(still)[0]]) + 1}."
+            f" (1-based): {int(unique_replaced[np.flatnonzero(still)[0]]) + 1}."
         )
 
     # Every recorded pair has to agree on the root, including the duplicates dropped
@@ -132,13 +127,13 @@ def resolve_to_roots(slave, master):
         position = lookup[nodes]
         return np.where(position == -1, nodes, root[np.maximum(position, 0)])
 
-    mismatch = root_of(slave) != root_of(master)
+    mismatch = root_of(replaced) != root_of(partner)
     if mismatch.any():
         i = int(np.flatnonzero(mismatch)[0])
         raise RuntimeError(
             "Inconsistent `$Periodic` section: node tags (1-based)"
-            f" {int(slave[i]) + 1} and {int(master[i]) + 1} are recorded as a periodic"
-            f" pair but resolve to different roots, {int(root_of(slave[i : i + 1])[0]) + 1}"
-            f" and {int(root_of(master[i : i + 1])[0]) + 1}."
+            f" {int(replaced[i]) + 1} and {int(partner[i]) + 1} are recorded as a periodic"
+            f" pair but resolve to different roots, {int(root_of(replaced[i : i + 1])[0]) + 1}"
+            f" and {int(root_of(partner[i : i + 1])[0]) + 1}."
         )
-    return unique_slave, root
+    return unique_replaced, root

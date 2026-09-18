@@ -26,18 +26,18 @@ def periodic_correspondence_from_nodes(
 
     1. every process registers the boundary vertices it holds with the post offices for
        their indices, saying whether it owns each one;
-    2. the reader sends each pair to the post office of its *master* index, which knows
+    2. the reader sends each pair to the post office of its *partner* index, which knows
        who owns that vertex. It tells that owner which pair it answers, and forwards the
-       pair to the post office of the *slave* index, which passes it to every process
+       pair to the post office of the *replaced* index, which passes it to every process
        holding a copy;
-    3. those processes then ask the master's owner directly, which is what tells it who
+    3. those processes then ask the partner's owner directly, which is what tells it who
        needs the cells at that vertex.
 
     Only the boundary vertices are registered, since gmsh pairs nothing else, so the post
     office stays proportional to the surface. Nothing is gathered: no process holds more
     than its own block of indices, except the reader, which holds the file it read.
 
-    The rank named for a master is its *vertex* owner, which is unique -- keeping the join
+    The rank named for a partner is its *vertex* owner, which is unique -- keeping the join
     single-valued -- and always owns a cell incident to the vertex, which is what
     :attr:`script.VertexCorrespondence.src_owner` requires.
 
@@ -62,7 +62,7 @@ def periodic_correspondence_from_nodes(
     num_nodes_global, largest_tag = comm.bcast(
         (
             pairs.num_nodes_global,
-            int(max(pairs.slave.max(), pairs.master.max())) if len(pairs.slave) else -1,
+            int(max(pairs.replaced.max(), pairs.partner.max())) if len(pairs.replaced) else -1,
         )
         if comm.rank == root
         else None,
@@ -95,51 +95,51 @@ def periodic_correspondence_from_nodes(
     owner_of = np.full(max(high - low, 0), -1, dtype=np.int64)
     owner_of[held_igi[held_owns] - low] = registrar[held_owns]
 
-    # (2) The reader hands each pair to the post office for its master index.
+    # (2) The reader hands each pair to the post office for its partner index.
     if comm.rank == root:
-        to_master_office = np.stack(
+        to_partner_office = np.stack(
             [
-                np.asarray(pairs.master, dtype=np.int64),
-                np.asarray(pairs.slave, dtype=np.int64),
-                np.arange(len(pairs.slave), dtype=np.int64),
+                np.asarray(pairs.partner, dtype=np.int64),
+                np.asarray(pairs.replaced, dtype=np.int64),
+                np.arange(len(pairs.replaced), dtype=np.int64),
             ],
             axis=1,
         )
     else:
-        to_master_office = np.zeros((0, 3), dtype=np.int64)
-    _, at_master_office = exchange_to_destinations(
+        to_partner_office = np.zeros((0, 3), dtype=np.int64)
+    _, at_partner_office = exchange_to_destinations(
         comm,
-        index_owner(comm, to_master_office[:, 0], num_nodes_global),
-        to_master_office,
+        index_owner(comm, to_partner_office[:, 0], num_nodes_global),
+        to_partner_office,
     )
-    master_igi, slave_igi, pair_id = at_master_office.T
+    partner_igi, replaced_igi, pair_id = at_partner_office.T
 
-    unknown = owner_of[master_igi - low] == -1 if len(master_igi) else np.zeros(0, bool)
+    unknown = owner_of[partner_igi - low] == -1 if len(partner_igi) else np.zeros(0, bool)
     # Collective: only the post offices see this, so it is reduced before anyone raises.
     num_unknown = comm.allreduce(int(np.count_nonzero(unknown)), op=MPI.SUM)
     if num_unknown:
         raise RuntimeError(
-            f"{num_unknown} periodic pairs name a master node that is not a boundary"
+            f"{num_unknown} periodic pairs name a partner node that is not a boundary"
             " vertex of the distributed mesh. The pairs and the mesh have to come from"
-            " the same gmsh model, and the master nodes have to be cell vertices."
+            " the same gmsh model, and the partner nodes have to be cell vertices."
         )
-    master_owner = owner_of[master_igi - low]
+    partner_owner = owner_of[partner_igi - low]
 
-    # Tell each master's owner which pair its vertex answers.
+    # Tell each partner's owner which pair its vertex answers.
     _, assignment = exchange_to_destinations(
-        comm, master_owner.astype(np.int32), np.stack([pair_id, master_igi], axis=1)
+        comm, partner_owner.astype(np.int32), np.stack([pair_id, partner_igi], axis=1)
     )
     answers_pair, answers_igi = assignment[:, 0], assignment[:, 1]
 
-    # Forward the pair to the post office for its slave index, which knows the holders.
-    _, at_slave_office = exchange_to_destinations(
+    # Forward the pair to the post office for its replaced index, which knows the holders.
+    _, at_replaced_office = exchange_to_destinations(
         comm,
-        index_owner(comm, slave_igi, num_nodes_global),
-        np.stack([slave_igi, pair_id, master_owner], axis=1),
+        index_owner(comm, replaced_igi, num_nodes_global),
+        np.stack([replaced_igi, pair_id, partner_owner], axis=1),
     )
-    wanted_igi, wanted_pair, wanted_owner = at_slave_office.T
+    wanted_igi, wanted_pair, wanted_owner = at_replaced_office.T
 
-    # Fan out to every process holding a copy of the slave vertex, ghosts included: each
+    # Fan out to every process holding a copy of the replaced vertex, ghosts included: each
     # of them carries the vertex in `indicator_vertices` and needs its own `src_owner`.
     holder_order = np.argsort(held_igi, kind="stable")
     holder_igi = held_igi[holder_order]
@@ -165,7 +165,7 @@ def periodic_correspondence_from_nodes(
     src_owner = delivered[keep, 2].astype(np.int32)
     my_pair = delivered[keep, 1]
 
-    # (3) Ask the master's owner directly. The request is what tells it who needs the
+    # (3) Ask the partner's owner directly. The request is what tells it who needs the
     # cells at that vertex, which is what `dest_owner` records.
     dest_owner, requested = exchange_to_destinations(comm, src_owner, my_pair.reshape(-1, 1))
 
@@ -174,7 +174,7 @@ def periodic_correspondence_from_nodes(
     answer_pair = answers_pair[answer_order]
     answer_igi = answers_igi[answer_order]
     position = np.searchsorted(answer_pair, requested[:, 0])
-    # A process can own no master vertex at all, and then receives no request either.
+    # A process can own no partner vertex at all, and then receives no request either.
     # Both arrays are empty and there is nothing to check, so the emptiness of the
     # assignments must not by itself count as a failure.
     found = (
@@ -223,12 +223,10 @@ def _vertices_that_can_be_paired(mesh):
     boundary_facets = broadcast_marked_entities(
         mesh, tdim - 1, dolfinx.mesh.exterior_facet_indices(mesh.topology)
     )
-    # A process can hold a copy of a boundary vertex without holding any boundary facet at
-    # it -- it may ghost a cell at the vertex whose own facets there are all interior --
-    # and it still has to register, or the fan-out will not reach it and it will disagree
-    # with the others about which vertices are replaced. Broadcasting the set closes that:
-    # the processes that do see a boundary facet mark the vertex, and the reduce-then-
-    # scatter carries the mark to every holder.
+    # Broadcast, because every holder of a boundary vertex has to register and a process
+    # can hold one without holding a boundary facet at it -- it may ghost a cell at the
+    # vertex whose own facets there are all interior. The scatter carries the mark from the
+    # processes that do see a facet to the rest.
     vertices = broadcast_marked_entities(
         mesh,
         0,
@@ -243,16 +241,8 @@ def _vertices_that_can_be_paired(mesh):
 def _seam_facets_from_vertices(mesh, indicator_vertices):
     """The exterior facets all of whose vertices are in `indicator_vertices`.
 
-    This is exactly what ``locate_entities_boundary`` at ``tdim - 1`` returns for the
-    marker that produced `indicator_vertices`: it keeps a facet when every vertex of it is
-    marked, over the owned exterior facets. Deriving it means the caller need not have a
-    marker function at all.
-
-    Exteriority comes from ``exterior_facet_indices``, which is owned-only and then
-    broadened. A local test for a facet with one incident cell would be wrong: one
-    incident cell locally means the neighbouring cell is not ghosted, which is not the
-    same as the facet being exterior, and the broadening would carry the mistake to the
-    owner rather than drop it.
+    Exteriority is taken from ``exterior_facet_indices``, which is owned-only, and the
+    result is broadened to the ghosts.
 
     Args:
         mesh: The mesh the vertices are local to.

@@ -28,7 +28,7 @@ from .utils import PeriodicNodes, resolve_to_roots
 
 
 def extract_gmsh_periodic_nodes(
-    model, include_high_order: bool = False, tol: float = 1e-8
+    model, include_high_order: bool = False, tol: float | None = 1e-8
 ) -> PeriodicNodes:
     """Collect the ``$Periodic`` node pairs of `model`, resolved to roots.
 
@@ -42,7 +42,10 @@ def extract_gmsh_periodic_nodes(
             so the default is what is wanted. The resolution below treats the extra nodes
             no differently, so the flag costs nothing either way.
         tol: Absolute tolerance for checking each pair against the affine transform gmsh
-            recorded with it. Pairs whose entity stored no transform are not checked.
+            recorded with it; `None` skips the check. Pairs whose entity stored no
+            transform are never checked. The check earns its place on a file from
+            elsewhere, where nothing has yet compared `$Periodic` against the coordinates,
+            and is close to tautological for a model this process just built.
 
     Returns:
         The pairs, as :class:`PeriodicNodes`.
@@ -51,41 +54,46 @@ def extract_gmsh_periodic_nodes(
         RuntimeError: If the pairs cycle, disagree on a root, or contradict the affine
             transform recorded with them.
     """
-    slaves, masters, hops = [], [], []
+    replaced_nodes, partner_nodes, hops = [], [], []
     for dim, tag in model.getEntities():
-        master_tag, node_tags, master_node_tags, affine = model.mesh.getPeriodicNodes(
+        partner_tag, node_tags, partner_node_tags, affine = model.mesh.getPeriodicNodes(
             dim, tag, include_high_order
         )
-        # gmsh returns the entity itself as its own master when it is not periodic.
-        if master_tag == tag or len(node_tags) == 0:
+        # gmsh returns the entity itself as its own partner when it is not periodic.
+        if partner_tag == tag or len(node_tags) == 0:
             continue
         s = np.asarray(node_tags, dtype=np.int64) - 1
-        m = np.asarray(master_node_tags, dtype=np.int64) - 1
-        slaves.append(s)
-        masters.append(m)
+        m = np.asarray(partner_node_tags, dtype=np.int64) - 1
+        replaced_nodes.append(s)
+        partner_nodes.append(m)
         hops.append((s, m, np.asarray(affine, dtype=np.float64)))
 
     all_node_tags, all_coords, _ = model.mesh.getNodes()
     num_nodes_global = int(np.asarray(all_node_tags, dtype=np.int64).max())
 
-    if not slaves:
+    if not replaced_nodes:
         return PeriodicNodes(num_nodes_global=num_nodes_global)
 
-    slave = np.concatenate(slaves)
-    master = np.concatenate(masters)
+    replaced = np.concatenate(replaced_nodes)
+    partner = np.concatenate(partner_nodes)
 
-    # Coordinates by 0-based tag, for the affine check.
-    coords = np.zeros((num_nodes_global, 3), dtype=np.float64)
-    coords[np.asarray(all_node_tags, dtype=np.int64) - 1] = np.asarray(
-        all_coords, dtype=np.float64
-    ).reshape(-1, 3)
-    for s, m, affine in hops:
+    # Coordinates by 0-based node tag, through a sorted index. Tags are unique, so the
+    # search is exact.
+    node_tags = np.asarray(all_node_tags, dtype=np.int64) - 1
+    node_coords = np.asarray(all_coords, dtype=np.float64).reshape(-1, 3)
+    tag_order = np.argsort(node_tags)
+    sorted_tags = node_tags[tag_order]
+
+    def coordinates_of(nodes):
+        return node_coords[tag_order[np.searchsorted(sorted_tags, nodes)]]
+
+    for s, m, affine in hops if tol is not None else ():
         # gmsh stores a 4x4 row-major matrix, or nothing at all for some entities.
         if affine.size != 16:
             continue
         matrix = affine.reshape(4, 4)
-        mapped = coords[m] @ matrix[:3, :3].T + matrix[:3, 3]
-        gap = np.linalg.norm(mapped - coords[s], axis=1)
+        mapped = coordinates_of(m) @ matrix[:3, :3].T + matrix[:3, 3]
+        gap = np.linalg.norm(mapped - coordinates_of(s), axis=1)
         if (gap > tol).any():
             i = int(np.argmax(gap))
             raise RuntimeError(
@@ -94,9 +102,9 @@ def extract_gmsh_periodic_nodes(
                 f" {gap[i]:.3e} apart after the transform, tolerance {tol:.3e}."
             )
 
-    unique_slave, root = resolve_to_roots(slave, master)
-    assert not np.isin(root, unique_slave).any(), "a root is itself replaced"
-    return PeriodicNodes(unique_slave, root, num_nodes_global)
+    unique_replaced, root = resolve_to_roots(replaced, partner)
+    assert not np.isin(root, unique_replaced).any(), "a root is itself replaced"
+    return PeriodicNodes(unique_replaced, root, num_nodes_global)
 
 
 def read_periodic_mesh_from_msh(
@@ -121,7 +129,7 @@ def read_periodic_mesh_from_msh(
         rank: The rank that reads the file.
         gdim: Geometric dimension of the mesh.
         partitioner: Cell partitioner, passed through to ``model_to_mesh``.
-        tag_base: Passed through to :func:`script.create_periodic_mesh_from_gmsh`.
+        tag_base: Passed through to :func:`create_periodic_mesh_from_igi`.
         kwargs: Further arguments for ``model_to_mesh``, such as ``ghost_mode`` where the
             installed DOLFINx takes it there.
 
@@ -153,8 +161,8 @@ def read_periodic_mesh_from_msh(
     mesh = getattr(mesh_data, "mesh", mesh_data)
     return create_periodic_mesh_from_igi(
         mesh,
-        pairs.slave,
-        pairs.master,
+        pairs.replaced,
+        pairs.partner,
         pairs.num_nodes_global,
         root=rank,
         tag_base=tag_base,
