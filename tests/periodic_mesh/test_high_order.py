@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from mpi4py import MPI
 
-from script import create_periodic_mesh
+from scifem.periodic.mesh import create_periodic_mesh
 from test_periodic import seam_jump, volume
 
 # (cell type, geometry degree). Quadrilaterals cover the non-simplex dofmap, tetrahedra the
