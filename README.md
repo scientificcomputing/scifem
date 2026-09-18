@@ -19,6 +19,7 @@ The package is still in its early stages and many functionalities are still miss
 - Blocked Newton Solver
 - Function evaluation at specified points
 - Interpolation matrices from any `ufl.core.expr.Expr` into a compatible space.
+- Periodic meshes
 
 ## Installation
 
