@@ -26,6 +26,25 @@ import numpy.typing as npt
 from .mesh import create_periodic_mesh_from_gmsh
 
 
+@dataclasses.dataclass
+class GmshPeriodicNodes:
+    """The node pairs of a gmsh model, resolved to roots.
+
+    Args:
+        slave: 0-based gmsh node tags that are to be replaced, ascending and without
+            repeats. These are values of ``mesh.geometry.input_global_indices``.
+        master: For each entry of `slave`, the node it is identified with. Never itself a
+            slave, so no further resolution is needed.
+        num_nodes_global: The number of nodes in the gmsh model. Not
+            ``mesh.geometry.index_map().size_global``, which is smaller when ``create_mesh``
+            drops nodes that no cell references.
+    """
+
+    slave: npt.NDArray[np.int64]
+    master: npt.NDArray[np.int64]
+    num_nodes_global: int
+
+
 def _resolve_to_roots(slave, master):
     """Follow every pair to a node that is not itself replaced.
 

@@ -631,20 +631,6 @@ def periodic_box(comm, res=1.0 / 4, low_is_slave=True):
     return mesh, pairs
 
 
-SEAM_GHOST_3D = pytest.mark.xfail(
-    MPI.COMM_WORLD.size >= 4,
-    reason=(
-        "3D seam ghosting: at 4 ranks an interprocess facet of the rebuilt mesh is"
-        " missing its ghost cell. Not specific to the gmsh path -- the geometric path on"
-        " a structured unit cube fails identically at N=4 on 4 ranks, and both are clean"
-        " at 1-3 ranks. A third cause alongside the two phase-1/phase-3 ones, which only"
-        " 3D exposes."
-    ),
-    strict=False,
-)
-
-
-@SEAM_GHOST_3D
 def test_gmsh_path_in_3d_builds_a_three_torus():
     """A triply periodic cube, where the corner chain runs through three directions.
 
@@ -666,7 +652,6 @@ def test_gmsh_path_in_3d_builds_a_three_torus():
     assert num_vertices == before - num_slaves
 
 
-@SEAM_GHOST_3D
 def test_gmsh_and_geometric_paths_agree_in_3d():
     """The equivalence test in 3D, which is where the corner chain is longest.
 

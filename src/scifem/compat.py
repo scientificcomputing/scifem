@@ -58,9 +58,7 @@ def extract_cpp_object(obj):
         return obj
 
 
-def _compat_topology(
-    comm, cell_type, tdim, vertex_map, cell_map, c_to_v, v_to_v, original_cell_index
-):
+def topology(comm, cell_type, tdim, vertex_map, cell_map, c_to_v, v_to_v, original_cell_index):
     """Construct a ``dolfinx.cpp.mesh.Topology`` across the supported DOLFINx versions.
 
     The constructor has changed shape more than once and none of the forms is
@@ -106,3 +104,23 @@ def _compat_topology(
         return dolfinx.cpp.mesh.Topology(comm, *args)
     except TypeError:
         return dolfinx.cpp.mesh.Topology(*args)
+
+
+def ghosting_ranks(index_map, tag: int):
+    """The ranks that ghost each owned index of `index_map`, flat and with offsets.
+
+    Compat: `IndexMap.index_to_dest_ranks` hands back the two arrays directly in DOLFINx
+    0.12 and wraps them in an adjacency list in 0.11.
+
+    Args:
+        index_map: The map to read the ghosting ranks of.
+        tag: MPI tag for the consensus exchange, the same on every process and not in use
+            by another exchange in flight.
+
+    Returns:
+        ``(ranks, offsets)``: the ghosting ranks of owned index ``i`` are
+        ``ranks[offsets[i]:offsets[i + 1]]``. Collective.
+    """
+    dest = index_map.index_to_dest_ranks(tag)
+    ranks, offsets = (dest.array, dest.offsets) if hasattr(dest, "array") else dest
+    return np.asarray(ranks, dtype=np.int32), np.asarray(offsets, dtype=np.int64)

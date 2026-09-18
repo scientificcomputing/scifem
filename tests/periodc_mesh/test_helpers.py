@@ -15,7 +15,12 @@ reading this file can see exactly what the fast versions are supposed to compute
 import numpy as np
 import pytest
 
-from script import compute_insert_position, find_position, unroll_insert_position
+from script import (
+    compute_insert_position,
+    find_position,
+    gather_ragged,
+    unroll_insert_position,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -72,6 +77,41 @@ def test_unroll_insert_position_docstring_example():
     assert np.array_equal(unroll_insert_position(insert_position, 3), expected)
 
 
+def test_gather_ragged_docstring_example():
+    offsets = np.array([0, 2, 2, 5], dtype=np.int64)
+    positions, sizes = gather_ragged(offsets, np.array([2, 0], dtype=np.int64))
+    assert np.array_equal(positions, [2, 3, 4, 0, 1])
+    assert np.array_equal(sizes, [3, 2])
+
+
+def test_gather_ragged_takes_an_empty_group():
+    offsets = np.array([0, 2, 2, 5], dtype=np.int64)
+    positions, sizes = gather_ragged(offsets, np.array([1, 1], dtype=np.int64))
+    assert len(positions) == 0 and np.array_equal(sizes, [0, 0])
+
+
+def test_gather_ragged_takes_an_empty_selection():
+    offsets = np.array([0, 2, 2, 5], dtype=np.int64)
+    positions, sizes = gather_ragged(offsets, np.zeros(0, dtype=np.int64))
+    assert len(positions) == 0 and len(sizes) == 0
+
+
+@pytest.mark.parametrize("seed", range(25))
+def test_gather_ragged_matches_the_loop(seed):
+    """The loop the vectorised form replaces, on ragged arrays with empty groups in them."""
+    rng = np.random.default_rng(seed)
+    sizes = rng.integers(0, 4, size=rng.integers(1, 12))
+    offsets = np.zeros(len(sizes) + 1, dtype=np.int64)
+    np.cumsum(sizes, out=offsets[1:])
+    data = rng.integers(0, 100, size=int(offsets[-1]))
+    selection = rng.integers(0, len(sizes), size=rng.integers(0, 15))
+
+    expected = [v for i in selection for v in data[offsets[i] : offsets[i + 1]]]
+    positions, got_sizes = gather_ragged(offsets, selection)
+    assert np.array_equal(data[positions], expected)
+    assert np.array_equal(got_sizes, sizes[selection])
+
+
 # --------------------------------------------------------------------------- #
 # equivalence with the dense implementations
 # --------------------------------------------------------------------------- #
@@ -84,7 +124,9 @@ def test_find_position_matches_dense(seed):
     # a permutation, so `values` has no repeats -- the usual case
     values = rng.permutation(n_values).astype(np.int32)
     data = rng.choice(values, size=int(rng.integers(0, 60))).astype(np.int32)
-    assert np.array_equal(find_position(data, values), find_position_dense(data, values))
+    assert np.array_equal(
+        find_position(data, values), find_position_dense(data, values)
+    )
 
 
 @pytest.mark.parametrize("seed", range(25))
@@ -93,7 +135,9 @@ def test_find_position_matches_dense_with_repeats(seed):
     rng = np.random.default_rng(1000 + seed)
     values = rng.integers(0, 6, size=int(rng.integers(2, 30))).astype(np.int32)
     data = rng.choice(values, size=int(rng.integers(1, 40))).astype(np.int32)
-    assert np.array_equal(find_position(data, values), find_position_dense(data, values))
+    assert np.array_equal(
+        find_position(data, values), find_position_dense(data, values)
+    )
 
 
 def test_find_position_empty():

@@ -18,6 +18,7 @@ from ..mpi_utils import (
     find_position,
     all_to_all,
     mpi_dtype,
+    exchange_to_destinations,
 )
 from ..compat import index_map, topology as compat_topology
 
@@ -85,23 +86,33 @@ def transfer_meshtags_to_periodic_mesh(
     )
 
 
-@dataclasses.dataclass
-class PeriodicNodes:
-    """The node pairs of a periodic mesh, resolved to roots.
+def gather_ragged(offsets, selection):
+    """Index into a ragged array for several of its groups at once.
 
     Args:
-        replaced: 0-based gmsh node tags that are to be replaced, ascending and without
-            repeats. These are values of ``mesh.geometry.input_global_indices``.
-        master: For each entry of `slave`, the node it is identified with. Never itself a
-            slave, so no further resolution is needed.
-        num_nodes_global: The number of nodes in the gmsh model. Not
-            ``mesh.geometry.index_map().size_global``, which is smaller when ``create_mesh``
-            drops nodes that no cell references.
-    """
+        offsets: Group ``i`` of the ragged array is ``data[offsets[i]:offsets[i + 1]]``.
+        selection: The groups to concatenate, in order. Repeats are allowed.
 
-    slave: npt.NDArray[np.int64]
-    master: npt.NDArray[np.int64]
-    num_nodes_global: int
+    Returns:
+        ``(positions, sizes)``: where in `data` each element of the concatenation lies, so
+        that ``data[positions]`` is the concatenation itself, and the size of each group
+        taken, so that a running sum of it gives the concatenation's own offsets.
+
+    Example:
+
+        .. highlight:: python
+        .. code-block:: python
+
+            offsets = [0, 2, 2, 5]
+            positions, sizes = gather_ragged(offsets, [2, 0])
+
+        gives ``positions = [2, 3, 4, 0, 1]`` and ``sizes = [3, 2]``.
+    """
+    selection = np.asarray(selection)
+    sizes = (offsets[selection + 1] - offsets[selection]).astype(np.int64)
+    # Position within its own group, for every element of the concatenation at once.
+    within = np.arange(int(sizes.sum())) - np.repeat(np.cumsum(sizes) - sizes, sizes)
+    return np.repeat(offsets[selection], sizes) + within, sizes
 
 
 @dataclasses.dataclass
@@ -383,51 +394,28 @@ def _partner_in_reduced_map(comm, sub_map, parent_to_sub, partner_vertex):
     return global_vertices, owners
 
 
-def _owners_from_source(vertex_sources, recv_num_cells, recv_potential_cell_owners):
-    """For each sender, the owners of the cells it sent, together with the sender.
-
-    Reads the answer off data already received, so it communicates nothing.
-
-    Args:
-        vertex_sources: The sending ranks, ascending and without repeats.
-        recv_num_cells: How many cells were received from each of them, in the same order.
-        recv_potential_cell_owners: Owner of each received cell, grouped by sender, so of
-            length ``recv_num_cells.sum()``.
-
-    Returns:
-        A rank from `vertex_sources` to that union, ascending and without repeats. The
-        caller uses it as the set of ranks to reach on that sender's behalf, which is
-        wider than the sender alone because several of them may hold a cell at a vertex.
-    """
-    source_offsets = np.zeros(len(recv_num_cells) + 1, dtype=np.int64)
-    np.cumsum(recv_num_cells, out=source_offsets[1:])
-    return {
-        int(src): np.union1d(
-            recv_potential_cell_owners[source_offsets[j] : source_offsets[j + 1]],
-            np.array([src], dtype=np.int32),
-        ).astype(np.int32)
-        for j, src in enumerate(vertex_sources)
-    }
-
-
 def _seam_facet_destinations(
-    mesh, indicator_vertices, indicator_facets, src_owner, owners_from_source
+    mesh, indicator_vertices, indicator_facets, vertex_offsets, vertex_holders
 ):
     """Expand each facet into one pair per rank reachable through its vertices.
 
-    A facet's vertices name ranks in `src_owner`, each of which `owners_from_source`
-    widens to a set; the facet is paired with the union over its vertices.
+    Each of a facet's vertices is replaced by a master vertex that a set of ranks holds;
+    the facet is paired with the union of those sets over its vertices. Those are the ranks
+    that will hold the cell on the far side of the seam, so they are the ones the cell on
+    this side has to reach.
 
     Collective, so that a facet whose vertices are not all in `indicator_vertices` raises
     on every process rather than on one.
 
     Args:
         mesh: The mesh `indicator_facets` and `indicator_vertices` are local to.
-        indicator_vertices: Local vertices that `src_owner` is keyed on, in that order.
+        indicator_vertices: Local vertices that the two ragged arrays are keyed on, in that
+            order.
         indicator_facets: Local facets to expand.
-        src_owner: One rank per entry of `indicator_vertices`.
-        owners_from_source: A rank to the ranks it stands for, from
-            :func:`_owners_from_source`.
+        vertex_offsets: Into `vertex_holders`, one per entry of `indicator_vertices` plus a
+            final total.
+        vertex_holders: The ranks holding the master vertex of each of
+            `indicator_vertices`, grouped by it.
 
     Returns:
         ``(facet, rank)`` pairs as an ``(n, 2)`` array, de-duplicated and sorted
@@ -444,7 +432,7 @@ def _seam_facet_destinations(
 
     vertex_map = mesh.topology.index_map(0)
     # position of a local vertex in `indicator_vertices`, which is the index that
-    # `src_owner` and `global_replacement_*` are keyed on: entry k describes the k-th
+    # `vertex_offsets` and `global_replacement_*` are keyed on: entry k describes the k-th
     # local vertex that will be replaced.
     position_in_indicator_vertices = np.full(
         vertex_map.size_local + vertex_map.num_ghosts, -1, dtype=np.int32
@@ -483,25 +471,19 @@ def _seam_facet_destinations(
     #     pairs = set()
     #     for i in range(len(indicator_facets)):
     #         for j in range(num_facet_vertices):
-    #             src = src_owner[facet_vertex_positions[i, j]]
-    #             for rank in owners_from_source[src]:
-    #                 pairs.add((i, rank))
+    #             p = facet_vertex_positions[i, j]
+    #             for k in range(vertex_offsets[p], vertex_offsets[p + 1]):
+    #                 pairs.add((i, vertex_holders[k]))
     #     facet_pairs = sorted(pairs)
     # `np.unique(..., axis=0)` both de-duplicates and sorts lexicographically by
     # (facet, rank), which is the order the packing downstream expects.
-    facet_vertex_source = src_owner[facet_vertex_positions]
-    pair_facet, pair_rank = [], []
-    for src, owners in owners_from_source.items():
-        hit_facet = np.nonzero(facet_vertex_source == src)[0].astype(np.int32)
-        if hit_facet.size and owners.size:
-            pair_facet.append(np.repeat(hit_facet, owners.size))
-            pair_rank.append(np.tile(owners, hit_facet.size))
-    if not pair_facet:
-        return np.zeros((0, 2), dtype=np.int32)
-    return np.unique(
-        np.stack([np.concatenate(pair_facet), np.concatenate(pair_rank)], axis=1),
-        axis=0,
+    positions, num_holders = gather_ragged(vertex_offsets, facet_vertex_positions.reshape(-1))
+    pair_facet = np.repeat(
+        np.repeat(np.arange(len(indicator_facets), dtype=np.int32), num_facet_vertices),
+        num_holders,
     )
+    pair_rank = vertex_holders[positions]
+    return np.unique(np.stack([pair_facet, pair_rank], axis=1), axis=0).astype(np.int32)
 
 
 def _number_new_ghosts(index_map, global_indices, *payloads):
@@ -544,6 +526,137 @@ def _number_new_ghosts(index_map, global_indices, *payloads):
         )
         gathered.append(chosen)
     return local, new_ghosts, missing[pos], tuple(gathered)
+
+
+@dataclasses.dataclass
+class PartnerHolders:
+    """Which ranks hold each master vertex, seen from both ends of the seam.
+
+    The two halves answer the two questions the rebuild asks of a master vertex: what this
+    process has to serve, and who will serve it. They are keyed independently, like the
+    halves of {py:class}`VertexCorrespondence`.
+    """
+
+    #: Local master vertices this process has to pack cells at, grouped by destination.
+    vertices: npt.NDArray[np.int32]
+    #: The rank each of `vertices` is served to, ascending.
+    destinations: npt.NDArray[np.int32]
+    #: The ranks that will serve this one, ascending and without repeats. The transpose of
+    #: `destinations` across the communicator.
+    sources: npt.NDArray[np.int32]
+    #: Master vertices replacing a vertex of this process, as global indices into the
+    #: parent vertex map, ascending and without repeats.
+    served: npt.NDArray[np.int64]
+    #: Into `holders`, one entry per entry of `served` plus a final total.
+    offsets: npt.NDArray[np.int64]
+    #: The ranks holding each of `served`, grouped by it.
+    holders: npt.NDArray[np.int32]
+
+
+def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner):
+    """Spread each ``(master vertex, destination)`` pair to every rank holding the vertex.
+
+    `partner_vertex` names one holder of each master vertex -- whichever rank answered
+    :func:`dolfinx.geometry.determine_point_ownership` for it -- but the cells meeting that
+    vertex are spread over every rank that holds it, and none of them sees the whole star:
+    with `shared_facet` ghosting a rank ghosts its facet neighbours, which in 3D is a small
+    part of a vertex's cells. This hands each holder the destinations its own share has to
+    reach, and tells each destination which holders will write to it.
+
+    Collective, in two exchanges: the answering rank reports the pair to the vertex's
+    owner, the only rank that knows who else holds it, and the owner passes it on.
+
+    Args:
+        mesh: The mesh `partner_vertex` is local to.
+        partner_vertex: Local master vertices, one per vertex taken over.
+        dest_owner: The rank each of them is taken over from, in the same order.
+
+    Returns:
+        A {py:class}`PartnerHolders`. Its `destinations` and `sources` describe the
+        neighbourhood the cells travel over; `served`/`offsets`/`holders` are the same
+        information read from the other end, which is what the seam facets are sent by.
+    """
+    comm = mesh.comm
+    vertex_map = mesh.topology.index_map(0)
+    size_local = vertex_map.size_local
+
+    # --- to the owner of the master vertex. A ghost names its owner outright, so there is
+    # nothing to look up.
+    owner = np.full(len(partner_vertex), comm.rank, dtype=np.int32)
+    is_ghost = partner_vertex >= size_local
+    owner[is_ghost] = vertex_map.owners[partner_vertex[is_ghost] - size_local]
+    _, at_owner = exchange_to_destinations(
+        comm,
+        owner,
+        np.stack(
+            [
+                vertex_map.local_to_global(partner_vertex.astype(np.int32)),
+                np.asarray(dest_owner, dtype=np.int64),
+            ],
+            axis=1,
+        ),
+    )
+
+    # --- from the owner to every holder. `index_to_dest_ranks` lists the ranks that ghost
+    # each owned index; the owner holds it as well, and is appended as itself.
+    ghosting_ranks, ghosting_offsets = _compat_ghosting_ranks(vertex_map, 1101)
+    local = vertex_map.global_to_local(np.ascontiguousarray(at_owner[:, 0]))
+    assert (local != -1).all(), "A vertex was reported to a rank that does not own it"
+    # Flatten the ragged per-vertex rank lists. Equivalent to:
+    #     for i, v in enumerate(local):
+    #         for r in ghosting_ranks_of(v):
+    #             row.push_back(i); holder.push_back(r);
+    positions, num_ghosting = gather_ragged(ghosting_offsets, local)
+    ghosting = ghosting_ranks[positions]
+    row = np.concatenate(
+        [
+            np.repeat(np.arange(len(local), dtype=np.int64), num_ghosting),
+            np.arange(len(local), dtype=np.int64),
+        ]
+    )
+    holder = np.concatenate(
+        [ghosting.astype(np.int32), np.full(len(local), comm.rank, dtype=np.int32)]
+    )
+
+    # Each pair goes twice: to the holder, as a share to pack, and to the destination, as
+    # notice of a sender. A rank that is both gets it both ways and reads it both ways.
+    fanned = np.column_stack([at_owner[row], holder.astype(np.int64)])
+    _, delivered = exchange_to_destinations(
+        comm,
+        np.concatenate([holder, fanned[:, 1].astype(np.int32)]),
+        np.concatenate([fanned, fanned]),
+    )
+
+    to_pack = delivered[delivered[:, 2] == comm.rank]
+    # Lexicographic, so the vertices come out grouped by destination, which is the layout
+    # `_pack_cells_at_vertices` reads them in.
+    pairs = np.unique(
+        np.stack(
+            [
+                to_pack[:, 1],
+                vertex_map.global_to_local(np.ascontiguousarray(to_pack[:, 0])),
+            ],
+            axis=1,
+        ),
+        axis=0,
+    )
+    # The same rows read from the receiving end: which ranks hold each master vertex that
+    # replaces one of this process's. Lexicographic again, so the holders come out grouped
+    # by the vertex they belong to.
+    incoming = np.unique(delivered[delivered[:, 1] == comm.rank][:, [0, 2]], axis=0)
+    served, served_counts = np.unique(incoming[:, 0], return_counts=True)
+    offsets = np.zeros(len(served) + 1, dtype=np.int64)
+    np.cumsum(served_counts, out=offsets[1:])
+    holders = incoming[:, 1].astype(np.int32)
+
+    return PartnerHolders(
+        vertices=pairs[:, 1].astype(np.int32),
+        destinations=pairs[:, 0].astype(np.int32),
+        sources=np.unique(holders),
+        served=served.astype(np.int64),
+        offsets=offsets,
+        holders=holders,
+    )
 
 
 def _pack_cells_at_vertices(mesh, vertices, boundary_facets, vertices_per_dest):
@@ -661,20 +774,38 @@ def _build_periodic_mesh(
     geom_dm = mesh.geometry.dofmaps[0]
     c_to_v = mesh.topology.connectivity(mesh.topology.dim, 0)
 
-    # Pack data from process taking over vertex to process that has lost vertex
-    assert np.all(dest_owner[:-1] <= dest_owner[1:]), "Vertex owners are not sorted"
-    vertex_destinations, send_vertices_per_proc = np.unique(dest_owner, return_counts=True)
+    # Pack data from process taking over vertex to process that has lost vertex.
     # The grouping works because `dest_owner` is sorted, so `partner_vertex` is already
     # laid out in blocks of one destination each.
+    assert np.all(dest_owner[:-1] <= dest_owner[1:]), "Vertex owners are not sorted"
+    vertex_destinations, vertices_per_dest = np.unique(dest_owner, return_counts=True)
+    vertex_sources, vertices_per_source = np.unique(src_owner, return_counts=True)
+
+    # The cells at a master vertex are spread over every rank that holds it, and the rank
+    # that answered for it sees only its own share, so the pairs are fanned out to all
+    # holders before any cell is packed. The cell graph is therefore wider than the vertex
+    # graph: a rank can owe cells to a destination it answered nothing for.
+    partner_holders = _holders_of_partner_vertices(mesh, partner_vertex, dest_owner)
+    cell_sources = partner_holders.sources
+    cell_destinations, held_per_dest = np.unique(partner_holders.destinations, return_counts=True)
     send_ghost_cells_from_new_owner, new_cell_topology_dm, num_cells_per_proc = (
-        _pack_cells_at_vertices(mesh, partner_vertex, org_mesh_ext_facets, send_vertices_per_proc)
+        _pack_cells_at_vertices(mesh, partner_holders.vertices, org_mesh_ext_facets, held_per_dest)
     )
 
-    # Create new owner to old owner communicator
-    vertex_sources, recv_vertices_per_proc = np.unique(src_owner, return_counts=True)
+    # Create new owner to old owner communicator. One communicator carries both, so the
+    # vertex counts are padded out to the wider graph. A rank that answers for a vertex
+    # holds it, so the vertex graph sits inside the cell graph and the padding is zeros.
     new_owner_to_old_comm = comm.Create_dist_graph_adjacent(
-        vertex_sources, vertex_destinations, reorder=False
+        cell_sources, cell_destinations, reorder=False
     )
+    assert np.isin(vertex_destinations, cell_destinations).all()
+    assert np.isin(vertex_sources, cell_sources).all()
+    send_vertices_per_proc = np.zeros(len(cell_destinations), dtype=np.int32)
+    send_vertices_per_proc[np.searchsorted(cell_destinations, vertex_destinations)] = (
+        vertices_per_dest
+    )
+    recv_vertices_per_proc = np.zeros(len(cell_sources), dtype=np.int32)
+    recv_vertices_per_proc[np.searchsorted(cell_sources, vertex_sources)] = vertices_per_source
 
     # Send replacement vertices to process that has lost vertex
     recv_replacement_vertices = np.empty(recv_vertices_per_proc.sum(), dtype=np.int64)
@@ -696,11 +827,22 @@ def _build_periodic_mesh(
         recv_vertices_per_proc,
     )
 
+    # And its index in the parent vertex map, which is the key `PartnerHolders.served` is
+    # sorted on and so the only way back from a replaced vertex to who holds its master.
+    recv_replacement_parent = np.empty(recv_vertices_per_proc.sum(), dtype=np.int64)
+    all_to_allv(
+        new_owner_to_old_comm,
+        mesh.topology.index_map(0)
+        .local_to_global(partner_vertex.astype(np.int32))
+        .astype(np.int64),
+        send_vertices_per_proc,
+        recv_replacement_parent,
+        recv_vertices_per_proc,
+    )
+
     # For the data that will be received, the received has to be
     # ordered by their initial position in `indicator_vertices`, not by src_rank
-    current_rank_to_recv = compute_insert_position(
-        src_owner, vertex_sources, recv_vertices_per_proc
-    )
+    current_rank_to_recv = compute_insert_position(src_owner, cell_sources, recv_vertices_per_proc)
     # Invert map so that we can insert the data
     dest_ranks_to_current = np.zeros(len(indicator_vertices), dtype=np.int64)
     dest_ranks_to_current[current_rank_to_recv] = np.arange(
@@ -712,6 +854,8 @@ def _build_periodic_mesh(
     global_replacement_vertex[dest_ranks_to_current] = recv_replacement_vertices
     global_replacement_owner = np.full(len(indicator_vertices), -1, dtype=np.int64)
     global_replacement_owner[dest_ranks_to_current] = recv_replacement_owner
+    global_replacement_parent = np.full(len(indicator_vertices), -1, dtype=np.int64)
+    global_replacement_parent[dest_ranks_to_current] = recv_replacement_parent
     # Collective, and explicit about the cause: a -1 here means the mapped point was not
     # found in any cell of the mesh, i.e. `mapping_function` moved it outside the domain.
     num_unowned = int(
@@ -954,19 +1098,29 @@ def _build_periodic_mesh(
 
     # --- 3 --- Communicate cells from process that has lost vertex to process that has taken over vertex
 
-    # Where each seam facet's cell has to go comes from the vertex correspondence.
-    # `src_owner` names a cell owner, not the owner of the replacement vertex: the rank
-    # holding the cell on the far side of the seam may only ghost that vertex, and would
-    # then never receive this cell. It names only one such rank, so the set is widened
-    # from what phase 1 already shipped back.
+    # Where each seam facet's cell has to go: to every rank holding the master vertex that
+    # replaces one of its own, because those are the ranks that can hold the cell on the
+    # far side. `src_owner` will not do -- it names the one rank that answered for the
+    # vertex, and the cell across the seam may be owned by any other holder of it.
+    # Re-indexed here from `served`, which is keyed on the master's parent global index,
+    # onto the order of `indicator_vertices`, which is what the facets are expanded in.
+    position_in_served = np.searchsorted(partner_holders.served, global_replacement_parent)
+    assert (partner_holders.served[position_in_served] == global_replacement_parent).all(), (
+        "A replacement vertex arrived without the ranks that hold it"
+    )
+    positions, num_holders = gather_ragged(partner_holders.offsets, position_in_served)
+    vertex_holders = partner_holders.holders[positions]
+    vertex_holder_offsets = np.zeros(len(indicator_vertices) + 1, dtype=np.int64)
+    np.cumsum(num_holders, out=vertex_holder_offsets[1:])
+
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     f_to_c = mesh.topology.connectivity(mesh.topology.dim - 1, mesh.topology.dim)
     facet_pairs = _seam_facet_destinations(
         mesh,
         indicator_vertices,
         indicator_facets,
-        src_owner,
-        _owners_from_source(vertex_sources, recv_num_cells, recv_potential_cell_owners),
+        vertex_holder_offsets,
+        vertex_holders,
     )
 
     lost_facet_position = facet_pairs[:, 0]
