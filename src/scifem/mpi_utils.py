@@ -63,9 +63,7 @@ def all_to_all(comm, send_data, recv_data):
 
 
 def get_ownership(imap) -> npt.NDArray[np.int32]:
-    """
-    Get ownership of each index in an index map
-    """
+    """Get ownership of each index in an index map."""
     owners = np.full(imap.size_local + imap.num_ghosts, imap.comm.rank, dtype=np.int32)
     owners[imap.size_local :] = imap.owners
     return owners
