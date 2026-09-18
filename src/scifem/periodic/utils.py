@@ -12,6 +12,10 @@ from ..mpi_utils import (
 class PeriodicNodes:
     """The node pairs of a gmsh model, resolved to roots.
 
+    Only the reading rank holds these; every other process passes an empty set, which is
+    what the defaults are for -- ``GmshPeriodicNodes()`` says "nothing here" without the
+    caller having to build two empty arrays to say it.
+
     Args:
         slave: 0-based gmsh node tags that are to be replaced, ascending and without
             repeats. These are values of ``mesh.geometry.input_global_indices``.
@@ -19,12 +23,18 @@ class PeriodicNodes:
             slave, so no further resolution is needed.
         num_nodes_global: The number of nodes in the gmsh model. Not
             ``mesh.geometry.index_map().size_global``, which is smaller when ``create_mesh``
-            drops nodes that no cell references.
+            drops nodes that no cell references. Taken from `root` and broadcast, so the
+            default stands on every other process; on `root` it has to be set, and
+            :func:`periodic_correspondence_from_nodes` checks that it was.
     """
 
-    slave: npt.NDArray[np.int64]
-    master: npt.NDArray[np.int64]
-    num_nodes_global: int
+    slave: npt.NDArray[np.int64] = dataclasses.field(
+        default_factory=lambda: np.zeros(0, dtype=np.int64)
+    )
+    master: npt.NDArray[np.int64] = dataclasses.field(
+        default_factory=lambda: np.zeros(0, dtype=np.int64)
+    )
+    num_nodes_global: int = 0
 
 
 @dataclasses.dataclass

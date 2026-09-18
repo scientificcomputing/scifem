@@ -66,8 +66,7 @@ def extract_gmsh_periodic_nodes(
     num_nodes_global = int(np.asarray(all_node_tags, dtype=np.int64).max())
 
     if not slaves:
-        empty = np.zeros(0, dtype=np.int64)
-        return PeriodicNodes(empty, empty, num_nodes_global)
+        return PeriodicNodes(num_nodes_global=num_nodes_global)
 
     slave = np.concatenate(slaves)
     master = np.concatenate(masters)
@@ -139,8 +138,7 @@ def read_periodic_mesh_from_msh(
             gmsh.merge(str(filename))
             pairs = extract_gmsh_periodic_nodes(gmsh.model)
         else:
-            empty = np.zeros(0, dtype=np.int64)
-            pairs = PeriodicNodes(empty, empty, 0)
+            pairs = PeriodicNodes(0)
 
         mesh_data = dolfinx.io.gmsh.model_to_mesh(
             gmsh.model, comm, rank, gdim=gdim, partitioner=partitioner, **kwargs

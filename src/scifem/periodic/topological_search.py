@@ -57,7 +57,28 @@ def periodic_correspondence_from_nodes(
     """
     comm = mesh.comm
     num_owned_vertices = mesh.topology.index_map(0).size_local
-    num_nodes_global = comm.bcast(pairs.num_nodes_global if comm.rank == root else None, root=root)
+    # The largest tag rides along with the count so the check below costs no extra
+    # collective, and so every process can raise the same message.
+    num_nodes_global, largest_tag = comm.bcast(
+        (
+            pairs.num_nodes_global,
+            int(max(pairs.slave.max(), pairs.master.max())) if len(pairs.slave) else -1,
+        )
+        if comm.rank == root
+        else None,
+        root=root,
+    )
+    # `num_nodes_global` keys every post office below, so one that is too small does not
+    # fail -- it misroutes, and the pairs quietly go to the wrong ranks. It is the one
+    # field of the correspondence that cannot be derived from the mesh, and the one a
+    # caller that took the default would leave at zero.
+    if largest_tag >= num_nodes_global:
+        raise RuntimeError(
+            f"`num_nodes_global` is {num_nodes_global}, but the pairs name node"
+            f" {largest_tag}. It has to be the gmsh model's node count, from"
+            " `getNodes()` -- not `mesh.geometry.index_map().size_global`, which is"
+            " smaller whenever `create_mesh` drops a node no cell references."
+        )
 
     # (1) Register the boundary vertices with the post offices for their indices.
     local_vertices, local_igi = _vertices_that_can_be_paired(mesh)
