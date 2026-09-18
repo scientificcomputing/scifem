@@ -135,7 +135,7 @@ def read_periodic_mesh_from_msh(
 
     Returns:
         ``(periodic_mesh, replaced_vertices, replacement_map)``, as
-        :func:`script.create_periodic_mesh`.
+        {py:func}`scifem.periodic.mesh.create_periodic_mesh`.
     """
     import gmsh
 

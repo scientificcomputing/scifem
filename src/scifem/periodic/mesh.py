@@ -944,7 +944,8 @@ def _build_periodic_mesh(
     is_local_indicator = local_replacement_vertex != -1
     existing_vertices = np.flatnonzero(is_local_indicator)
 
-    # Vertex map is temporary, as we need to extend it with additional ghosts on the process taking over facets
+    # Vertex map is temporary, as we need to extend it with additional ghosts
+    # on the process taking over facets
     tmp_vertex_map = index_map(comm, new_local_size, new_ghosts, new_owners, tag=tag_vertex_ghosts)
     tmp_vertex_ownership = get_ownership(tmp_vertex_map)
 
@@ -1045,7 +1046,8 @@ def _build_periodic_mesh(
     new_owner_to_old_comm.Neighbor_alltoallv(send_coord_msg, recv_coord_msg)
     extra_geom_dm = local_geometry_dm.reshape(-1, num_nodes)[vertex_owner_cell_position]
 
-    # --- 3 --- Communicate cells from process that has lost vertex to process that has taken over vertex
+    # --- 3 --- Communicate cells from process that has lost vertex to process
+    # that has taken over vertex
 
     # Where each seam facet's cell has to go: to every rank holding the partner vertex that
     # replaces one of its own, because those are the ranks that can hold the cell on the
@@ -1085,7 +1087,8 @@ def _build_periodic_mesh(
     assert (cells_losing_vertex < cell_map.size_local + cell_map.num_ghosts).all()
     cells_losing_vertex_gl = cell_map.local_to_global(cells_losing_vertex)
 
-    # Pack dofmap for each of these cells, replacing the vertices that are removed with mapped vertices
+    # Pack dofmap for each of these cells, replacing the vertices
+    # that are removed with mapped vertices
     renumbered_dm = new_c[cells_losing_vertex].reshape(-1)
     assert (renumbered_dm > -1).all()
     assert (renumbered_dm < tmp_vertex_map.size_local + tmp_vertex_map.num_ghosts).all()
@@ -1474,12 +1477,16 @@ def create_periodic_mesh(
             would then have to be spaced apart.
 
     Returns:
-        A tuple ``(new_mesh, replaced_vertices, replacement_map)`` where ``new_mesh`` is the new mesh with periodicity,
-        ``replaced_vertices`` is a list of vertices of the input mesh that has been replaced (local to process).
-        ``replacement_map`` is a map from the old vertices (local to process) to the new vertices (local to process).
+        A tuple ``(new_mesh, replaced_vertices, replacement_map)`` where ``new_mesh``
+        is the new mesh with periodicity,
+        ``replaced_vertices`` is a list of vertices of the input mesh that has been
+        replaced (local to process).
+        ``replacement_map`` is a map from the old vertices (local to process) to the
+        new vertices (local to process).
 
         Note:
-            This map does not contain additional ghost vertices added to the process that has taken over the facet or given away a facet.
+            This map does not contain additional ghost vertices added to the process that
+            has taken over the facet or given away a facet.
 
     Example:
 
@@ -1530,7 +1537,8 @@ def create_periodic_mesh_from_igi(
         replaced_igi, partner_igi: Corresponding node pairs, as 0-based gmsh node tags. Held
             on `root` only; ignored elsewhere. Every partner must be a root -- a node that
             is not itself a replaced -- so chains through a corner have to be resolved first,
-            which {py:func}`gmsh_periodic.extract_gmsh_periodic_nodes` does.
+            which {py:func}`scifem.periodic.gmsh.extract_gmsh_periodic_nodes` does for a
+            gmsh model.
         num_nodes_global: The number of nodes in the gmsh model. Not
             ``mesh.geometry.index_map().size_global``, which is smaller when
             ``create_mesh`` drops nodes no cell references.
@@ -1546,7 +1554,7 @@ def create_periodic_mesh_from_igi(
 
     Note:
         To go straight from a ``.msh`` file, use
-        {py:func}`gmsh_periodic.read_periodic_mesh_from_msh`, which reads the pairs out of
+        {py:func}`scifem.periodic.gmsh.read_periodic_mesh_from_msh`, which reads the pairs out of
         the model before the reader finalizes it.
     """
     # Imported here rather than at module scope: `gmsh_periodic` builds the correspondence

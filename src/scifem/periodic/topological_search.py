@@ -17,40 +17,46 @@ import dolfinx
 def periodic_correspondence_from_nodes(
     mesh, pairs: PeriodicNodes, root: int = 0
 ) -> VertexCorrespondence:
-    """Turn gmsh node pairs held on one rank into a distributed vertex correspondence.
+    """Turn node pairs held on one process into a distributed vertex correspondence.
 
-    The pairs arrive as input global node indices on the reading rank, while the vertices
-    they name are spread over every rank, and neither side knows where the other is. A
-    post office resolves that: input global index ``i`` is looked after by a fixed rank,
-    :func:`_index_owner`, which every process can compute without asking anyone.
+    The topological half of finding the pairs: the identification is given, as indices into
+    the mesh's input global numbering, and this resolves it against the distribution. No
+    coordinate is read and no tolerance is involved, which is what separates it from
+    {py:func}`scifem.periodic.geometrical_search.match_vertices_geometric`.
+
+    The pairs arrive on one process while the vertices they name are spread over every one,
+    and neither side knows where the other is. A post office resolves that: input global
+    index ``i`` is looked after by a fixed rank, {py:func}`scifem.mpi_utils.index_owner`,
+    which every process can compute without asking anyone.
 
     1. every process registers the boundary vertices it holds with the post offices for
        their indices, saying whether it owns each one;
-    2. the reader sends each pair to the post office of its *partner* index, which knows
+    2. `root` sends each pair to the post office of its *partner* index, which knows
        who owns that vertex. It tells that owner which pair it answers, and forwards the
        pair to the post office of the *replaced* index, which passes it to every process
        holding a copy;
     3. those processes then ask the partner's owner directly, which is what tells it who
        needs the cells at that vertex.
 
-    Only the boundary vertices are registered, since gmsh pairs nothing else, so the post
-    office stays proportional to the surface. Nothing is gathered: no process holds more
-    than its own block of indices, except the reader, which holds the file it read.
+    Only the boundary vertices are registered, since an identification pairs nothing else,
+    so the post office stays proportional to the surface rather than the volume. Nothing is
+    gathered: no process holds more than its own block of indices, except `root`, which
+    holds the pairs it was given.
 
     The rank named for a partner is its *vertex* owner, which is unique -- keeping the join
     single-valued -- and always owns a cell incident to the vertex, which is what
-    :attr:`script.VertexCorrespondence.src_owner` requires.
+    {py:attr}`scifem.periodic.utils.VertexCorrespondence.src_owner` requires.
 
     Collective.
 
     Args:
-        mesh: The mesh built from the same gmsh model, so that
-            ``mesh.geometry.input_global_indices`` is the node numbering `pairs` uses.
+        mesh: The mesh the pairs refer to, so that
+            ``mesh.geometry.input_global_indices`` is the numbering `pairs` is written in.
         pairs: The node pairs, meaningful on `root` only.
         root: The rank holding `pairs`.
 
     Returns:
-        The correspondence :func:`script._build_periodic_mesh` consumes.
+        The correspondence {py:mod}`scifem.periodic.mesh` rebuilds from.
 
     Raises:
         RuntimeError: If a pair names a node that is not a vertex of the mesh.
@@ -70,14 +76,14 @@ def periodic_correspondence_from_nodes(
     )
     # `num_nodes_global` keys every post office below, so one that is too small does not
     # fail -- it misroutes, and the pairs quietly go to the wrong ranks. It is the one
-    # field of the correspondence that cannot be derived from the mesh, and the one a
-    # caller that took the default would leave at zero.
+    # field that cannot be derived from the mesh, and the one a caller that took the
+    # default would leave at zero.
     if largest_tag >= num_nodes_global:
         raise RuntimeError(
             f"`num_nodes_global` is {num_nodes_global}, but the pairs name node"
-            f" {largest_tag}. It has to be the gmsh model's node count, from"
-            " `getNodes()` -- not `mesh.geometry.index_map().size_global`, which is"
-            " smaller whenever `create_mesh` drops a node no cell references."
+            f" {largest_tag}. It has to span the input global numbering the pairs are"
+            " written in -- not `mesh.geometry.index_map().size_global`, which is smaller"
+            " whenever the mesh was built from a node set with entries no cell references."
         )
 
     # (1) Register the boundary vertices with the post offices for their indices.
@@ -120,8 +126,8 @@ def periodic_correspondence_from_nodes(
     if num_unknown:
         raise RuntimeError(
             f"{num_unknown} periodic pairs name a partner node that is not a boundary"
-            " vertex of the distributed mesh. The pairs and the mesh have to come from"
-            " the same gmsh model, and the partner nodes have to be cell vertices."
+            " vertex of the distributed mesh. The pairs have to be written in this mesh's"
+            " `input_global_indices`, and each partner has to be a cell vertex."
         )
     partner_owner = owner_of[partner_igi - low]
 
@@ -202,8 +208,8 @@ def periodic_correspondence_from_nodes(
 def _vertices_that_can_be_paired(mesh):
     """The local vertices a periodic pair could name, and their input global indices.
 
-    gmsh only pairs boundary entities, so restricting to the vertices of the boundary
-    keeps the post office below proportional to the surface rather than the volume.
+    An identification pairs boundary entities only, so restricting to the vertices of the
+    boundary keeps the post office proportional to the surface rather than the volume.
 
     Args:
         mesh: The mesh to take the vertices of.

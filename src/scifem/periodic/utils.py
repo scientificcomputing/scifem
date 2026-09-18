@@ -5,22 +5,28 @@ import dataclasses
 
 @dataclasses.dataclass
 class PeriodicNodes:
-    """The node pairs of a gmsh model, resolved to roots.
+    """Node pairs to identify, resolved to roots.
 
-    Only the reading rank holds these; every other process passes an empty set, which is
-    what the defaults are for -- ``GmshPeriodicNodes()`` says "nothing here" without the
-    caller having to build two empty arrays to say it.
+    The pairs are given in the mesh's input global numbering, so they say nothing about how
+    the mesh is distributed and can come from anywhere that knows it --
+    {py:func}`scifem.periodic.gmsh.extract_gmsh_periodic_nodes` reads them out of a
+    ``$Periodic`` section, but nothing here depends on that.
+
+    Only the process that has the pairs holds them; every other one passes an empty set,
+    which is what the defaults are for -- ``PeriodicNodes()`` says "nothing here" without
+    the caller having to build two empty arrays to say it.
 
     Args:
-        slave: 0-based gmsh node tags that are to be replaced, ascending and without
+        replaced: 0-based node indices that are to be replaced, ascending and without
             repeats. These are values of ``mesh.geometry.input_global_indices``.
-        master: For each entry of `slave`, the node it is identified with. Never itself a
-            slave, so no further resolution is needed.
-        num_nodes_global: The number of nodes in the gmsh model. Not
-            ``mesh.geometry.index_map().size_global``, which is smaller when ``create_mesh``
-            drops nodes that no cell references. Taken from `root` and broadcast, so the
-            default stands on every other process; on `root` it has to be set, and
-            :func:`periodic_correspondence_from_nodes` checks that it was.
+        partner: For each entry of `replaced`, the node it is identified with. Never itself
+            replaced, so no further resolution is needed.
+        num_nodes_global: The size of the input global numbering, i.e. one past its largest
+            index. Not ``mesh.geometry.index_map().size_global``, which is smaller whenever
+            the mesh was built from a node set with entries no cell references. Taken from
+            `root` and broadcast, so the default stands on every other process; on `root` it
+            has to be set, and {py:func}`periodic_correspondence_from_nodes` checks that it
+            was.
     """
 
     replaced: npt.NDArray[np.int64] = dataclasses.field(
@@ -36,8 +42,9 @@ class PeriodicNodes:
 class VertexCorrespondence:
     """Which vertices of ``mesh`` are identified with which, and which ranks hold each end.
 
-    This is the input of {py:func}`_build_periodic_mesh`, which consumes nothing else and
-    never evaluates a coordinate.
+    This is what {py:mod}`scifem.periodic.mesh` rebuilds from: it consumes nothing else and
+    never evaluates a coordinate, which is what lets the pairs be found either
+    geometrically or topologically.
 
     Stores the data of {py:class}`dolfinx.geometry.PointOwnershipData` for the
     `partner_vertex`, over query points that are the images of `indicator_vertices` -- the
