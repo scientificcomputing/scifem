@@ -575,7 +575,7 @@ def test_a_correspondence_that_misses_a_ghost_copy_is_rejected():
     n = 6
     mesh = unit_square(n)
     indicator, mapping = x_periodic(n=n)
-    correspondence = _match_vertices_geometric(mesh, indicator, mapping)
+    correspondence = match_vertices_geometric(mesh, indicator, mapping)
 
     # Drop the ghost indicator vertices on rank 0: a caller that forgot to broadcast.
     vertex_map = mesh.topology.index_map(0)
@@ -647,10 +647,7 @@ def test_a_facet_with_three_distinct_cells_is_not_a_collapse():
     comm = MPI.COMM_WORLD
     # `max_facet_to_cell_links` defaults to 2, which is DOLFINx refusing exactly this mesh
     # unless asked. Probed by signature rather than by version, as elsewhere in the suite.
-    if (
-        "max_facet_to_cell_links"
-        not in inspect.signature(dolfinx.mesh.create_mesh).parameters
-    ):
+    if "max_facet_to_cell_links" not in inspect.signature(dolfinx.mesh.create_mesh).parameters:
         pytest.skip("this DOLFINx cannot be asked for more than two cells per facet")
 
     # The input goes in on one rank and is distributed from there; handing every rank the
@@ -722,7 +719,5 @@ def test_a_remaining_boundary_is_not_non_manifold():
     f_to_c = periodic.topology.connectivity(tdim - 1, tdim)
     num_owned = periodic.topology.index_map(tdim - 1).size_local
     per_facet = (f_to_c.offsets[1:] - f_to_c.offsets[:-1])[:num_owned]
-    with_one = MPI.COMM_WORLD.allreduce(
-        int(np.count_nonzero(per_facet == 1)), op=MPI.SUM
-    )
+    with_one = MPI.COMM_WORLD.allreduce(int(np.count_nonzero(per_facet == 1)), op=MPI.SUM)
     assert with_one == 12, "the two non-periodic edges should still be a boundary"

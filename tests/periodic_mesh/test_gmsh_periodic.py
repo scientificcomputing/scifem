@@ -17,6 +17,7 @@ import pytest
 
 from scifem.periodic.gmsh import extract_gmsh_periodic_nodes
 import scifem.periodic.mesh
+from scifem.periodic.mesh import create_periodic_mesh_from_igi
 
 
 @pytest.fixture
@@ -738,7 +739,7 @@ def test_gmsh_path_on_a_second_order_mesh(order):
     else:
         assert num_nodes > num_vertices, f"P{order} added no nodes beyond the vertices"
 
-    periodic = script.create_periodic_mesh_from_gmsh(
+    periodic = create_periodic_mesh_from_igi(
         mesh, pairs.slave, pairs.master, pairs.num_nodes_global
     )[0]
     _, volume, bad, jump = torus_invariants(periodic)
@@ -768,7 +769,7 @@ def test_raising_the_mesh_order_does_not_change_which_vertices_are_replaced():
     node_count = {}
     for order in (1, 2):
         mesh, pairs = periodic_square(comm, order=order)
-        _, replaced_vertices, _ = script.create_periodic_mesh_from_gmsh(
+        _, replaced_vertices, _ = create_periodic_mesh_from_igi(
             mesh, pairs.slave, pairs.master, pairs.num_nodes_global
         )
         owned = replaced_vertices[replaced_vertices < mesh.topology.index_map(0).size_local]
