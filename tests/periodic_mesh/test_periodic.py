@@ -15,6 +15,9 @@ Run serially, or under MPI::
 """
 
 from mpi4py import MPI
+import inspect
+
+import basix.ufl
 import numpy as np
 import pytest
 import ufl
@@ -25,6 +28,7 @@ from scifem.periodic.geometrical_search import match_vertices_geometric
 from scifem.periodic.mesh import create_periodic_mesh
 from scifem.periodic.mesh import (
     DEFAULT_TAG_BASE,
+    check_cells_stayed_distinct,
     VertexCorrespondence,
     _build_periodic_mesh,
     NUM_CONSENSUS_TAGS,
@@ -590,3 +594,135 @@ def test_a_correspondence_that_misses_a_ghost_copy_is_rejected():
     )
     with pytest.raises(RuntimeError, match="not on every process that holds them"):
         _build_periodic_mesh(mesh, incomplete)
+
+
+@pytest.mark.parametrize(
+    "cell_type",
+    [dolfinx.mesh.CellType.triangle, dolfinx.mesh.CellType.quadrilateral],
+)
+def test_two_cells_across_a_seam_is_rejected(cell_type):
+    """N=2 collapses, and every count that is easy to check says it did not.
+
+    With two cells between the two sides of a seam there are only two vertices on the
+    circle that direction becomes, so both cells run between the same pair and end up
+    carrying the *same vertex set*. Measured before the guard: 4 vertices, 4 quadrilateral
+    cells, and all 4 facets reporting 4 incident cells -- with no degenerate cell, the right
+    vertex and cell counts, and volume 1.0. Only the facet-to-cell count shows it.
+    """
+    mesh = dolfinx.mesh.create_unit_square(
+        MPI.COMM_WORLD,
+        2,
+        2,
+        cell_type=cell_type,
+        ghost_mode=dolfinx.mesh.GhostMode.shared_facet,
+    )
+    indicator, mapping = periodic_in((0, 1), per_direction=False)
+    with pytest.raises(RuntimeError, match="collapsed cells onto each other"):
+        create_periodic_mesh(mesh, indicator, mapping)
+
+
+def test_three_cells_across_a_seam_is_the_minimum():
+    """The guard is not just refusing small meshes: one more cell and it is fine."""
+    mesh = unit_square(3)
+    indicator, mapping = periodic_in((0, 1), per_direction=False)
+    periodic = create_periodic_mesh(mesh, indicator, mapping)[0]
+
+    assert periodic.topology.index_map(0).size_global == 9
+    assert np.isclose(volume(periodic), 1.0)
+    check_cells_stayed_distinct(periodic)
+
+
+def test_a_facet_with_three_distinct_cells_is_not_a_collapse():
+    """The guard must not fire on geometry that is non-manifold by design.
+
+    Three sheets meeting along an edge -- the stem of a T -- gives that edge three cells,
+    and none of them is the same cell. Only a repeated vertex set is the failure, so the
+    check is written on that and not on the incident-cell count, which cannot tell the two
+    apart. Built here directly, since `create_periodic_mesh` is not what produces it.
+
+    Worth running distributed as well as serially: the check reads the cells at an owned
+    facet, and whether all three are there is a question about ghosting, which serial
+    cannot ask. `shared_facet` is what brings the third one over.
+    """
+    comm = MPI.COMM_WORLD
+    # `max_facet_to_cell_links` defaults to 2, which is DOLFINx refusing exactly this mesh
+    # unless asked. Probed by signature rather than by version, as elsewhere in the suite.
+    if (
+        "max_facet_to_cell_links"
+        not in inspect.signature(dolfinx.mesh.create_mesh).parameters
+    ):
+        pytest.skip("this DOLFINx cannot be asked for more than two cells per facet")
+
+    # The input goes in on one rank and is distributed from there; handing every rank the
+    # same cells would build the mesh `comm.size` times over.
+    if comm.rank == 0:
+        points = np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],  # the shared edge
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],  # sheet in +y
+                [0.0, -1.0, 0.0],
+                [1.0, -1.0, 0.0],  # sheet in -y
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],  # sheet in +z, the stem
+            ]
+        )
+        cells = np.array(
+            [[0, 1, 2], [1, 3, 2], [0, 1, 4], [1, 5, 4], [0, 1, 6], [1, 7, 6]],
+            dtype=np.int64,
+        )
+    else:
+        points = np.zeros((0, 3), dtype=np.float64)
+        cells = np.zeros((0, 3), dtype=np.int64)
+
+    # Ghosting is a `create_mesh` keyword on 0.12 and a partitioner on 0.11, the same split
+    # `_model_to_mesh` carries in test_gmsh_periodic.py. Both places have to be told that a
+    # facet may carry three cells, or the third sheet is not ghosted and the check sees two.
+    ghost_mode = dolfinx.mesh.GhostMode.shared_facet
+    if "ghost_mode" in inspect.signature(dolfinx.mesh.create_mesh).parameters:
+        ghosting = {"ghost_mode": ghost_mode}
+    else:
+        ghosting = {
+            "partitioner": dolfinx.mesh.create_cell_partitioner(
+                ghost_mode, max_facet_to_cell_links=3
+            )
+        }
+
+    domain = ufl.Mesh(basix.ufl.element("Lagrange", "triangle", 1, shape=(3,)))
+    mesh = dolfinx.mesh.create_mesh(
+        comm, cells, domain, points, max_facet_to_cell_links=3, **ghosting
+    )
+    assert mesh.topology.index_map(2).size_global == 6
+
+    mesh.topology.create_entities(1)
+    mesh.topology.create_connectivity(1, 2)
+    f_to_c = mesh.topology.connectivity(1, 2)
+    num_owned = mesh.topology.index_map(1).size_local
+    per_facet = (f_to_c.offsets[1:] - f_to_c.offsets[:-1])[:num_owned]
+    # Reduced: whichever rank owns the shared edge sees the 3, and the others see nothing
+    # of it. `initial=0` because a rank can own no facet at all at these cell counts.
+    busiest = comm.allreduce(int(per_facet.max(initial=0)), op=MPI.MAX)
+    assert busiest == 3, f"the shared edge should carry all three sheets, saw {busiest}"
+
+    check_cells_stayed_distinct(mesh)
+
+
+def test_a_remaining_boundary_is_not_non_manifold():
+    """Facets with one cell are a boundary, not a collapse, and must not trip the guard.
+
+    A mesh made periodic in x only still has its y=0 and y=1 edges.
+    """
+    mesh = unit_square(6)
+    periodic = create_periodic_mesh(mesh, *x_periodic(n=6))[0]
+    check_cells_stayed_distinct(periodic)
+
+    tdim = periodic.topology.dim
+    periodic.topology.create_connectivity(tdim - 1, tdim)
+    f_to_c = periodic.topology.connectivity(tdim - 1, tdim)
+    num_owned = periodic.topology.index_map(tdim - 1).size_local
+    per_facet = (f_to_c.offsets[1:] - f_to_c.offsets[:-1])[:num_owned]
+    with_one = MPI.COMM_WORLD.allreduce(
+        int(np.count_nonzero(per_facet == 1)), op=MPI.SUM
+    )
+    assert with_one == 12, "the two non-periodic edges should still be a boundary"

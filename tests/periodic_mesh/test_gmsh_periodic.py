@@ -276,7 +276,7 @@ def _model_to_mesh(comm, rank, gdim):
     return getattr(mesh_data, "mesh", mesh_data)
 
 
-def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_slave=False):
+def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_slave=False, order=1):
     """A distributed unit square from gmsh, with the pairs read off its model.
 
     Args:
@@ -286,14 +286,18 @@ def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_slave=False
         low_is_slave: Replace the vertices at ``x=0``/``y=0`` rather than at 1. Matching
             the direction matters only when comparing against an `indicator`/`mapping`
             pair, which fixes which side is replaced.
+        order: Geometry degree. Above 1 the mesh gains nodes that are not vertices, which
+            the reader has to leave out of the correspondence.
 
     Returns:
         ``(mesh, pairs)``, with `pairs` meaningful on rank 0 only.
     """
     L = 1.0
+    started_here = False
     if comm.rank == 0:
         if not gmsh.isInitialized():
             gmsh.initialize()
+            started_here = True
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.model.add("periodic square")
         gmsh.model.occ.addRectangle(0, 0, 0, L, L)
@@ -321,13 +325,14 @@ def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_slave=False
         gmsh.option.setNumber("Mesh.MeshSizeMin", res)
         gmsh.option.setNumber("Mesh.MeshSizeMax", res)
         gmsh.model.mesh.generate(2)
+        if order > 1:
+            gmsh.model.mesh.setOrder(order)
         pairs = extract_gmsh_periodic_nodes(gmsh.model)
     else:
-        empty = np.zeros(0, dtype=np.int64)
-        pairs = PeriodicNodes(empty, empty, 0)
+        pairs = PeriodicNodes()
 
     mesh = _model_to_mesh(comm, 0, gdim=2)
-    if comm.rank == 0:
+    if started_here:
         gmsh.finalize()
     return mesh, pairs
 
@@ -341,6 +346,17 @@ def torus_invariants(periodic_mesh):
         dolfinx.fem.assemble_scalar(dolfinx.fem.form(1 * ufl.dx(domain=periodic_mesh))),
         op=MPI.SUM,
     )
+    # Periodic in every direction means no boundary: the mesh is a closed manifold, so
+    # every facet has exactly two cells. The difference of consecutive offsets is the
+    # number of cells at each facet, straight off the adjacency list. Owned facets only --
+    # a shared facet lives on several ranks, so counting all of them would count it once
+    # per holder, and a ghost facet need not carry both of its cells in the first place.
+    #
+    # Since `check_seam_is_manifold` now raises inside the rebuild, more than two cannot
+    # reach here: what this counts in practice is facets left with *one*. That is either a
+    # seam the pairing never glued, or one glued to a cell that was never shipped -- the
+    # failure the session spent its time on. It is the half the seam jump below cannot
+    # see, because a jump can only be measured across facets that exist.
     periodic_mesh.topology.create_entities(tdim - 1)
     periodic_mesh.topology.create_connectivity(tdim - 1, tdim)
     f_to_c = periodic_mesh.topology.connectivity(tdim - 1, tdim)
@@ -527,9 +543,11 @@ def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
     comm = MPI.COMM_WORLD
     filename = comm.bcast(str(tmp_path / "periodic.msh") if comm.rank == 0 else None, 0)
 
+    started_here = False
     if comm.rank == 0:
         if not gmsh.isInitialized():
             gmsh.initialize()
+            started_here = True
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.model.add("to file")
         gmsh.model.occ.addRectangle(0, 0, 0, 1.0, 1.0)
@@ -541,7 +559,8 @@ def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
         gmsh.option.setNumber("Mesh.MeshSizeMax", 1.0 / 5)
         gmsh.model.mesh.generate(2)
         gmsh.write(filename)
-        gmsh.finalize()
+        if started_here:
+            gmsh.finalize()
     comm.Barrier()
 
     ghost_mode = dolfinx.mesh.GhostMode.shared_facet
@@ -563,7 +582,7 @@ def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
     assert jump < 1e-12
 
 
-def periodic_box(comm, res=1.0 / 4, low_is_slave=True):
+def periodic_box(comm, res=1.0 / 4, low_is_slave=True, order=1):
     """A distributed unit cube from gmsh, periodic in all three directions.
 
     Surface tags of ``occ.addBox`` are 1 at x=0, 2 at x=1, 3 at y=0, 4 at y=1, 5 at z=0
@@ -578,9 +597,11 @@ def periodic_box(comm, res=1.0 / 4, low_is_slave=True):
     Returns:
         ``(mesh, pairs)``, with `pairs` meaningful on rank 0 only.
     """
+    started_here = False
     if comm.rank == 0:
         if not gmsh.isInitialized():
             gmsh.initialize()
+            started_here = True
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.model.add("periodic box")
         gmsh.model.occ.addBox(0, 0, 0, 1.0, 1.0, 1.0)
@@ -623,13 +644,14 @@ def periodic_box(comm, res=1.0 / 4, low_is_slave=True):
         gmsh.option.setNumber("Mesh.MeshSizeMin", res)
         gmsh.option.setNumber("Mesh.MeshSizeMax", res)
         gmsh.model.mesh.generate(3)
+        if order > 1:
+            gmsh.model.mesh.setOrder(order)
         pairs = extract_gmsh_periodic_nodes(gmsh.model)
     else:
-        empty = np.zeros(0, dtype=np.int64)
-        pairs = PeriodicNodes(empty, empty, 0)
+        pairs = PeriodicNodes()
 
     mesh = _model_to_mesh(comm, 0, gdim=3)
-    if comm.rank == 0:
+    if started_here:
         gmsh.finalize()
     return mesh, pairs
 
@@ -696,3 +718,101 @@ def test_gmsh_and_geometric_paths_agree_in_3d():
     from_geometric, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, geometric)
     from_pairs, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, from_gmsh)
     assert torus_invariants(from_geometric)[:3] == torus_invariants(from_pairs)[:3]
+
+
+@pytest.mark.parametrize("order", [1, 2])
+def test_gmsh_path_on_a_second_order_mesh(order):
+    """A P2 gmsh mesh through the reader, checked by the same torus invariants as P1.
+
+    The two orders are run side by side so the P2 result is read against the P1 one rather
+    than against a number written down here. What the rebuild does with the extra nodes is
+    nothing: they are geometry, and geometry is never merged, so the node count comes out
+    the same as it went in.
+    """
+    comm = MPI.COMM_WORLD
+    mesh, pairs = periodic_square(comm, order=order)
+    num_nodes = mesh.geometry.index_map().size_global
+    num_vertices = mesh.topology.index_map(0).size_global
+    if order == 1:
+        assert num_nodes == num_vertices, "a P1 mesh's nodes are exactly its vertices"
+    else:
+        assert num_nodes > num_vertices, f"P{order} added no nodes beyond the vertices"
+
+    periodic = script.create_periodic_mesh_from_gmsh(
+        mesh, pairs.slave, pairs.master, pairs.num_nodes_global
+    )[0]
+    _, volume, bad, jump = torus_invariants(periodic)
+
+    assert bad == 0, f"{bad} owned facets do not have two cells"
+    assert np.isclose(volume, 1.0)
+    assert jump < 1e-10, f"a periodic field jumps by {jump:.3e} across the seam"
+    # geometry nodes are never merged, so the node count is untouched by the rebuild
+    assert periodic.geometry.index_map().size_global == num_nodes
+
+
+def test_raising_the_mesh_order_does_not_change_which_vertices_are_replaced():
+    """The same physical vertices are replaced whatever the geometry order.
+
+    The reader pairs nodes, and a P2 model has nodes that are not vertices; this is the
+    end-to-end statement that they do not reach the correspondence. The serial test above
+    is the one that contrasts the two settings of `include_high_order`; this one fixes the
+    setting and varies the mesh instead.
+
+    Compared by coordinate rather than by input global index, because `setOrder(2)` inserts
+    the midside nodes into gmsh's numbering and so renumbers the vertices -- the same
+    physical vertex has a different tag in the two models. Gathering and sorting keeps the
+    comparison independent of the partition.
+    """
+    comm = MPI.COMM_WORLD
+    replaced_at = {}
+    node_count = {}
+    for order in (1, 2):
+        mesh, pairs = periodic_square(comm, order=order)
+        _, replaced_vertices, _ = script.create_periodic_mesh_from_gmsh(
+            mesh, pairs.slave, pairs.master, pairs.num_nodes_global
+        )
+        owned = replaced_vertices[replaced_vertices < mesh.topology.index_map(0).size_local]
+        nodes = dolfinx.mesh.entities_to_geometry(mesh, 0, owned).reshape(-1)
+        x = np.vstack(comm.allgather(mesh.geometry.x[nodes, : mesh.geometry.dim]))
+        replaced_at[order] = x[np.lexsort(x.T)]
+        node_count[order] = mesh.geometry.index_map().size_global
+
+    assert node_count[2] > node_count[1], "the P2 mesh carries no extra nodes"
+    assert len(replaced_at[1]) == len(replaced_at[2])
+    assert np.allclose(replaced_at[1], replaced_at[2]), (
+        "raising the geometry order changed which vertices are replaced"
+    )
+
+
+def test_the_empty_correspondence_needs_no_arguments():
+    """The ranks that hold nothing say so by saying nothing.
+
+    Every process other than the reader passes an empty set, so that is the default rather
+    than something each caller assembles.
+    """
+    pairs = PeriodicNodes()
+    assert len(pairs.slave) == 0 and len(pairs.master) == 0
+    assert pairs.slave.dtype == np.int64 and pairs.master.dtype == np.int64
+    assert pairs.num_nodes_global == 0
+    # a default_factory, not a shared array: two instances must not alias
+    assert PeriodicNodes().slave is not pairs.slave
+
+
+def test_a_node_count_too_small_for_the_pairs_is_rejected():
+    """`num_nodes_global` keys every post office, and getting it wrong misroutes silently.
+
+    It is the one field that cannot be derived from the mesh, and the one a caller who took
+    the default would leave at zero, so it is checked against the tags themselves.
+    """
+    comm = MPI.COMM_WORLD
+    mesh, pairs = periodic_square(comm)
+    largest = comm.bcast(
+        int(max(pairs.slave.max(), pairs.master.max())) if comm.rank == 0 else None, 0
+    )
+    too_small = PeriodicNodes(
+        pairs.slave,
+        pairs.master,
+        largest,  # one short: tags are 0-based
+    )
+    with pytest.raises(RuntimeError, match="num_nodes_global"):
+        periodic_correspondence_from_nodes(mesh, too_small)

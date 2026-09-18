@@ -603,6 +603,58 @@ def check_facet_ghosting(mesh):
         )
 
 
+def check_cells_stayed_distinct(mesh):
+    """Raise if two cells of `mesh` carry the same vertices.
+
+    This is what going too coarse across a periodic direction does. With two cells between
+    the two sides of a seam, a cell's opposite facets are identified with each other and
+    the two cells end up on the same vertices -- they are one topological cell drawn twice.
+    Nothing else notices: no vertex repeats within a cell, and the vertex count, cell count
+    and volume are all what a correct mesh would have. Measured on a 2x2 doubly periodic
+    square, all four cells collapse onto a single vertex set.
+
+    Not a manifold test, which would be easier and wrong. A facet with more than two cells
+    is *also* what a legitimately non-manifold mesh has -- three sheets meeting along an
+    edge, the stem of a T -- and refusing that would refuse a geometry nobody asked us to
+    object to. What separates the two is whether any of those cells are the *same* cell, so
+    that is what is asked, directly.
+
+    Ghost cells are included, which is what lets a duplicate pair split across two
+    processes be seen: the two share every facet, so each is ghosted onto the other's
+    owner.
+
+    Collective, and a postcondition -- call it on the rebuilt mesh, not the input.
+
+    Args:
+        mesh: The mesh to check. One cell type, as everywhere else here: the dofmap is
+            read as a rectangular array.
+
+    Raises:
+        RuntimeError: If two distinct cells share a vertex set.
+    """
+    tdim = mesh.topology.dim
+    mesh.topology.create_connectivity(tdim, 0)
+    c_to_v = mesh.topology.connectivity(tdim, 0)
+    num_vertices = dolfinx.cpp.mesh.cell_num_vertices(mesh.topology.cell_type)
+
+    # Sorted within each row, so two cells listing the same vertices in a different order
+    # still compare equal. Local numbers are enough: the comparison never leaves the
+    # process.
+    cell_vertices = np.sort(c_to_v.array.reshape(-1, num_vertices), axis=1)
+    num_duplicated = len(cell_vertices) - len(np.unique(cell_vertices, axis=0))
+
+    # Reduced with MAX rather than SUM: a duplicate pair is visible on every process that
+    # holds it, so a sum would count it more than once. The number is for the message.
+    worst = mesh.comm.allreduce(num_duplicated, op=MPI.MAX)
+    if worst > 0:
+        raise RuntimeError(
+            f"the identification collapsed cells onto each other -- {worst} of them on one"
+            " process carry a vertex set that another cell already has. The mesh is too"
+            " coarse across a periodic direction: a cell there is glued to itself on both"
+            " sides. Use at least three cells across each direction that is made periodic."
+        )
+
+
 def _build_periodic_mesh(
     mesh,
     correspondence: VertexCorrespondence,
@@ -1384,6 +1436,9 @@ def _build_periodic_mesh(
         cpp_mesh, domain=ufl.Mesh(mesh._ufl_domain.ufl_coordinate_element())
     )
     new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim)
+    # Postcondition. The facets it needs are built here rather than by the caller, which is
+    # the cost of the check; any interior-facet assembly would build them anyway.
+    check_cells_stayed_distinct(new_mesh)
     return new_mesh, indicator_vertices, replacement_map
 
 
