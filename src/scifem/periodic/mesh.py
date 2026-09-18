@@ -32,6 +32,13 @@ __all__ = [
     "create_periodic_mesh_from_igi",
 ]
 
+#: First of the MPI tags the rebuild uses for its consensus exchanges, when the caller
+#: names none. The value is arbitrary; what matters is that a caller can move it.
+DEFAULT_TAG_BASE = 1101
+#: How many consecutive tags from ``tag_base`` the rebuild consumes, so that a caller
+#: making several overlapping calls knows how far apart to space them.
+NUM_CONSENSUS_TAGS = 5
+
 
 def transfer_meshtags_to_periodic_mesh(
     mesh: dolfinx.mesh.Mesh,
@@ -367,7 +374,7 @@ class PartnerHolders:
     holders: npt.NDArray[np.int32]
 
 
-def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner):
+def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner, tag: int):
     """Spread each ``(master vertex, destination)`` pair to every rank holding the vertex.
 
     `partner_vertex` names one holder of each master vertex -- whichever rank answered
@@ -384,6 +391,7 @@ def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner):
         mesh: The mesh `partner_vertex` is local to.
         partner_vertex: Local master vertices, one per vertex taken over.
         dest_owner: The rank each of them is taken over from, in the same order.
+        tag: MPI tag for the consensus exchange behind `index_to_dest_ranks`.
 
     Returns:
         A {py:class}`PartnerHolders`. Its `destinations` and `sources` describe the
@@ -413,7 +421,7 @@ def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner):
 
     # --- from the owner to every holder. `index_to_dest_ranks` lists the ranks that ghost
     # each owned index; the owner holds it as well, and is appended as itself.
-    ghosting_ranks, ghosting_offsets = _compat_ghosting_ranks(vertex_map, 1101)
+    ghosting_ranks, ghosting_offsets = _compat_ghosting_ranks(vertex_map, tag)
     local = vertex_map.global_to_local(np.ascontiguousarray(at_owner[:, 0]))
     assert (local != -1).all(), "A vertex was reported to a rank that does not own it"
     # Flatten the ragged per-vertex rank lists. Equivalent to:
@@ -538,15 +546,69 @@ def _pack_cells_at_vertices(mesh, vertices, boundary_facets, vertices_per_dest):
     )
 
 
+def check_facet_ghosting(mesh):
+    """Raise unless every facet between two processes carries both of its cells.
+
+    The rebuild assumes it: a cell is shipped across the seam so that the facet it will be
+    glued along ends up with two incident cells, and if the mesh already fails that away
+    from the seam, the result is a mesh whose interior facet integrals cannot be assembled
+    and whose diagnosis points at the seam rather than at the input.
+
+    `interprocess_facets` is what makes this checkable. It names the facets on the
+    interprocess boundary from the facet index map, so it is the same set whatever the
+    ghost mode -- unlike a local "one incident cell" test, which cannot tell an exterior
+    facet from an unghosted interprocess one. Under `shared_facet` every such facet has
+    two incident cells; under `none` every one of them has one.
+
+    Collective, and a no-op in serial, where there are no interprocess facets.
+
+    Args:
+        mesh: The mesh to check.
+
+    Raises:
+        RuntimeError: If any interprocess facet has other than two incident cells.
+    """
+    tdim = mesh.topology.dim
+    mesh.topology.create_entities(tdim - 1)
+    mesh.topology.create_connectivity(tdim - 1, tdim)
+    f_to_c = mesh.topology.connectivity(tdim - 1, tdim)
+
+    facets = np.asarray(mesh.topology.interprocess_facets(), dtype=np.int32)
+    num_cells = f_to_c.offsets[facets + 1] - f_to_c.offsets[facets]
+    num_unghosted = int(np.count_nonzero(num_cells != 2))
+    # Reduced before raising: a partition can leave one process with no interprocess facet
+    # at all, and a one-sided raise would block the others in the next collective.
+    total = mesh.comm.allreduce(num_unghosted, op=MPI.SUM)
+    if total > 0:
+        raise RuntimeError(
+            f"{total} of {mesh.comm.allreduce(len(facets), op=MPI.SUM)} facets between two"
+            " processes do not have both of their cells, so the mesh carries no ghost"
+            " layer across them. Build it with"
+            " `ghost_mode=dolfinx.mesh.GhostMode.shared_facet` -- a keyword of the"
+            " `create_*` functions and, on DOLFINx 0.12, of `model_to_mesh`; on 0.11 pass"
+            " `partitioner=dolfinx.mesh.create_cell_partitioner(ghost_mode)` instead."
+        )
+
+
 def _build_periodic_mesh(
-    mesh, correspondence: VertexCorrespondence
+    mesh,
+    correspondence: VertexCorrespondence,
+    tag_base: int = DEFAULT_TAG_BASE,
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
     """Rebuild `mesh` with the vertex pairs of `correspondence` identified.
 
     Purely topological: the correspondence already says which vertex replaces which and
     which ranks are involved, so nothing here evaluates a coordinate or a user function.
-    See {py:func}`create_periodic_mesh` for the return value.
+    See {py:func}`create_periodic_mesh` for `tag_base` and the return value.
     """
+    # One tag per consensus exchange, consecutive from `tag_base`.
+    (
+        tag_holders,
+        tag_vertex_ghosts,
+        tag_cell_map,
+        tag_vertex_map,
+        tag_geometry_map,
+    ) = range(tag_base, tag_base + NUM_CONSENSUS_TAGS)
     indicator_vertices = correspondence.indicator_vertices
     indicator_facets = correspondence.indicator_facets
     src_owner = correspondence.src_owner
@@ -562,6 +624,11 @@ def _build_periodic_mesh(
 
     mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
+
+    # A precondition, checked here rather than left to fail later: everything below ships
+    # cells so that seam facets end up with two of them, and cannot repair a mesh that
+    # arrives without a ghost layer to begin with.
+    check_facet_ghosting(mesh)
 
     # The mesh without the vertices that are being replaced, and the partners resolved
     # against it: everything below is expressed in this reduced numbering.
@@ -599,7 +666,7 @@ def _build_periodic_mesh(
     # that answered for it sees only its own share, so the pairs are fanned out to all
     # holders before any cell is packed. The cell graph is therefore wider than the vertex
     # graph: a rank can owe cells to a destination it answered nothing for.
-    partner_holders = _holders_of_partner_vertices(mesh, partner_vertex, dest_owner)
+    partner_holders = _holders_of_partner_vertices(mesh, partner_vertex, dest_owner, tag_holders)
     cell_sources = partner_holders.sources
     cell_destinations, held_per_dest = np.unique(partner_holders.destinations, return_counts=True)
     send_ghost_cells_from_new_owner, new_cell_topology_dm, num_cells_per_proc = (
@@ -681,7 +748,6 @@ def _build_periodic_mesh(
             " any cell of the mesh. `mapping_function` has to land inside the domain; a"
             " point that leaves it has no owner and no replacement vertex."
         )
-    # print(MPI.COMM_WORLD.rank, global_replacement_vertex, global_replacement_owner)
     # Set up ownership structure of cells, nodes and vertices on the process
     cell_map = mesh.topology.index_map(mesh.topology.dim)
     cell_owners = get_ownership(cell_map)
@@ -814,7 +880,7 @@ def _build_periodic_mesh(
     existing_vertices = np.flatnonzero(is_local_indicator)
 
     # Vertex map is temporary, as we need to extend it with additional ghosts on the process taking over facets
-    tmp_vertex_map = index_map(comm, new_local_size, new_ghosts, new_owners, tag=1102)
+    tmp_vertex_map = index_map(comm, new_local_size, new_ghosts, new_owners, tag=tag_vertex_ghosts)
     tmp_vertex_ownership = get_ownership(tmp_vertex_map)
 
     # Create replacement map
@@ -1220,8 +1286,12 @@ def _build_periodic_mesh(
     assert (all_owners != comm.rank).all(), "Ghosted vertices on owned process"
 
     # Create new cell and vertex map
-    new_cell_map = index_map(comm, cell_map.size_local, all_cell_ghosts, all_cell_owners, tag=1103)
-    new_vertex_map = index_map(comm, tmp_vertex_map.size_local, all_ghosts, all_owners, tag=1104)
+    new_cell_map = index_map(
+        comm, cell_map.size_local, all_cell_ghosts, all_cell_owners, tag=tag_cell_map
+    )
+    new_vertex_map = index_map(
+        comm, tmp_vertex_map.size_local, all_ghosts, all_owners, tag=tag_vertex_map
+    )
 
     new_c_to_v = dolfinx.graph.adjacencylist(
         np.vstack([new_c, extra_dm, lost_cells_dofs_as_local.reshape(-1, num_vertices)])
@@ -1245,9 +1315,6 @@ def _build_periodic_mesh(
     )
     c_el = dolfinx.fem.coordinate_element(mesh._ufl_domain.ufl_coordinate_element().basix_element)
 
-    # ranges = MPI.COMM_WORLD.allgather(tmp_vertex_map.local_range)
-    # for ghost, owner in zip(all_ghosts, all_owners):
-    #     assert (ranges[owner][0] <= ghost) & (ghost < ranges[owner][1]), f"{comm.rank} Ghost {ghost} is not range {ranges[owner]}"
     assert (
         (all_ghosts < tmp_vertex_map.local_range[0]) | (tmp_vertex_map.local_range[1] <= all_ghosts)
     ).all(), "Ghost "
@@ -1275,7 +1342,11 @@ def _build_periodic_mesh(
         [mesh.geometry.x, extra_node_coords, filtered_geometry_coords]
     ).astype(mesh.geometry.x.dtype)[:, : mesh.geometry.dim]
     new_node_im = index_map(
-        comm, num_local_nodes, extended_geom_ghosts, extended_geom_owners, tag=1105
+        comm,
+        num_local_nodes,
+        extended_geom_ghosts,
+        extended_geom_owners,
+        tag=tag_geometry_map,
     )
 
     extended_igi = np.hstack(
@@ -1300,7 +1371,7 @@ def _build_periodic_mesh(
 
 
 def create_periodic_mesh(
-    mesh, indicator, mapping_function
+    mesh, indicator, mapping_function, tag_base: int = DEFAULT_TAG_BASE
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
     """
     Create a periodic mesh that takes all facets that satisfy the `indicator` function,
@@ -1317,6 +1388,18 @@ def create_periodic_mesh(
         Only the first half evaluates `indicator` and `mapping_function`; a reader that
         knows the vertex pairs already, such as one for the ``$Periodic`` section of a gmsh
         file, builds a {py:class}`VertexCorrespondence` and calls the second half directly.
+
+    Args:
+        mesh: The mesh to make periodic. It has to carry a layer of ghost cells across
+            every interprocess facet; see {py:func}`check_facet_ghosting`.
+        indicator: Marks the entities to be replaced, given coordinates as ``(3, n)``.
+        mapping_function: Maps a marked vertex to the one it is identified with, given
+            coordinates as ``(3, n)``.
+        tag_base: The first of {py:data}`NUM_CONSENSUS_TAGS` consecutive MPI tags for the
+            consensus exchanges inside the rebuild. Only worth setting when another such
+            exchange can be in flight on an overlapping communicator at the same time --
+            a nested call, or two sub-communicators that share ranks -- since the tags
+            would then have to be spaced apart.
 
     Returns:
         A tuple ``(new_mesh, replaced_vertices, replacement_map)`` where ``new_mesh`` is the new mesh with periodicity,
@@ -1342,11 +1425,18 @@ def create_periodic_mesh(
 
         periodic_mesh = create_periodic_mesh(mesh, indicator, map)
     """
-    return _build_periodic_mesh(mesh, match_vertices_geometric(mesh, indicator, mapping_function))
+    return _build_periodic_mesh(
+        mesh, match_vertices_geometric(mesh, indicator, mapping_function), tag_base
+    )
 
 
 def create_periodic_mesh_from_igi(
-    mesh, replace_igi, partner_igi, num_nodes_global, root: int = 0
+    mesh,
+    replace_igi,
+    partner_igi,
+    num_nodes_global,
+    root: int = 0,
+    tag_base: int = DEFAULT_TAG_BASE,
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
     """Make `mesh` periodic from the node pairs .
 
@@ -1373,6 +1463,11 @@ def create_periodic_mesh_from_igi(
             ``mesh.geometry.index_map().size_global``, which is smaller when
             ``create_mesh`` drops nodes no cell references.
         root: The rank holding the pairs.
+        tag_base: The first of {py:data}`NUM_CONSENSUS_TAGS` consecutive MPI tags for the
+            consensus exchanges inside the rebuild. Only worth setting when another such
+            exchange can be in flight on an overlapping communicator at the same time --
+            a nested call, or two sub-communicators that share ranks -- since the tags
+            would then have to be spaced apart.
 
     Returns:
         As {py:func}`create_periodic_mesh`.
@@ -1390,4 +1485,8 @@ def create_periodic_mesh_from_igi(
         np.asarray(partner_igi, dtype=np.int64),
         int(num_nodes_global),
     )
-    return _build_periodic_mesh(mesh, periodic_correspondence_from_nodes(mesh, pairs, root=root))
+    return _build_periodic_mesh(
+        mesh,
+        periodic_correspondence_from_nodes(mesh, pairs, root=root),
+        tag_base,
+    )

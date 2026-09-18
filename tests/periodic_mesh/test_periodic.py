@@ -23,6 +23,11 @@ import dolfinx
 
 from scifem.periodic.geometrical_search import match_vertices_geometric
 from scifem.periodic.mesh import create_periodic_mesh
+from scifem.periodic.mesh import (
+    DEFAULT_TAG_BASE,
+    NUM_CONSENSUS_TAGS,
+    check_facet_ghosting,
+)
 
 
 def unit_square(n=8, offset=0.0):
@@ -470,3 +475,75 @@ def test_per_direction_corner_needs_one_application_per_direction():
         match_vertices_geometric(mesh, indicator, mapping, max_chain_length=tdim)
         with pytest.raises(RuntimeError, match="did not reach a vertex outside"):
             match_vertices_geometric(mesh, indicator, mapping, max_chain_length=tdim - 1)
+
+
+# --------------------------------------------------------------------------- #
+# preconditions and knobs
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "ghost_mode",
+    [dolfinx.mesh.GhostMode.none, dolfinx.mesh.GhostMode.shared_facet],
+)
+def test_check_facet_ghosting_sees_the_ghost_mode(ghost_mode):
+    """The check is exactly a ghost-mode test, and says nothing in serial.
+
+    `interprocess_facets` is the same set under both modes -- that is what makes it usable
+    here -- so what separates them is only how many cells each of those facets carries.
+    """
+    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 6, 6, ghost_mode=ghost_mode)
+    unghosted = MPI.COMM_WORLD.size > 1 and ghost_mode is dolfinx.mesh.GhostMode.none
+    if unghosted:
+        with pytest.raises(RuntimeError, match="do not have both of their cells"):
+            check_facet_ghosting(mesh)
+    else:
+        check_facet_ghosting(mesh)
+
+
+def test_unghosted_input_is_rejected_before_the_rebuild():
+    """An unghosted mesh used to fail much later, as a seam facet with one cell.
+
+    Without the precondition the diagnosis points at the seam, which is the one part of
+    the mesh that is not at fault.
+    """
+    if MPI.COMM_WORLD.size == 1:
+        pytest.skip("a serial mesh has no interprocess facets to be unghosted")
+    mesh = dolfinx.mesh.create_unit_square(
+        MPI.COMM_WORLD, 6, 6, ghost_mode=dolfinx.mesh.GhostMode.none
+    )
+    indicator, mapping = x_periodic(n=6)
+    with pytest.raises(RuntimeError, match="ghost_mode"):
+        create_periodic_mesh(mesh, indicator, mapping)
+
+
+@pytest.mark.parametrize("tag_base", [DEFAULT_TAG_BASE, 3000])
+def test_tag_base_does_not_change_the_mesh(tag_base):
+    """The tags name consensus exchanges; moving them is invisible in the result."""
+    n = 6
+    mesh = unit_square(n)
+    indicator, mapping = x_periodic(n=n)
+    pm, replaced, _ = create_periodic_mesh(mesh, indicator, mapping, tag_base=tag_base)
+
+    assert pm.topology.index_map(0).size_global == (n + 1) * n
+    assert np.isclose(volume(pm), 1.0)
+    assert MPI.COMM_WORLD.allreduce(len(replaced), op=MPI.SUM) > 0
+    jump = seam_jump(pm, lambda x: np.cos(2 * np.pi * x[0]) * np.cos(2 * np.pi * x[1]))
+    assert jump < 1e-12
+
+
+def test_consecutive_tag_bases_do_not_overlap():
+    """Two calls one full block apart, both collective, neither crossing the other.
+
+    `NUM_CONSENSUS_TAGS` is the spacing a caller has to respect, so it is worth asserting
+    that it really is the number of tags a rebuild consumes rather than a stale constant.
+    """
+    n = 6
+    mesh = unit_square(n)
+    indicator, mapping = x_periodic(n=n)
+    first, _, _ = create_periodic_mesh(mesh, indicator, mapping, tag_base=4000)
+    second, _, _ = create_periodic_mesh(
+        mesh, indicator, mapping, tag_base=4000 + NUM_CONSENSUS_TAGS
+    )
+    assert first.topology.index_map(0).size_global == second.topology.index_map(0).size_global
+    assert np.isclose(volume(first), volume(second))

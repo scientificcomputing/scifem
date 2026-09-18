@@ -626,7 +626,7 @@ def periodic_box(comm, res=1.0 / 4, low_is_slave=True):
         pairs = extract_gmsh_periodic_nodes(gmsh.model)
     else:
         empty = np.zeros(0, dtype=np.int64)
-        pairs = GmshPeriodicNodes(empty, empty, 0)
+        pairs = PeriodicNodes(empty, empty, 0)
 
     mesh = _model_to_mesh(comm, 0, gdim=3)
     if comm.rank == 0:
