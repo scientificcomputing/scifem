@@ -8,17 +8,25 @@ import dolfinx
 import ufl
 import numpy.typing as npt
 import dataclasses
-import inspect
-import gmsh
 
-mpi_dtype = {
-    np.float64: MPI.DOUBLE,
-    np.float32: MPI.FLOAT,
-    np.int32: MPI.INT32_T,
-    np.int64: MPI.INT64_T,
-    np.complex128: MPI.DOUBLE_COMPLEX,
-    np.complex64: MPI.COMPLEX,
-}
+from ..mpi_utils import (
+    broadcast_marked_entities,
+    get_ownership,
+    all_to_allv,
+    compute_insert_position,
+    unroll_insert_position,
+    find_position,
+    all_to_all,
+    mpi_dtype,
+)
+from ..compat import index_map, topology as compat_topology
+
+__all__ = [
+    "transfer_meshtags_to_periodic_mesh",
+    "VertexCorrespondence",
+    "create_periodic_mesh",
+    "create_periodic_mesh_from_gmsh",
+]
 
 
 def transfer_meshtags_to_periodic_mesh(
@@ -63,9 +71,7 @@ def transfer_meshtags_to_periodic_mesh(
     geom_indices = dolfinx.mesh.entities_to_geometry(mesh, meshtags.dim, indices)
     igi_indices = mesh.geometry.input_global_indices[geom_indices]
 
-    periodic_mesh.topology.create_connectivity(
-        mesh.topology.dim, 0
-    )  # This should exist by default
+    periodic_mesh.topology.create_connectivity(mesh.topology.dim, 0)  # This should exist by default
     periodic_mesh.topology.create_entities(meshtags.dim)  # This has to be created
     periodic_mesh.topology.create_connectivity(
         meshtags.dim, 0
@@ -79,210 +85,23 @@ def transfer_meshtags_to_periodic_mesh(
     )
 
 
-def all_to_allv(comm, send_data, num_send_data, recv_data, num_recv_data):
-    dtype = mpi_dtype[send_data.dtype.type]
-    assert recv_data.dtype == send_data.dtype, (
-        f"Data types do not match, {recv_data.dtype} != {send_data.dtype}"
-    )
-    assert (d_size := send_data.size) == (s_size := num_send_data.sum()), (
-        f"Number of send data {d_size}  does not match data size {s_size}"
-    )
-    assert (d_size := recv_data.size) == (r_size := num_recv_data.sum()), (
-        f"Number of recv data {d_size}  does not match data size {r_size}"
-    )
-
-    send_msg = [send_data, num_send_data, dtype]
-    recv_msg = [recv_data, num_recv_data, dtype]
-    comm.Neighbor_alltoallv(send_msg, recv_msg)
-
-
-def all_to_all(comm, send_data, recv_data):
-    """
-    Exchange a single item with each neighbor in a distributed graph communicator.
-
-    Note:
-        The count is passed explicitly, and is 1 on every process. MPI-4.1 9.6.2 requires
-        the type signature of ``sendcount``/``sendtype`` at a process to equal that of
-        ``recvcount``/``recvtype`` at *any other* process in the communicator, not just at
-        its neighbors, so the count must be identical on every process whatever its degree.
-        Left implicit, mpi4py derives it as ``buffer size // degree`` and falls back to the
-        whole buffer when the degree is zero, making it rank-local: 1 where the degree is
-        nonzero, 0 where it is zero. Such a call is erroneous; Open MPI rejects it with
-        ``MPI_ERR_TRUNCATE`` while MPICH happens to accept it. See
-        https://github.com/open-mpi/ompi/issues/14452 for the discussion.
-
-        ``all_to_allv`` is not affected: the vector variant is only required to match
-        pairwise along each edge, so per-process counts may legitimately differ there.
-    """
-    dtype = mpi_dtype[send_data.dtype.type]
-    assert recv_data.dtype == send_data.dtype, (
-        f"Data types do not match, {recv_data.dtype} != {send_data.dtype}"
-    )
-    indegree, outdegree, _ = comm.Get_dist_neighbors_count()
-    assert (d_size := send_data.size) == outdegree, (
-        f"Number of send data {d_size} does not match number of destinations {outdegree}"
-    )
-    assert (d_size := recv_data.size) == indegree, (
-        f"Number of recv data {d_size} does not match number of sources {indegree}"
-    )
-    comm.Neighbor_alltoall([send_data, 1, dtype], [recv_data, 1, dtype])
-
-
-def get_ownership(imap) -> npt.NDArray[np.int32]:
-    """
-    Get ownership of each index in an index map
-    """
-    owners = np.full(imap.size_local + imap.num_ghosts, imap.comm.rank, dtype=np.int32)
-    owners[imap.size_local :] = imap.owners
-    return owners
-
-
-def find_position(data, values):
-    """
-    Find the position in values of each entry in data
-
-    Example:
-
-        .. highlight:: python
-        .. code-block:: python
-
-            values = np.array([4, 5, 1, 3, 2], dtype=np.int32)
-            data = np.array([1, 2, 3, 4, 5, 2, 1], dtype=np.int32)
-            b = find_position(data, values) # [2,4,3,0,1,4 2]
-
-    Note:
-        Where ``values`` repeats an entry, the first occurrence is returned. Uses a sorted
-        search rather than a dense ``len(data) x len(values)`` comparison, so the cost is
-        ``O((n + m) log m)`` in time and ``O(n + m)`` in memory.
-    """
-    if len(data) == 0:
-        return np.zeros(0, dtype=np.int32)
-    # a stable sort makes `searchsorted` land on the first of any repeated value
-    order = np.argsort(values, kind="stable")
-    slot = np.searchsorted(values, data, sorter=order)
-    if np.any(slot >= len(values)):
-        raise ValueError("find_position: data contains values not present in values")
-    position = order[slot]
-    if not np.array_equal(values[position], data):
-        raise ValueError("find_position: data contains values not present in values")
-    return position.astype(np.int32)
-
-
-def compute_insert_position(
-    data_owner: npt.NDArray[np.int32],
-    destination_ranks: npt.NDArray[np.int32],
-    out_size: npt.NDArray[np.int32],
-) -> npt.NDArray[np.int32]:
-    """
-    Giving a list of ranks, compute the local insert position for each rank in a list
-    sorted by destination ranks. This function is used for packing data from a
-    given process to its destination processes.
-
-    Example:
-
-        .. highlight:: python
-        .. code-block:: python
-
-            data_owner = [0, 1, 1, 0, 2, 3]
-            destination_ranks = [2,0,3,1]
-            out_size = [1, 2, 1, 2]
-            insert_position = compute_insert_position(data_owner, destination_ranks, out_size)
-
-        Insert position is then ``[1, 4, 5, 2, 0, 3]``
-
-    Note:
-        Uses a sorted search rather than a dense ``len(data_owner) x
-        len(destination_ranks)`` comparison, so the cost is ``O(n log n)`` in time and
-        ``O(n)`` in memory.
-    """
-    if len(data_owner) == 0:
-        return np.zeros(0, dtype=np.int32)
-    # which destination block each item belongs to
-    block = find_position(data_owner, destination_ranks)
-
-    # Compute offsets for insertion based on input size
-    send_offsets = np.zeros(len(out_size) + 1, dtype=np.intc)
-    send_offsets[1:] = np.cumsum(out_size)
-    assert send_offsets[-1] == len(data_owner)
-
-    # Index of each item within its own block, in order of appearance. A stable sort by
-    # block puts each block's items in a contiguous run, in their original order, so the
-    # position within the run is the position within the block.
-    order = np.argsort(block, kind="stable")
-    within_block = np.empty(len(block), dtype=np.int64)
-    within_block[order] = np.arange(len(block)) - np.repeat(send_offsets[:-1], out_size)
-
-    return (within_block + send_offsets[block]).astype(np.int32)
-
-
-def unroll_insert_position(
-    insert_position: npt.NDArray[np.int32], block_size: int
-) -> npt.NDArray[np.int32]:
-    """
-    Unroll insert position by a block size
-
-    Example:
-
-
-        .. highlight:: python
-        .. code-block:: python
-
-            insert_position = [1, 4, 5, 2, 0, 3]
-            unrolled_ip = unroll_insert_position(insert_position, 3)
-
-        where ``unrolled_ip = [3, 4 ,5, 12, 13, 14, 15, 16, 17, 6, 7, 8, 0, 1, 2, 9, 10, 11]``
-    """
-    unrolled_ip = np.repeat(insert_position, block_size) * block_size
-    unrolled_ip += np.tile(np.arange(block_size), len(insert_position))
-    return unrolled_ip
-
-
-def _compat_index_map(comm, size_local, ghosts, owners, tag: int | None = None):
-    if dolfinx.common.IndexMap != dolfinx.cpp.common.IndexMap:
-        assert tag is not None, "Tag must be provided for dolfinx.common.index_map"
-        return dolfinx.common.index_map(
-            comm, size_local, ghosts=(ghosts, owners), tag=tag
-        )
-    else:
-        try:
-            return dolfinx.common.IndexMap(comm, size_local, ghosts, owners)
-        except TypeError:
-            assert tag is not None, "Tag must be provided for dolfinx.common.IndexMap"
-            return dolfinx.common.IndexMap(comm, size_local, ghosts, owners, tag=tag)
-
-
-def broadcast_marked_entities(mesh, dim, entities):
-    """Extend a set of entities to every local copy of the entities in it.
-
-    An entity marked on one process that holds it comes back marked on all of them. Use
-    this on a set that is only correct on the owners, such as the output of
-    `locate_entities_boundary` or `exterior_facet_indices`, when the ghost copies have to
-    carry the same mark.
-
-    Collective on the communicator of the index map for `dim`.
+@dataclasses.dataclass
+class PeriodicNodes:
+    """The node pairs of a periodic mesh, resolved to roots.
 
     Args:
-        mesh: The mesh the entities belong to.
-        dim: Topological dimension of `entities`.
-        entities: Local indices of the marked entities, owned or ghost.
-
-    Returns:
-        Local indices of every entity marked on this process or on the owner of one of
-        its entities, ascending.
+        replaced: 0-based gmsh node tags that are to be replaced, ascending and without
+            repeats. These are values of ``mesh.geometry.input_global_indices``.
+        master: For each entry of `slave`, the node it is identified with. Never itself a
+            slave, so no further resolution is needed.
+        num_nodes_global: The number of nodes in the gmsh model. Not
+            ``mesh.geometry.index_map().size_global``, which is smaller when ``create_mesh``
+            drops nodes that no cell references.
     """
-    marker = dolfinx.la.vector(mesh.topology.index_map(dim), 1, dtype=np.int32)
-    marker.array[:] = 0
-    marker.array[entities] = 1
-    marker.scatter_reverse(dolfinx.la.InsertMode.add)
-    marker.scatter_forward()
-    return np.flatnonzero(marker.array).astype(np.int32)
 
-
-def _extract_cpp_object(obj):
-    if hasattr(obj, "_cpp_object"):
-        return obj._cpp_object
-    else:
-        return obj
+    slave: npt.NDArray[np.int64]
+    master: npt.NDArray[np.int64]
+    num_nodes_global: int
 
 
 @dataclasses.dataclass
@@ -372,9 +191,7 @@ def _match_vertices_geometric(
         dolfinx.mesh.locate_entities_boundary(mesh, mesh.topology.dim - 1, indicator),
     )
 
-    geom_index = dolfinx.mesh.entities_to_geometry(mesh, 0, indicator_vertices).reshape(
-        -1
-    )
+    geom_index = dolfinx.mesh.entities_to_geometry(mesh, 0, indicator_vertices).reshape(-1)
     owned_vertex_coords = mesh.geometry.x[geom_index]
 
     # A geometric tolerance has to be a length. `np.finfo(...).eps` describes relative
@@ -389,9 +206,7 @@ def _match_vertices_geometric(
         mesh.topology.dim,
         np.arange(_cell_map.size_local + _cell_map.num_ghosts, dtype=np.int32),
     )
-    h_min = comm.allreduce(
-        _cell_sizes.min() if _cell_sizes.size else np.inf, op=MPI.MIN
-    )
+    h_min = comm.allreduce(_cell_sizes.min() if _cell_sizes.size else np.inf, op=MPI.MIN)
     coord_scale = comm.allreduce(
         np.abs(mesh.geometry.x).max() if mesh.geometry.x.size else 0.0, op=MPI.MAX
     )
@@ -401,9 +216,7 @@ def _match_vertices_geometric(
     )
 
     # Map vertices to new coordinates
-    mapped_vertex_coords = np.ascontiguousarray(
-        mapping_function(owned_vertex_coords.T).T
-    )
+    mapped_vertex_coords = np.ascontiguousarray(mapping_function(owned_vertex_coords.T).T)
 
     # Follow the mapping to a vertex outside `indicator`; see `max_chain_length` above.
     # Entirely local: `indicator` and `mapping_function` are pointwise in the coordinates,
@@ -456,9 +269,7 @@ def _match_vertices_geometric(
     closest_vertex_coords = mesh.geometry.x[
         dolfinx.mesh.entities_to_geometry(mesh, 0, closest_vertex).reshape(-1)
     ]
-    snap_distance = np.linalg.norm(
-        closest_vertex_coords - acquired_vertex_coords, axis=1
-    )
+    snap_distance = np.linalg.norm(closest_vertex_coords - acquired_vertex_coords, axis=1)
     num_unsnapped = int(np.count_nonzero(snap_distance > eps))
     # Collective: the condition is reduced so that either every process raises or none
     # does. A one-sided raise would leave the others blocked in the rebuild's exchanges.
@@ -735,56 +546,6 @@ def _number_new_ghosts(index_map, global_indices, *payloads):
     return local, new_ghosts, missing[pos], tuple(gathered)
 
 
-def _compat_topology(
-    comm, cell_type, tdim, vertex_map, cell_map, c_to_v, v_to_v, original_cell_index
-):
-    """Construct a ``dolfinx.cpp.mesh.Topology`` across the supported DOLFINx versions.
-
-    The constructor has changed shape more than once and none of the forms is
-    introspectable, so they are told apart by the `TypeError` the call itself raises:
-
-    1. communicator and cell type only, everything else through setters;
-    2. the same with the maps, dofmap and original cell index passed positionally;
-    3. as (2) without the communicator.
-
-    Args:
-        comm: The communicator of the new topology.
-        cell_type: Its cell type.
-        tdim: Its topological dimension, for the index map and connectivity it is set at.
-        vertex_map: Index map for dimension 0.
-        cell_map: Index map for dimension `tdim`.
-        c_to_v: Cell-to-vertex connectivity, in the local numbering of `vertex_map`.
-        v_to_v: Vertex-to-vertex connectivity, i.e. the identity over `vertex_map`. Used
-            by form (1) only, which cannot derive it.
-        original_cell_index: Input global index of each cell. Used by forms (2) and (3),
-            which take it directly; form (1) does not accept it.
-
-    Returns:
-        The topology, with both index maps and both connectivities set.
-    """
-    try:
-        topology = dolfinx.cpp.mesh.Topology(comm, cell_type)
-        topology.set_index_map(0, vertex_map)
-        topology.set_index_map(tdim, cell_map)
-        topology.set_connectivity(v_to_v, 0, 0)
-        topology.set_connectivity(c_to_v, tdim, 0)
-        return topology
-    except TypeError:
-        pass
-
-    args = (
-        cell_type,
-        _extract_cpp_object(vertex_map),
-        _extract_cpp_object(cell_map),
-        _extract_cpp_object(c_to_v),
-        original_cell_index,
-    )
-    try:
-        return dolfinx.cpp.mesh.Topology(comm, *args)
-    except TypeError:
-        return dolfinx.cpp.mesh.Topology(*args)
-
-
 def _pack_cells_at_vertices(mesh, vertices, boundary_facets, vertices_per_dest):
     """Gather, per destination, the boundary cells meeting a group of vertices.
 
@@ -820,9 +581,7 @@ def _pack_cells_at_vertices(mesh, vertices, boundary_facets, vertices_per_dest):
     dofmap = [np.zeros(0, dtype=np.int32)]
     for i in range(len(vertices_per_dest)):
         group = vertices[offsets[i] : offsets[i + 1]]
-        connected_facets = dolfinx.mesh.compute_incident_entities(
-            mesh.topology, group, 0, tdim - 1
-        )
+        connected_facets = dolfinx.mesh.compute_incident_entities(mesh.topology, group, 0, tdim - 1)
         con_ext_facets = np.intersect1d(connected_facets, boundary_facets)
         con_ext_cells = dolfinx.mesh.compute_incident_entities(
             mesh.topology, con_ext_facets, tdim - 1, tdim
@@ -841,8 +600,7 @@ def _pack_cells_at_vertices(mesh, vertices, boundary_facets, vertices_per_dest):
         dofmap.append(
             c_to_v.array[
                 (
-                    c_to_v.offsets[con_ext_cells][:, None]
-                    + np.arange(num_vertices, dtype=np.int32)
+                    c_to_v.offsets[con_ext_cells][:, None] + np.arange(num_vertices, dtype=np.int32)
                 ).reshape(-1)
             ]
         )
@@ -880,9 +638,7 @@ def _build_periodic_mesh(
 
     # The mesh without the vertices that are being replaced, and the partners resolved
     # against it: everything below is expressed in this reduced numbering.
-    sub_map_without_ghosts, parent_to_sub = _reduced_vertex_map(
-        mesh, indicator_vertices
-    )
+    sub_map_without_ghosts, parent_to_sub = _reduced_vertex_map(mesh, indicator_vertices)
     global_vertices, send_vertex_owner = _partner_in_reduced_map(
         comm, sub_map_without_ghosts, parent_to_sub, partner_vertex
     )
@@ -907,15 +663,11 @@ def _build_periodic_mesh(
 
     # Pack data from process taking over vertex to process that has lost vertex
     assert np.all(dest_owner[:-1] <= dest_owner[1:]), "Vertex owners are not sorted"
-    vertex_destinations, send_vertices_per_proc = np.unique(
-        dest_owner, return_counts=True
-    )
+    vertex_destinations, send_vertices_per_proc = np.unique(dest_owner, return_counts=True)
     # The grouping works because `dest_owner` is sorted, so `partner_vertex` is already
     # laid out in blocks of one destination each.
     send_ghost_cells_from_new_owner, new_cell_topology_dm, num_cells_per_proc = (
-        _pack_cells_at_vertices(
-            mesh, partner_vertex, org_mesh_ext_facets, send_vertices_per_proc
-        )
+        _pack_cells_at_vertices(mesh, partner_vertex, org_mesh_ext_facets, send_vertices_per_proc)
     )
 
     # Create new owner to old owner communicator
@@ -963,9 +715,7 @@ def _build_periodic_mesh(
     # Collective, and explicit about the cause: a -1 here means the mapped point was not
     # found in any cell of the mesh, i.e. `mapping_function` moved it outside the domain.
     num_unowned = int(
-        np.count_nonzero(
-            (global_replacement_vertex == -1) | (global_replacement_owner == -1)
-        )
+        np.count_nonzero((global_replacement_vertex == -1) | (global_replacement_owner == -1))
     )
     if comm.allreduce(num_unowned, op=MPI.SUM) > 0:
         raise RuntimeError(
@@ -978,9 +728,7 @@ def _build_periodic_mesh(
     cell_map = mesh.topology.index_map(mesh.topology.dim)
     cell_owners = get_ownership(cell_map)
     assert (send_ghost_cells_from_new_owner > -1).all()
-    assert (
-        send_ghost_cells_from_new_owner < cell_map.size_local + cell_map.num_ghosts
-    ).all()
+    assert (send_ghost_cells_from_new_owner < cell_map.size_local + cell_map.num_ghosts).all()
     global_ghost_cells_from_new_owner = cell_map.local_to_global(
         np.array(send_ghost_cells_from_new_owner, dtype=np.int32)
     ).astype(np.int64)
@@ -994,14 +742,10 @@ def _build_periodic_mesh(
     gl_new_cell_topology_dm = np.full_like(
         subdofmap_for_new_owner_ghost_cells_local, -1, dtype=np.int64
     )
-    gl_new_cell_topology_dm[unmodified_positions] = (
-        sub_map_without_ghosts.local_to_global(
-            subdofmap_for_new_owner_ghost_cells_local[unmodified_positions]
-        ).astype(np.int64)
-    )
-    gl_new_cell_topology_owners = np.full_like(
-        gl_new_cell_topology_dm, -1, dtype=np.int32
-    )
+    gl_new_cell_topology_dm[unmodified_positions] = sub_map_without_ghosts.local_to_global(
+        subdofmap_for_new_owner_ghost_cells_local[unmodified_positions]
+    ).astype(np.int64)
+    gl_new_cell_topology_owners = np.full_like(gl_new_cell_topology_dm, -1, dtype=np.int32)
     gl_new_cell_topology_owners[unmodified_positions] = vertex_owners[
         subdofmap_for_new_owner_ghost_cells_local[unmodified_positions]
     ]
@@ -1045,9 +789,7 @@ def _build_periodic_mesh(
     # Send oci
     recv_potential_cell_oci = np.empty(recv_num_cells.sum(), dtype=np.int64)
     send_cell_oci = (
-        mesh.topology.original_cell_index[send_ghost_cells_from_new_owner]
-        .copy()
-        .astype(np.int64)
+        mesh.topology.original_cell_index[send_ghost_cells_from_new_owner].copy().astype(np.int64)
     )
     all_to_allv(
         new_owner_to_old_comm,
@@ -1102,27 +844,19 @@ def _build_periodic_mesh(
 
     # The ghost list of the index map that supersedes the submap below. The order matches
     # the numbering just assigned: existing ghosts first, then the new ones.
-    new_ghosts = np.hstack([sub_map_without_ghosts.ghosts, new_ghost_vertices]).astype(
-        np.int64
-    )
-    new_owners = np.hstack([sub_map_without_ghosts.owners, new_ghost_owners]).astype(
-        np.int32
-    )
+    new_ghosts = np.hstack([sub_map_without_ghosts.ghosts, new_ghost_vertices]).astype(np.int64)
+    new_owners = np.hstack([sub_map_without_ghosts.owners, new_ghost_owners]).astype(np.int32)
     # A ghost is owned elsewhere by definition. A self-owned entry here would mean
     # `global_to_local` failed to find a vertex this process does in fact own.
     assert (new_owners != comm.rank).all()
 
     # Check if index is already in (reduced) vertex map
-    local_replacement_vertex = sub_map_without_ghosts.global_to_local(
-        global_replacement_vertex
-    )
+    local_replacement_vertex = sub_map_without_ghosts.global_to_local(global_replacement_vertex)
     is_local_indicator = local_replacement_vertex != -1
     existing_vertices = np.flatnonzero(is_local_indicator)
 
     # Vertex map is temporary, as we need to extend it with additional ghosts on the process taking over facets
-    tmp_vertex_map = _compat_index_map(
-        comm, new_local_size, new_ghosts, new_owners, tag=1102
-    )
+    tmp_vertex_map = index_map(comm, new_local_size, new_ghosts, new_owners, tag=1102)
     tmp_vertex_ownership = get_ownership(tmp_vertex_map)
 
     # Create replacement map
@@ -1135,9 +869,7 @@ def _build_periodic_mesh(
     # For new ghosts, add the to replacement map
     is_new_replacement = np.invert(is_local_indicator)
     replacement_ghosts = global_replacement_vertex[is_new_replacement]
-    assert np.isin(replacement_ghosts, new_ghosts).all(), (
-        "Replacement ghost not in new ghost list"
-    )
+    assert np.isin(replacement_ghosts, new_ghosts).all(), "Replacement ghost not in new ghost list"
     if len(replacement_ghosts) > 0:
         local_replacement_position = find_position(replacement_ghosts, new_ghosts)
 
@@ -1159,9 +891,7 @@ def _build_periodic_mesh(
     new_cell_geom_dm = geom_dm[send_ghost_cells_from_new_owner]
     assert (new_cell_geom_dm > -1).all()
     assert (new_cell_geom_dm < geom_im.size_local + geom_im.num_ghosts).all()
-    gl_new_cell_geom_dm = geom_im.local_to_global(new_cell_geom_dm.reshape(-1)).astype(
-        np.int64
-    )
+    gl_new_cell_geom_dm = geom_im.local_to_global(new_cell_geom_dm.reshape(-1)).astype(np.int64)
 
     # Send potential new ghosts
     add_geom_dm = np.empty((recv_num_cells.sum(), num_nodes), dtype=np.int64)
@@ -1185,9 +915,7 @@ def _build_periodic_mesh(
     )
 
     # Send igi for potential new nodes
-    send_igi = mesh.geometry.input_global_indices[new_cell_geom_dm.reshape(-1)].astype(
-        np.int64
-    )
+    send_igi = mesh.geometry.input_global_indices[new_cell_geom_dm.reshape(-1)].astype(np.int64)
     recv_igi = np.empty((recv_num_cells.sum(), num_nodes), dtype=np.int64)
     all_to_allv(
         new_owner_to_old_comm,
@@ -1210,9 +938,7 @@ def _build_periodic_mesh(
 
     # Communicate geometry coordinates (to process that has lost vertex)
     node_coordinates = mesh.geometry.x[new_cell_geom_dm.reshape(-1)].flatten()
-    geom_coords = np.empty(
-        num_nodes * 3 * recv_num_cells.sum(), dtype=mesh.geometry.x.dtype
-    )
+    geom_coords = np.empty(num_nodes * 3 * recv_num_cells.sum(), dtype=mesh.geometry.x.dtype)
     send_coord_msg = [
         node_coordinates,
         num_nodes * 3 * num_cells_per_proc,
@@ -1251,9 +977,7 @@ def _build_periodic_mesh(
     # Exteriority is a global property, so the scatter that broadens the set above
     # preserves it. One entry per (facet, destination) pair, so a cell repeats once per
     # rank it must reach; everything packed below stays indexed by this array.
-    cells_losing_vertex = f_to_c.array[f_to_c.offsets[indicator_facets]][
-        lost_facet_position
-    ]
+    cells_losing_vertex = f_to_c.array[f_to_c.offsets[indicator_facets]][lost_facet_position]
     assert (cells_losing_vertex > -1).all()
     assert (cells_losing_vertex < cell_map.size_local + cell_map.num_ghosts).all()
     cells_losing_vertex_gl = cell_map.local_to_global(cells_losing_vertex)
@@ -1266,14 +990,10 @@ def _build_periodic_mesh(
     lost_cells_dm_owners = tmp_vertex_ownership[renumbered_dm]
 
     # Pack dofmap,owners and igi of geometry, not in sorted by communication proc
-    org_geom_dm_cells_losing_vertex = mesh.geometry.dofmaps[0][
-        cells_losing_vertex
-    ].reshape(-1)
+    org_geom_dm_cells_losing_vertex = mesh.geometry.dofmaps[0][cells_losing_vertex].reshape(-1)
     lost_geom_dm = geom_im.local_to_global(org_geom_dm_cells_losing_vertex)
     assert (org_geom_dm_cells_losing_vertex > -1).all()
-    assert (
-        org_geom_dm_cells_losing_vertex < geom_im.size_local + geom_im.num_ghosts
-    ).all()
+    assert (org_geom_dm_cells_losing_vertex < geom_im.size_local + geom_im.num_ghosts).all()
 
     lost_geom_owner = node_owners[org_geom_dm_cells_losing_vertex]
     lost_geom_igi = mesh.geometry.input_global_indices[org_geom_dm_cells_losing_vertex]
@@ -1297,33 +1017,21 @@ def _build_periodic_mesh(
 
     # Pack topology data
     lost_insert_pos_top_dm = unroll_insert_position(lost_cell_insert_pos, num_vertices)
-    lost_cells_dofmap_send_buffer = np.empty_like(
-        lost_insert_pos_top_dm, dtype=np.int64
-    )
+    lost_cells_dofmap_send_buffer = np.empty_like(lost_insert_pos_top_dm, dtype=np.int64)
     lost_cells_dofmap_send_buffer[lost_insert_pos_top_dm] = lost_cells_dm_global
-    lost_cells_dofmap_owners_buffer = np.empty_like(
-        lost_insert_pos_top_dm, dtype=np.int32
-    )
+    lost_cells_dofmap_owners_buffer = np.empty_like(lost_insert_pos_top_dm, dtype=np.int32)
     lost_cells_dofmap_owners_buffer[lost_insert_pos_top_dm] = lost_cells_dm_owners
 
     lost_insert_pos_geom_dm = unroll_insert_position(lost_cell_insert_pos, num_nodes)
-    lost_cells_gdofmap_send_buffer = np.empty_like(
-        lost_insert_pos_geom_dm, dtype=np.int64
-    )
+    lost_cells_gdofmap_send_buffer = np.empty_like(lost_insert_pos_geom_dm, dtype=np.int64)
     lost_cells_gdofmap_send_buffer[lost_insert_pos_geom_dm] = lost_geom_dm
-    lost_cells_gdofmap_owner_buffer = np.empty_like(
-        lost_insert_pos_geom_dm, dtype=np.int32
-    )
+    lost_cells_gdofmap_owner_buffer = np.empty_like(lost_insert_pos_geom_dm, dtype=np.int32)
     lost_cells_gdofmap_owner_buffer[lost_insert_pos_geom_dm] = lost_geom_owner
-    lost_cells_gdofmap_igi_buffer = np.empty_like(
-        lost_insert_pos_geom_dm, dtype=np.int64
-    )
+    lost_cells_gdofmap_igi_buffer = np.empty_like(lost_insert_pos_geom_dm, dtype=np.int64)
     lost_cells_gdofmap_igi_buffer[lost_insert_pos_geom_dm] = lost_geom_igi
 
     xtype = mesh.geometry.x.dtype
-    lost_insert_pos_geom_coord = unroll_insert_position(
-        lost_cell_insert_pos, 3 * num_nodes
-    )
+    lost_insert_pos_geom_coord = unroll_insert_position(lost_cell_insert_pos, 3 * num_nodes)
     lost_geom_coords = mesh.geometry.x[org_geom_dm_cells_losing_vertex].flatten()
     lost_cells_coords_buffer = np.empty_like(lost_insert_pos_geom_coord, dtype=xtype)
     lost_cells_coords_buffer[lost_insert_pos_geom_coord] = lost_geom_coords
@@ -1336,9 +1044,7 @@ def _build_periodic_mesh(
     lost_cells_to_gainer_comm = comm.Create_dist_graph(
         [comm.rank], [len(lost_src_ranks)], lost_src_ranks.tolist(), reorder=False
     )
-    recv_lost_cells_ranks, sent_to_ranks, _ = (
-        lost_cells_to_gainer_comm.Get_dist_neighbors()
-    )
+    recv_lost_cells_ranks, sent_to_ranks, _ = lost_cells_to_gainer_comm.Get_dist_neighbors()
     recv_lost_cells_ranks = np.asarray(recv_lost_cells_ranks, dtype=np.int32)
     assert np.array_equal(np.asarray(sent_to_ranks, dtype=np.int32), lost_src_ranks)
     num_recv_lost_cells = np.zeros(len(recv_lost_cells_ranks), dtype=np.int32)
@@ -1357,9 +1063,7 @@ def _build_periodic_mesh(
     )
 
     # Communicate owners of potential new ghost cells
-    lost_cells_owners_recv_buffer = np.empty_like(
-        lost_cells_recv_buffer, dtype=np.int32
-    )
+    lost_cells_owners_recv_buffer = np.empty_like(lost_cells_recv_buffer, dtype=np.int32)
     all_to_allv(
         lost_cells_to_gainer_comm,
         lost_owners_send_buffer,
@@ -1379,9 +1083,7 @@ def _build_periodic_mesh(
     )
 
     # Communicate dofmap and ownership info
-    lost_cells_dm_recv_buffer = np.empty(
-        (total_recv_lost_cells, num_vertices), dtype=np.int64
-    )
+    lost_cells_dm_recv_buffer = np.empty((total_recv_lost_cells, num_vertices), dtype=np.int64)
     all_to_allv(
         lost_cells_to_gainer_comm,
         lost_cells_dofmap_send_buffer,
@@ -1389,9 +1091,7 @@ def _build_periodic_mesh(
         lost_cells_dm_recv_buffer,
         num_recv_lost_cells * num_vertices,
     )
-    lost_cells_dm_owner_recv_buffer = np.empty_like(
-        lost_cells_dm_recv_buffer, dtype=np.int32
-    )
+    lost_cells_dm_owner_recv_buffer = np.empty_like(lost_cells_dm_recv_buffer, dtype=np.int32)
     all_to_allv(
         lost_cells_to_gainer_comm,
         lost_cells_dofmap_owners_buffer,
@@ -1401,9 +1101,7 @@ def _build_periodic_mesh(
     )
 
     # Communicate geometry dofmap, igi, owners and coordinates
-    lost_cells_gdofmap_recv_buffer = np.empty(
-        (total_recv_lost_cells, num_nodes), dtype=np.int64
-    )
+    lost_cells_gdofmap_recv_buffer = np.empty((total_recv_lost_cells, num_nodes), dtype=np.int64)
     all_to_allv(
         lost_cells_to_gainer_comm,
         lost_cells_gdofmap_send_buffer,
@@ -1421,9 +1119,7 @@ def _build_periodic_mesh(
         lost_cells_gdofmap_owner_recv_buffer,
         num_recv_lost_cells * num_nodes,
     )
-    lost_cells_igi_recv_buffer = np.empty_like(
-        lost_cells_gdofmap_recv_buffer, dtype=np.int64
-    )
+    lost_cells_igi_recv_buffer = np.empty_like(lost_cells_gdofmap_recv_buffer, dtype=np.int64)
     all_to_allv(
         lost_cells_to_gainer_comm,
         lost_cells_gdofmap_igi_buffer,
@@ -1444,9 +1140,7 @@ def _build_periodic_mesh(
     )
 
     # Only add cells that are new on the process and only add them once
-    lost_cell_indicator = np.flatnonzero(
-        cell_map.global_to_local(lost_cells_recv_buffer) == -1
-    )
+    lost_cell_indicator = np.flatnonzero(cell_map.global_to_local(lost_cells_recv_buffer) == -1)
     duplicate_indicator = np.isin(
         lost_cells_recv_buffer, new_cells_from_new_vertex_owner, invert=True
     )
@@ -1467,9 +1161,9 @@ def _build_periodic_mesh(
     unique_lost_cells_dm = lost_cells_dm_recv_buffer[new_lost_cells_indicator][
         unique_lost_cells_position
     ].reshape(-1)
-    unique_lost_cells_dm_owners = lost_cells_dm_owner_recv_buffer[
-        new_lost_cells_indicator
-    ][unique_lost_cells_position].reshape(-1)
+    unique_lost_cells_dm_owners = lost_cells_dm_owner_recv_buffer[new_lost_cells_indicator][
+        unique_lost_cells_position
+    ].reshape(-1)
     lost_cells_dofs_as_local = tmp_vertex_map.global_to_local(unique_lost_cells_dm)
 
     # Find those vertex dofs that are new, and compute their new local vertex number
@@ -1486,9 +1180,7 @@ def _build_periodic_mesh(
     lost_cells_ghost_owners = unique_lost_cells_dm_owners[lost_cells_new_vertices][
         unique_ghosts_position
     ]
-    lost_cells_ghost_insert_position = (
-        tmp_vertex_map.size_local + tmp_vertex_map.num_ghosts
-    )
+    lost_cells_ghost_insert_position = tmp_vertex_map.size_local + tmp_vertex_map.num_ghosts
     lost_cells_dofs_as_local[lost_cells_new_vertices] = (
         lost_cells_ghost_insert_position
         + np.arange(len(lost_cells_unique_new_ghosts), dtype=np.int32)
@@ -1504,18 +1196,18 @@ def _build_periodic_mesh(
     ext_gm_ghosts, extg_pos, extg_inverse_map = np.unique(
         filtered_geometry_dm[new_ext_nodes], return_index=True, return_inverse=True
     )
-    filtered_geometry_o = lost_cells_gdofmap_owner_recv_buffer[
-        new_lost_cells_indicator
-    ][unique_lost_cells_position].flatten()
+    filtered_geometry_o = lost_cells_gdofmap_owner_recv_buffer[new_lost_cells_indicator][
+        unique_lost_cells_position
+    ].flatten()
     ext_ghost_owners = filtered_geometry_o[new_ext_nodes][extg_pos]
     ext_node_pos = num_local_nodes + geom_im.num_ghosts + len(new_ghost_nodes)
-    ext_geometry_dm[new_ext_nodes] = (
-        ext_node_pos + np.arange(len(ext_gm_ghosts), dtype=np.int32)
-    )[extg_inverse_map]
+    ext_geometry_dm[new_ext_nodes] = (ext_node_pos + np.arange(len(ext_gm_ghosts), dtype=np.int32))[
+        extg_inverse_map
+    ]
     ext_geometry_dm = ext_geometry_dm.reshape(-1, num_nodes)
-    filtered_geometry_coords = lost_cells_node_coords_recv_buffer[
-        new_lost_cells_indicator
-    ][unique_lost_cells_position].reshape(-1, 3)[new_ext_nodes][extg_pos]
+    filtered_geometry_coords = lost_cells_node_coords_recv_buffer[new_lost_cells_indicator][
+        unique_lost_cells_position
+    ].reshape(-1, 3)[new_ext_nodes][extg_pos]
     filtered_geometry_igi = lost_cells_igi_recv_buffer[new_lost_cells_indicator][
         unique_lost_cells_position
     ].flatten()[new_ext_nodes][extg_pos]
@@ -1550,26 +1242,18 @@ def _build_periodic_mesh(
         ]
     ).astype(np.int64)
 
-    assert (
-        len(np.intersect1d(tmp_vertex_map.ghosts, lost_cells_unique_new_ghosts)) == 0
-    ), "Ghost in both additional maps"
-
-    all_ghosts = np.hstack(
-        [tmp_vertex_map.ghosts, lost_cells_unique_new_ghosts]
-    ).astype(np.int64)
-    all_owners = np.hstack([tmp_vertex_map.owners, lost_cells_ghost_owners]).astype(
-        np.int32
+    assert len(np.intersect1d(tmp_vertex_map.ghosts, lost_cells_unique_new_ghosts)) == 0, (
+        "Ghost in both additional maps"
     )
+
+    all_ghosts = np.hstack([tmp_vertex_map.ghosts, lost_cells_unique_new_ghosts]).astype(np.int64)
+    all_owners = np.hstack([tmp_vertex_map.owners, lost_cells_ghost_owners]).astype(np.int32)
 
     assert (all_owners != comm.rank).all(), "Ghosted vertices on owned process"
 
     # Create new cell and vertex map
-    new_cell_map = _compat_index_map(
-        comm, cell_map.size_local, all_cell_ghosts, all_cell_owners, tag=1103
-    )
-    new_vertex_map = _compat_index_map(
-        comm, tmp_vertex_map.size_local, all_ghosts, all_owners, tag=1104
-    )
+    new_cell_map = index_map(comm, cell_map.size_local, all_cell_ghosts, all_cell_owners, tag=1103)
+    new_vertex_map = index_map(comm, tmp_vertex_map.size_local, all_ghosts, all_owners, tag=1104)
 
     new_c_to_v = dolfinx.graph.adjacencylist(
         np.vstack([new_c, extra_dm, lost_cells_dofs_as_local.reshape(-1, num_vertices)])
@@ -1577,11 +1261,11 @@ def _build_periodic_mesh(
     new_v_to_v = dolfinx.graph.adjacencylist(
         np.arange(new_vertex_map.size_local + new_vertex_map.num_ghosts, dtype=np.int32)
     )
-    assert (
-        new_c_to_v.array < new_vertex_map.size_local + new_vertex_map.num_ghosts
-    ).all(), "Cell to vertex map is out of bounds"
+    assert (new_c_to_v.array < new_vertex_map.size_local + new_vertex_map.num_ghosts).all(), (
+        "Cell to vertex map is out of bounds"
+    )
 
-    topology = _compat_topology(
+    topology = compat_topology(
         comm,
         mesh.topology.cell_type,
         mesh.topology.dim,
@@ -1591,41 +1275,38 @@ def _build_periodic_mesh(
         new_v_to_v,
         all_cell_oci,
     )
-    c_el = dolfinx.fem.coordinate_element(
-        mesh._ufl_domain.ufl_coordinate_element().basix_element
-    )
+    c_el = dolfinx.fem.coordinate_element(mesh._ufl_domain.ufl_coordinate_element().basix_element)
 
     # ranges = MPI.COMM_WORLD.allgather(tmp_vertex_map.local_range)
     # for ghost, owner in zip(all_ghosts, all_owners):
     #     assert (ranges[owner][0] <= ghost) & (ghost < ranges[owner][1]), f"{comm.rank} Ghost {ghost} is not range {ranges[owner]}"
     assert (
-        (all_ghosts < tmp_vertex_map.local_range[0])
-        | (tmp_vertex_map.local_range[1] <= all_ghosts)
+        (all_ghosts < tmp_vertex_map.local_range[0]) | (tmp_vertex_map.local_range[1] <= all_ghosts)
     ).all(), "Ghost "
     assert (new_vertex_map.ghosts < new_vertex_map.size_global).all(), (
         "Ghosts larger than global size"
     )
 
     # Create combined geometry
-    extended_geom_ghosts = np.hstack(
-        [geom_im.ghosts, new_ghost_nodes, ext_gm_ghosts]
-    ).astype(np.int64)
-    extended_geom_owners = np.hstack(
-        [geom_im.owners, new_ghost_owners, ext_ghost_owners]
-    ).astype(np.int32)
+    extended_geom_ghosts = np.hstack([geom_im.ghosts, new_ghost_nodes, ext_gm_ghosts]).astype(
+        np.int64
+    )
+    extended_geom_owners = np.hstack([geom_im.owners, new_ghost_owners, ext_ghost_owners]).astype(
+        np.int32
+    )
     # The coordinates arrive after the ghosts are numbered, so they are reduced to one
     # value per new ghost with the selection `_number_new_ghosts` handed back.
-    extra_node_coords = geom_coords.reshape(-1, num_nodes, 3)[cell_filter].reshape(
-        -1, 3
-    )[first_new_node]
+    extra_node_coords = geom_coords.reshape(-1, num_nodes, 3)[cell_filter].reshape(-1, 3)[
+        first_new_node
+    ]
 
-    extended_dofmap = np.vstack(
-        [mesh.geometry.dofmaps[0], extra_geom_dm, ext_geometry_dm]
-    ).astype(np.int32)
+    extended_dofmap = np.vstack([mesh.geometry.dofmaps[0], extra_geom_dm, ext_geometry_dm]).astype(
+        np.int32
+    )
     extended_coords = np.vstack(
         [mesh.geometry.x, extra_node_coords, filtered_geometry_coords]
     ).astype(mesh.geometry.x.dtype)[:, : mesh.geometry.dim]
-    new_node_im = _compat_index_map(
+    new_node_im = index_map(
         comm, num_local_nodes, extended_geom_ghosts, extended_geom_owners, tag=1105
     )
 
@@ -1693,15 +1374,13 @@ def create_periodic_mesh(
 
         periodic_mesh = create_periodic_mesh(mesh, indicator, map)
     """
-    return _build_periodic_mesh(
-        mesh, _match_vertices_geometric(mesh, indicator, mapping_function)
-    )
+    return _build_periodic_mesh(mesh, _match_vertices_geometric(mesh, indicator, mapping_function))
 
 
-def create_periodic_mesh_from_gmsh(
-    mesh, slave_igi, master_igi, num_nodes_global, root: int = 0
+def create_periodic_mesh_from_igi(
+    mesh, replace_igi, partner_igi, num_nodes_global, root: int = 0
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
-    """Make `mesh` periodic from the node pairs of a gmsh ``$Periodic`` block.
+    """Make `mesh` periodic from the node pairs .
 
     The point of {py:class}`VertexCorrespondence` is that it is the seam between *finding*
     the periodic pairs and *rebuilding* the mesh from them. Everything geometric -- the
@@ -1718,7 +1397,7 @@ def create_periodic_mesh_from_gmsh(
     Args:
         mesh: The mesh read from the same gmsh model, so that
             ``mesh.geometry.input_global_indices`` is the node numbering the pairs use.
-        slave_igi, master_igi: Corresponding node pairs, as 0-based gmsh node tags. Held
+        replace_igi, partner_igi: Corresponding node pairs, as 0-based gmsh node tags. Held
             on `root` only; ignored elsewhere. Every master must be a root -- a node that
             is not itself a slave -- so chains through a corner have to be resolved first,
             which {py:func}`gmsh_periodic.extract_gmsh_periodic_nodes` does.
@@ -1740,223 +1419,10 @@ def create_periodic_mesh_from_gmsh(
     import gmsh_periodic
 
     pairs = gmsh_periodic.GmshPeriodicNodes(
-        np.asarray(slave_igi, dtype=np.int64),
-        np.asarray(master_igi, dtype=np.int64),
+        np.asarray(replace_igi, dtype=np.int64),
+        np.asarray(partner_igi, dtype=np.int64),
         int(num_nodes_global),
     )
     return _build_periodic_mesh(
         mesh, gmsh_periodic.periodic_correspondence_from_nodes(mesh, pairs, root=root)
     )
-
-
-if __name__ == "__main__":
-    # N = 189
-    # M = 123
-    N = 15
-    M = 10
-
-    # mesh = dolfinx.mesh.create_unit_square(
-    #     MPI.COMM_WORLD,
-    #     N,
-    #     M,
-    #     ghost_mode=dolfinx.mesh.GhostMode.shared_facet,
-    #     cell_type=dolfinx.mesh.CellType.quadrilateral,
-    # )
-
-    max_facet_to_cell_links = 2
-    filename = "mesh.msh"  # python3 create_mesh.py --periodic --res=0.01
-    gdim = 2
-    comm = MPI.COMM_WORLD
-    rank = 0
-    ghost_mode = dolfinx.mesh.GhostMode.shared_facet
-
-    if not hasattr(dolfinx.mesh, "create_cell_partitioner"):
-        partitioner = dolfinx.graph.partitioner()
-    else:
-        sig = inspect.signature(dolfinx.mesh.create_cell_partitioner)
-        part_kwargs = {}
-        if "max_facet_to_cell_links" in sig.parameters:
-            part_kwargs["max_facet_to_cell_links"] = max_facet_to_cell_links
-            partitioner = dolfinx.mesh.create_cell_partitioner(
-                ghost_mode, **part_kwargs
-            )
-
-    # NOTE: Add ghost mode once https://github.com/FEniCS/dolfinx/pull/4537 is merged
-    sig = inspect.signature(dolfinx.io.gmsh.model_to_mesh)
-    if "ghost_mode" in sig.parameters:
-        if comm.rank == rank:
-            gmsh.initialize()
-            gmsh.model.add("Mesh from file")
-            gmsh.merge(str(filename))
-        mesh_data = dolfinx.io.gmsh.model_to_mesh(
-            gmsh.model,
-            comm,
-            rank,
-            gdim=gdim,
-            partitioner=partitioner,
-            ghost_mode=ghost_mode,
-        )
-        gmsh.finalize()
-
-    else:
-        mesh_data = dolfinx.io.gmsh.read_from_msh(
-            filename, MPI.COMM_WORLD, 0, gdim=gdim, partitioner=partitioner
-        )
-
-    mesh = mesh_data.mesh
-    ct = mesh_data.cell_tags
-    ft = mesh_data.facet_tags
-    dim = 1
-    num_indices_local = mesh.topology.index_map(dim).size_local
-    marker = np.arange(num_indices_local, dtype=np.int32)
-    tags_old = dolfinx.mesh.meshtags(
-        mesh, dim, marker, np.full_like(marker, mesh.comm.rank)
-    )
-
-    with dolfinx.io.XDMFFile(mesh.comm, "org_mesh.xdmf", "w") as xdmf:
-        xdmf.write_mesh(mesh)
-        xdmf.write_meshtags(tags_old, mesh.geometry)
-
-    L_min = mesh.comm.allreduce(np.min(mesh.geometry.x[:, 0]), op=MPI.MIN)
-    L_max = mesh.comm.allreduce(np.max(mesh.geometry.x[:, 0]), op=MPI.MAX)
-
-    def indicator(x):
-        return np.isclose(x[0], L_min)
-
-    def mapping(x):
-        values = x.copy()
-        values[0] += L_max - L_min
-        return values
-
-    # mesh.topology.create_connectivity(mesh.topology.dim-1, mesh.topology.dim)
-    # old_num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(mesh.topology)), op=MPI.SUM)
-    # assert old_num_exterior_facets == 2*N + 2*M, "Number of exterior facets is not correct"
-
-    import time
-
-    start = time.perf_counter()
-    new_mesh, replaced_vertices, replacement_map = create_periodic_mesh(
-        mesh, indicator, mapping
-    )
-    end = time.perf_counter()
-    print(f"Create periodic mesh: {end - start:.3e}")
-    if new_mesh.comm.size == 1:
-        np.testing.assert_allclose(
-            new_mesh.topology.original_cell_index, mesh.topology.original_cell_index
-        )
-
-    def num_vertices_per_entity(cell_type: dolfinx.mesh.CellType, dim: int) -> int:
-        entity_vertices = dolfinx.cpp.mesh.get_entity_vertices(cell_type, dim)
-        num_entity_vertices = entity_vertices.offsets[1:] - entity_vertices.offsets[:-1]
-
-        assert np.unique(num_entity_vertices).size == 1, (
-            "Number of vertices per entity is not constant"
-        )
-        return num_entity_vertices[0]
-
-    # dim = 1
-    # def marker_thing(x):
-    #     return x[0]<= 1 + 1e-14
-
-    # indices = dolfinx.mesh.locate_entities(mesh,  dim, marker_thing)
-    # num_indices_local = mesh.topology.index_map(dim).size_local
-    # local_indices = indices[indices < num_indices_local]
-    # marker = np.arange(len(local_indices), dtype=np.int32)
-    # tags_old = dolfinx.mesh.meshtags(mesh, dim, local_indices, marker)
-
-    # with dolfinx.io.XDMFFile(mesh.comm, "org_mesh.xdmf", "w") as xdmf:
-    #     xdmf.write_mesh(mesh)
-    #     xdmf.write_meshtags(tags_old, mesh.geometry)
-
-    tags_periodic = transfer_meshtags_to_periodic_mesh(
-        mesh, new_mesh, replaced_vertices, ft
-    )
-    tags_periodic.name = "Periodic mesh tags"
-    with dolfinx.io.XDMFFile(new_mesh.comm, "periodic_mesh_tags.xdmf", "w") as xdmf:
-        xdmf.write_mesh(new_mesh)
-        new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)
-        xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
-
-    # tags_periodic = transfer_meshtags_to_periodic_mesh(mesh, new_mesh, replaced_vertices, tags_old)
-    # tags_periodic.name = "Periodic mesh tags"
-    # with dolfinx.io.XDMFFile(mesh.comm, "periodic_mesh_tags.xdmf", "w") as xdmf:
-    #     xdmf.write_mesh(new_mesh)
-    #     new_mesh.topology.create_connectivity(dim, new_mesh.topology.dim)
-    #     xdmf.write_meshtags(tags_periodic, new_mesh.geometry)
-
-    # new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-    # num_exterior_facets = mesh.comm.allreduce(len(dolfinx.mesh.exterior_facet_indices(new_mesh.topology)), op=MPI.SUM)
-    # assert num_exterior_facets == 2*N, "Number of exterior facets is not correct"
-
-    # Debug information
-    # new_mesh.topology.create_connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-    # f_to_c = new_mesh.topology.connectivity(new_mesh.topology.dim-1, new_mesh.topology.dim)
-    # f_map = new_mesh.topology.index_map(new_mesh.topology.dim-1)
-    # f_range = f_map.local_range
-
-    # left_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1, indicator)
-    # #owned_left_facets = left_facets[(f_range[0]<= left_facets) & (left_facets < f_range[1])]
-    # lfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1,left_facets)
-    # for facet, midpoint in zip(left_facets, lfm):
-    #     assert len(f_to_c.links(facet)) == 2, f"{mesh.comm.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
-
-    # new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
-
-    # right_facets = dolfinx.mesh.locate_entities(new_mesh, new_mesh.topology.dim-1,lambda x: np.isclose(x[0], 1.0))
-    # owned_right_facets = right_facets[(f_range[0]<= right_facets) & (right_facets < f_range[1])]
-    # rfm = dolfinx.mesh.compute_midpoints(new_mesh, new_mesh.topology.dim-1, owned_right_facets)
-    # for facet, midpoint in zip(owned_right_facets, rfm):
-    #     assert len(f_to_c.links(facet)) == 2, f"{mesh.comm.rank}: Left facet {facet} {midpoint} only connected to {f_to_c.links(facet)} cells"
-
-    # new_mesh.topology.create_connectivity(new_mesh.topology.dim, new_mesh.topology.dim-1)
-
-    # with dolfinx.io.XDMFFile(mesh.comm, "periodic_mesh.xdmf", "w") as xdmf:
-    #     xdmf.write_mesh(new_mesh)
-
-    x = ufl.SpatialCoordinate(new_mesh)
-    u_ex = ufl.sin(2 * np.pi * x[0])
-    h = 2 * ufl.Circumradius(new_mesh)
-    h_avg = ufl.avg(h)
-    gamma = dolfinx.fem.Constant(new_mesh, 100.0)
-    alpha = dolfinx.fem.Constant(new_mesh, 100.0)
-
-    V = dolfinx.fem.functionspace(new_mesh, ("DG", 2))
-    u = ufl.TrialFunction(V)
-    v = ufl.TestFunction(V)
-    n = ufl.FacetNormal(new_mesh)
-    F = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx
-    F += -ufl.inner(ufl.jump(v, n), ufl.avg(ufl.grad(u))) * ufl.dS
-    F += -ufl.inner(ufl.avg(ufl.grad(v)), ufl.jump(u, n)) * ufl.dS
-    F += +gamma / h_avg * ufl.inner(ufl.jump(v, n), ufl.jump(u, n)) * ufl.dS
-
-    F += -ufl.inner(n, ufl.grad(u)) * v * ufl.ds
-
-    F += -ufl.inner(n, ufl.grad(v)) * u * ufl.ds + alpha / h * ufl.inner(u, v) * ufl.ds
-    F -= (
-        -ufl.inner(n, ufl.grad(v)) * u_ex * ufl.ds
-        + alpha / h * ufl.inner(u_ex, v) * ufl.ds
-    )
-
-    x = ufl.SpatialCoordinate(new_mesh)
-    f = 100 ** x[0] * ufl.sin(0.5 * np.pi * x[1])
-    F -= ufl.inner(f, v) * ufl.dx
-    a, L = ufl.system(F)
-    import dolfinx.fem.petsc
-
-    problem = dolfinx.fem.petsc.LinearProblem(
-        a,
-        L,
-        bcs=[],
-        petsc_options_prefix="periodic_",
-        petsc_options={
-            "ksp_type": "preonly",
-            "pc_type": "lu",
-            "pc_factor_mat_solver_type": "mumps",
-            "ksp_error_if_not_converged": True,
-            "ksp_monitor": None,
-        },
-    )
-    uh = problem.solve()
-
-    with dolfinx.io.VTXWriter(new_mesh.comm, "u_periodic.bp", [uh]) as writer:
-        writer.write(0.0)

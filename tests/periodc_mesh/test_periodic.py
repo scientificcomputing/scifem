@@ -159,9 +159,7 @@ def test_domain_far_from_origin():
 
     assert pm.topology.index_map(0).size_global == (n + 1) * n
     assert np.isclose(volume(pm), 1.0)
-    jump = seam_jump(
-        pm, lambda x: np.cos(2 * np.pi * (x[0] - offset)) * np.cos(2 * np.pi * x[1])
-    )
+    jump = seam_jump(pm, lambda x: np.cos(2 * np.pi * (x[0] - offset)) * np.cos(2 * np.pi * x[1]))
     # the floor here is coordinate roundoff, not the algorithm: one representable double
     # at 1e6 is ~1.2e-10, so the interpolated field carries ~1e-9 of noise. A wrong
     # pairing still shows up at O(0.1), so the check keeps all its discriminating power.
@@ -455,9 +453,7 @@ def test_chain_length_bound_is_the_topological_dimension(
     # one fewer does not: the bound is real, not decorative
     if needed > 1:
         with pytest.raises(RuntimeError, match="did not reach a vertex outside"):
-            _match_vertices_geometric(
-                mesh, indicator, mapping, max_chain_length=needed - 1
-            )
+            _match_vertices_geometric(mesh, indicator, mapping, max_chain_length=needed - 1)
 
 
 def test_per_direction_corner_needs_one_application_per_direction():
@@ -472,6 +468,4 @@ def test_per_direction_corner_needs_one_application_per_direction():
         tdim = mesh.topology.dim
         _match_vertices_geometric(mesh, indicator, mapping, max_chain_length=tdim)
         with pytest.raises(RuntimeError, match="did not reach a vertex outside"):
-            _match_vertices_geometric(
-                mesh, indicator, mapping, max_chain_length=tdim - 1
-            )
+            _match_vertices_geometric(mesh, indicator, mapping, max_chain_length=tdim - 1)

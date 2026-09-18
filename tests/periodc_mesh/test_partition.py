@@ -171,9 +171,9 @@ def unit_square_block(comm, n):
     def vertex(di, dj):
         return (cj + dj) * (n + 1) + ci + di
 
-    cells = np.stack(
-        [vertex(0, 0), vertex(1, 0), vertex(0, 1), vertex(1, 1)], axis=1
-    ).astype(np.int64)
+    cells = np.stack([vertex(0, 0), vertex(1, 0), vertex(0, 1), vertex(1, 1)], axis=1).astype(
+        np.int64
+    )
 
     num_points = (n + 1) ** 2
     first = (num_points * comm.rank) // comm.size

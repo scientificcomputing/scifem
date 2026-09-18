@@ -18,29 +18,13 @@ class U:
         self.V0 = V0
         self.L = L
 
-    def eval_x(
-        self, x: npt.NDArray[np.float64]
-    ) -> npt.NDArray[dolfinx.default_scalar_type]:
-        return (
-            self.V0
-            * np.sin(x[0] / self.L)
-            * np.cos(x[1] / self.L)
-            * np.sin(x[2] / self.L)
-        )
+    def eval_x(self, x: npt.NDArray[np.float64]) -> npt.NDArray[dolfinx.default_scalar_type]:
+        return self.V0 * np.sin(x[0] / self.L) * np.cos(x[1] / self.L) * np.sin(x[2] / self.L)
 
-    def eval_y(
-        self, x: npt.NDArray[np.float64]
-    ) -> npt.NDArray[dolfinx.default_scalar_type]:
-        return (
-            -self.V0
-            * np.cos(x[0] / self.L)
-            * np.sin(x[1] / self.L)
-            * np.cos(x[2] / self.L)
-        )
+    def eval_y(self, x: npt.NDArray[np.float64]) -> npt.NDArray[dolfinx.default_scalar_type]:
+        return -self.V0 * np.cos(x[0] / self.L) * np.sin(x[1] / self.L) * np.cos(x[2] / self.L)
 
-    def eval_z(
-        self, x: npt.NDArray[np.float64]
-    ) -> npt.NDArray[dolfinx.default_scalar_type]:
+    def eval_z(self, x: npt.NDArray[np.float64]) -> npt.NDArray[dolfinx.default_scalar_type]:
         return np.zeros_like(x[0])
 
 
@@ -53,12 +37,8 @@ parser.add_argument(
     required=True,
     help="Number of elements in each direction.",
 )
-parser.add_argument(
-    "-u", dest="u_deg", type=int, help="Degree of velocity space", default=2
-)
-parser.add_argument(
-    "-p", dest="p_deg", type=int, help="Degree of pressure space", default=1
-)
+parser.add_argument("-u", dest="u_deg", type=int, help="Degree of velocity space", default=2)
+parser.add_argument("-p", dest="p_deg", type=int, help="Degree of pressure space", default=1)
 parser.add_argument("-L", dest="L", type=float, help="Length of domain", default=1)
 parser.add_argument(
     "-lm",
@@ -132,12 +112,8 @@ mesh = dolfinx.mesh.create_box(
     cell_type=dolfinx.mesh.CellType.tetrahedron,
 )
 # Convert mesh to periodic mesh
-L_min = [
-    mesh.comm.allreduce(np.min(mesh.geometry.x[:, i]), op=MPI.MIN) for i in range(3)
-]
-L_max = [
-    mesh.comm.allreduce(np.max(mesh.geometry.x[:, i]), op=MPI.MAX) for i in range(3)
-]
+L_min = [mesh.comm.allreduce(np.min(mesh.geometry.x[:, i]), op=MPI.MIN) for i in range(3)]
+L_max = [mesh.comm.allreduce(np.max(mesh.geometry.x[:, i]), op=MPI.MAX) for i in range(3)]
 
 
 def i_x(x):
@@ -170,9 +146,7 @@ print(f"NUm facets pre refinement {mesh.topology.index_map(2).size_global}")
 print(f"NUm cells pre refinement {mesh.topology.index_map(3).size_global}")
 
 print(MPI.COMM_WORLD.rank, f"map x from {L_min} to {L_max}")
-mesh, replaced_vertices, replacement_map = create_periodic_mesh(
-    mesh, indicator, mapping
-)
+mesh, replaced_vertices, replacement_map = create_periodic_mesh(mesh, indicator, mapping)
 
 mesh.topology.create_entities(mesh.topology.dim - 1)
 

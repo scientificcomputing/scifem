@@ -4,29 +4,19 @@ import argparse
 from pathlib import Path
 
 parser = argparse.ArgumentParser(description="Create a mesh for a box in a channel")
-parser.add_argument(
-    "--res", type=float, default=0.05, help="Resolution of the mesh (at inlet)"
-)
-parser.add_argument(
-    "--periodic", action="store_true", help="Create periodic boundary conditions"
-)
+parser.add_argument("--res", type=float, default=0.05, help="Resolution of the mesh (at inlet)")
+parser.add_argument("--periodic", action="store_true", help="Create periodic boundary conditions")
 parser.add_argument("--L", type=float, default=1, help="Length of the channel")
 parser.add_argument("--H", type=float, default=0.2, help="Height of the channel")
-parser.add_argument(
-    "--box_pos", type=float, nargs=2, default=[0.2, 0], help="Position of the box"
-)
-parser.add_argument(
-    "--box_size", type=float, nargs=2, default=[0.15, 0.05], help="Size of the box"
-)
+parser.add_argument("--box_pos", type=float, nargs=2, default=[0.2, 0], help="Position of the box")
+parser.add_argument("--box_size", type=float, nargs=2, default=[0.15, 0.05], help="Size of the box")
 parser.add_argument("--algorithm", type=int, default=5, help="Meshing algorithm to use")
 parser.add_argument("--optimize", action="store_true", help="Optimize the mesh")
 parser.add_argument("--visualize", action="store_true", help="Visualize the mesh")
 parser.add_argument("--output", type=Path, default="mesh.msh", help="Output file")
 parser.add_argument("--wall_marker", type=int, default=1, help="Marker for the walls")
 parser.add_argument("--inlet_marker", type=int, default=2, help="Marker for the inlet")
-parser.add_argument(
-    "--outlet_marker", type=int, default=3, help="Marker for the outlet"
-)
+parser.add_argument("--outlet_marker", type=int, default=3, help="Marker for the outlet")
 parser.add_argument("--quadrilateral", action="store_true", help="Use quadrilaterals")
 if __name__ == "__main__":
     args = parser.parse_args()
@@ -43,10 +33,8 @@ if __name__ == "__main__":
 
     # Set various meh resolutions (finer at box than inlet)
     tol = 1e-12
-    inlet_nodes = gmsh.model.getEntitiesInBoundingBox(
-        0 - tol, 0, 0, tol, 1 + tol, tol, dim=0
-    )
-    
+    inlet_nodes = gmsh.model.getEntitiesInBoundingBox(0 - tol, 0, 0, tol, 1 + tol, tol, dim=0)
+
     gmsh.model.mesh.setSize(gmsh.model.getEntities(0), 0.1)
     box_nodes = gmsh.model.getEntitiesInBoundingBox(
         args.box_pos[0] - tol,
@@ -57,7 +45,6 @@ if __name__ == "__main__":
         tol,
         dim=0,
     )
-
 
     # Mark each boundary
     bndry = gmsh.model.getBoundary(new_fluid, oriented=False)
@@ -85,8 +72,8 @@ if __name__ == "__main__":
     wall_threshold = gmsh.model.mesh.field.add("Threshold")
     gmsh.model.mesh.field.setNumber(wall_threshold, "IField", wall_dist)
     gmsh.model.mesh.field.setNumber(wall_threshold, "LcMin", args.res)
-    gmsh.model.mesh.field.setNumber(wall_threshold, "LcMax", 2*args.res)
-    gmsh.model.mesh.field.setNumber(wall_threshold, "DistMin", 0.1*args.box_size[1])
+    gmsh.model.mesh.field.setNumber(wall_threshold, "LcMax", 2 * args.res)
+    gmsh.model.mesh.field.setNumber(wall_threshold, "DistMin", 0.1 * args.box_size[1])
     gmsh.model.mesh.field.setNumber(wall_threshold, "DistMax", args.box_size[1])
     minimum = gmsh.model.mesh.field.add("Min")
     gmsh.model.mesh.field.setNumbers(minimum, "FieldsList", [wall_threshold])
@@ -108,7 +95,6 @@ if __name__ == "__main__":
         gmsh.option.setNumber("Mesh.Algorithm", args.algorithm)
 
     # We combine these fields by using the minimum field
-
 
     gmsh.model.mesh.generate(2)
     if args.optimize:

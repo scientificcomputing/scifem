@@ -17,35 +17,13 @@ through the right-hand curve and with (1,0) through the top curve. Both routes l
 
 from __future__ import annotations
 
-import dataclasses
 
-import numpy as np
-import numpy.typing as npt
 from mpi4py import MPI
 
 import dolfinx
-
-import script
-from script import broadcast_marked_entities
-
-
-@dataclasses.dataclass
-class GmshPeriodicNodes:
-    """The node pairs of a gmsh model, resolved to roots.
-
-    Args:
-        slave: 0-based gmsh node tags that are to be replaced, ascending and without
-            repeats. These are values of ``mesh.geometry.input_global_indices``.
-        master: For each entry of `slave`, the node it is identified with. Never itself a
-            slave, so no further resolution is needed.
-        num_nodes_global: The number of nodes in the gmsh model. Not
-            ``mesh.geometry.index_map().size_global``, which is smaller when ``create_mesh``
-            drops nodes that no cell references.
-    """
-
-    slave: npt.NDArray[np.int64]
-    master: npt.NDArray[np.int64]
-    num_nodes_global: int
+import numpy as np
+import numpy.typing as npt
+from .mesh import create_periodic_mesh_from_gmsh
 
 
 def _resolve_to_roots(slave, master):
@@ -182,99 +160,12 @@ def extract_gmsh_periodic_nodes(
     return GmshPeriodicNodes(unique_slave, root, num_nodes_global)
 
 
-def _local_range(comm, num_indices):
-    """The block of ``range(num_indices)`` this process is the post office for.
-
-    Uses ``dolfinx.common.local_range`` where it exists, so that the blocks match what the
-    rest of DOLFINx means by the same words; the fallback reproduces it.
-    """
-    if hasattr(dolfinx.common, "local_range"):
-        return tuple(dolfinx.common.local_range(comm.rank, int(num_indices), comm.size))
-    per_rank, remainder = divmod(int(num_indices), comm.size)
-    low = comm.rank * per_rank + min(comm.rank, remainder)
-    return low, low + per_rank + (1 if comm.rank < remainder else 0)
-
-
-def _index_owner(comm, indices, num_indices):
-    """Which process is the post office for each of `indices`.
-
-    The inverse of :func:`_local_range`, vectorised: the first ``num_indices % size``
-    ranks hold one extra, so the blocks differ in length by at most one and no rank is
-    left out.
-
-    Args:
-        comm: The communicator the blocks are spread over.
-        indices: Indices in ``range(num_indices)``.
-        num_indices: The size of the range.
-
-    Returns:
-        The rank responsible for each entry of `indices`.
-    """
-    per_rank, remainder = divmod(int(num_indices), comm.size)
-    indices = np.asarray(indices, dtype=np.int64)
-    split = remainder * (per_rank + 1)
-    below = indices < split
-    owner = np.empty(len(indices), dtype=np.int32)
-    owner[below] = indices[below] // max(per_rank + 1, 1)
-    owner[~below] = remainder + (indices[~below] - split) // max(per_rank, 1)
-    return owner
-
-
-def _exchange_to_destinations(comm, dest_ranks, payload):
-    """Send rows to the ranks that name them, and receive whatever arrives.
-
-    Only the outgoing edges are known -- a process cannot tell in advance who will write
-    to it -- so the neighbourhood is built with ``Create_dist_graph``, which derives the
-    incoming edges from the outgoing ones, rather than ``Create_dist_graph_adjacent``.
-
-    Collective.
-
-    Args:
-        comm: The communicator to exchange over.
-        dest_ranks: Destination rank of each row of `payload`. Need not be sorted.
-        payload: ``(n, k)`` of ``int64``, one row per entry of `dest_ranks`.
-
-    Returns:
-        ``(sources, received)``: the rank each received row came from, ascending, and the
-        rows in that order.
-    """
-    # Not reshaped from a flat array: ``reshape(0, -1)`` is ambiguous, and a process with
-    # nothing to send is the normal case here, not an edge case.
-    payload = np.asarray(payload, dtype=np.int64)
-    assert payload.ndim == 2 and len(payload) == len(dest_ranks)
-    width = payload.shape[1]
-    order = np.argsort(dest_ranks, kind="stable")
-    dests, counts = np.unique(dest_ranks, return_counts=True)
-    send_buffer = np.ascontiguousarray(payload[order])
-
-    graph = comm.Create_dist_graph(
-        [comm.rank], [len(dests)], dests.astype(np.int32).tolist(), MPI.UNWEIGHTED
-    )
-    try:
-        in_ranks, _, _ = graph.Get_dist_neighbors()
-        in_ranks = np.asarray(in_ranks, dtype=np.int32)
-
-        # Uniform neighbourhood collective: the count is given explicitly and is the same
-        # on every process, as MPI-4.1 9.6.2 requires. Letting mpi4py infer it from the
-        # buffer size would make it rank-local, which is an erroneous call.
-        recv_counts = np.zeros(len(in_ranks), dtype=np.int32)
-        graph.Neighbor_alltoall(
-            [counts.astype(np.int32), 1, MPI.INT32_T], [recv_counts, 1, MPI.INT32_T]
-        )
-
-        received = np.zeros((int(recv_counts.sum()), width), dtype=np.int64)
-        graph.Neighbor_alltoallv(
-            [send_buffer, counts.astype(np.int32) * width, MPI.INT64_T],
-            [received, recv_counts * width, MPI.INT64_T],
-        )
-    finally:
-        graph.Free()
-
-    # `Get_dist_neighbors` lists the neighbours in the order MPI chose, not ascending, and
-    # the receive buffer follows that order. Sort so the caller can rely on the grouping.
-    sources = np.repeat(in_ranks, recv_counts).astype(np.int32)
-    order = np.argsort(sources, kind="stable")
-    return sources[order], received[order]
+from ..mpi_utils import (
+    broadcast_marked_entities,
+    exchange_to_destinations,
+    index_owner,
+    local_range,
+)
 
 
 def _vertices_that_can_be_paired(mesh):
@@ -310,9 +201,9 @@ def _vertices_that_can_be_paired(mesh):
     vertices = broadcast_marked_entities(
         mesh,
         0,
-        dolfinx.mesh.compute_incident_entities(
-            mesh.topology, boundary_facets, tdim - 1, 0
-        ).astype(np.int32),
+        dolfinx.mesh.compute_incident_entities(mesh.topology, boundary_facets, tdim - 1, 0).astype(
+            np.int32
+        ),
     )
     nodes = dolfinx.mesh.entities_to_geometry(mesh, 0, vertices).reshape(-1)
     return vertices, mesh.geometry.input_global_indices[nodes].astype(np.int64)
@@ -346,26 +237,26 @@ def _seam_facets_from_vertices(mesh, indicator_vertices):
     f_to_v = mesh.topology.connectivity(tdim - 1, 0)
 
     vertex_map = mesh.topology.index_map(0)
-    is_indicator = np.zeros(
-        vertex_map.size_local + vertex_map.num_ghosts, dtype=np.bool_
-    )
+    is_indicator = np.zeros(vertex_map.size_local + vertex_map.num_ghosts, dtype=np.bool_)
     is_indicator[indicator_vertices] = True
 
     exterior = dolfinx.mesh.exterior_facet_indices(mesh.topology)
     num_facet_vertices = int(f_to_v.offsets[1] - f_to_v.offsets[0])
     facet_vertices = f_to_v.array[
-        (
-            f_to_v.offsets[exterior][:, None]
-            + np.arange(num_facet_vertices, dtype=np.int32)
-        ).reshape(-1)
+        (f_to_v.offsets[exterior][:, None] + np.arange(num_facet_vertices, dtype=np.int32)).reshape(
+            -1
+        )
     ].reshape(len(exterior), num_facet_vertices)
     on_seam = exterior[is_indicator[facet_vertices].all(axis=1)]
     return broadcast_marked_entities(mesh, tdim - 1, on_seam)
 
 
+from .mesh import VertexCorrespondence
+
+
 def periodic_correspondence_from_nodes(
     mesh, pairs: GmshPeriodicNodes, root: int = 0
-) -> script.VertexCorrespondence:
+) -> VertexCorrespondence:
     """Turn gmsh node pairs held on one rank into a distributed vertex correspondence.
 
     The pairs arrive as input global node indices on the reading rank, while the vertices
@@ -406,22 +297,20 @@ def periodic_correspondence_from_nodes(
     """
     comm = mesh.comm
     num_owned_vertices = mesh.topology.index_map(0).size_local
-    num_nodes_global = comm.bcast(
-        pairs.num_nodes_global if comm.rank == root else None, root=root
-    )
+    num_nodes_global = comm.bcast(pairs.num_nodes_global if comm.rank == root else None, root=root)
 
     # (1) Register the boundary vertices with the post offices for their indices.
     local_vertices, local_igi = _vertices_that_can_be_paired(mesh)
     owns = (local_vertices < num_owned_vertices).astype(np.int64)
-    registrar, registered = _exchange_to_destinations(
+    registrar, registered = exchange_to_destinations(
         comm,
-        _index_owner(comm, local_igi, num_nodes_global),
+        index_owner(comm, local_igi, num_nodes_global),
         np.stack([local_igi, owns], axis=1),
     )
     held_igi, held_owns = registered[:, 0], registered[:, 1].astype(bool)
 
     # Index the register by its own block, so a lookup is one array read.
-    low, high = _local_range(comm, num_nodes_global)
+    low, high = local_range(comm, num_nodes_global)
     owner_of = np.full(max(high - low, 0), -1, dtype=np.int64)
     owner_of[held_igi[held_owns] - low] = registrar[held_owns]
 
@@ -437,9 +326,9 @@ def periodic_correspondence_from_nodes(
         )
     else:
         to_master_office = np.zeros((0, 3), dtype=np.int64)
-    _, at_master_office = _exchange_to_destinations(
+    _, at_master_office = exchange_to_destinations(
         comm,
-        _index_owner(comm, to_master_office[:, 0], num_nodes_global),
+        index_owner(comm, to_master_office[:, 0], num_nodes_global),
         to_master_office,
     )
     master_igi, slave_igi, pair_id = at_master_office.T
@@ -456,15 +345,15 @@ def periodic_correspondence_from_nodes(
     master_owner = owner_of[master_igi - low]
 
     # Tell each master's owner which pair its vertex answers.
-    _, assignment = _exchange_to_destinations(
+    _, assignment = exchange_to_destinations(
         comm, master_owner.astype(np.int32), np.stack([pair_id, master_igi], axis=1)
     )
     answers_pair, answers_igi = assignment[:, 0], assignment[:, 1]
 
     # Forward the pair to the post office for its slave index, which knows the holders.
-    _, at_slave_office = _exchange_to_destinations(
+    _, at_slave_office = exchange_to_destinations(
         comm,
-        _index_owner(comm, slave_igi, num_nodes_global),
+        index_owner(comm, slave_igi, num_nodes_global),
         np.stack([slave_igi, pair_id, master_owner], axis=1),
     )
     wanted_igi, wanted_pair, wanted_owner = at_slave_office.T
@@ -479,7 +368,7 @@ def periodic_correspondence_from_nodes(
     repeats = last - first
     fan = np.repeat(np.arange(len(wanted_igi)), repeats)
     within = np.arange(len(fan)) - np.repeat(np.cumsum(repeats) - repeats, repeats)
-    _, delivered = _exchange_to_destinations(
+    _, delivered = exchange_to_destinations(
         comm,
         holder_rank[first[fan] + within],
         np.stack([wanted_igi[fan], wanted_pair[fan], wanted_owner[fan]], axis=1),
@@ -497,9 +386,7 @@ def periodic_correspondence_from_nodes(
 
     # (3) Ask the master's owner directly. The request is what tells it who needs the
     # cells at that vertex, which is what `dest_owner` records.
-    dest_owner, requested = _exchange_to_destinations(
-        comm, src_owner, my_pair.reshape(-1, 1)
-    )
+    dest_owner, requested = exchange_to_destinations(comm, src_owner, my_pair.reshape(-1, 1))
 
     # Resolve each request to the local vertex answering it, via step (2)'s assignment.
     answer_order = np.argsort(answers_pair, kind="stable")
@@ -520,11 +407,9 @@ def periodic_correspondence_from_nodes(
 
     # The correspondence requires `dest_owner` ascending; `_exchange_to_destinations`
     # sorts by source rank for exactly this.
-    assert np.all(dest_owner[:-1] <= dest_owner[1:]), (
-        "destination owners are not sorted"
-    )
+    assert np.all(dest_owner[:-1] <= dest_owner[1:]), "destination owners are not sorted"
 
-    return script.VertexCorrespondence(
+    return VertexCorrespondence(
         indicator_vertices=indicator_vertices,
         indicator_facets=_seam_facets_from_vertices(mesh, indicator_vertices),
         src_owner=src_owner,
@@ -579,6 +464,6 @@ def read_periodic_mesh_from_msh(
             gmsh.finalize()
 
     mesh = getattr(mesh_data, "mesh", mesh_data)
-    return script.create_periodic_mesh_from_gmsh(
+    return create_periodic_mesh_from_gmsh(
         mesh, pairs.slave, pairs.master, pairs.num_nodes_global, root=rank
     )

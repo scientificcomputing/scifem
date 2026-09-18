@@ -39,13 +39,9 @@ def _rectangle(model, L=1.0, res=1.0 / 3.0, directions=("x", "y"), order=1):
     model.occ.addRectangle(0, 0, 0, L, L)
     model.occ.synchronize()
     if "x" in directions:
-        model.mesh.setPeriodic(
-            1, [2], [4], [1, 0, 0, L, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
-        )
+        model.mesh.setPeriodic(1, [2], [4], [1, 0, 0, L, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
     if "y" in directions:
-        model.mesh.setPeriodic(
-            1, [3], [1], [1, 0, 0, 0, 0, 1, 0, L, 0, 0, 1, 0, 0, 0, 0, 1]
-        )
+        model.mesh.setPeriodic(1, [3], [1], [1, 0, 0, 0, 0, 1, 0, L, 0, 0, 1, 0, 0, 0, 0, 1])
     gmsh.option.setNumber("Mesh.MeshSizeMin", res)
     gmsh.option.setNumber("Mesh.MeshSizeMax", res)
     model.mesh.generate(2)
@@ -274,14 +270,8 @@ def _model_to_mesh(comm, rank, gdim):
             if "max_facet_to_cell_links" in part_sig.parameters
             else {}
         )
-        kwargs = {
-            "partitioner": dolfinx.mesh.create_cell_partitioner(
-                ghost_mode, **part_kwargs
-            )
-        }
-    mesh_data = dolfinx.io.gmsh.model_to_mesh(
-        gmsh.model, comm, rank, gdim=gdim, **kwargs
-    )
+        kwargs = {"partitioner": dolfinx.mesh.create_cell_partitioner(ghost_mode, **part_kwargs)}
+    mesh_data = dolfinx.io.gmsh.model_to_mesh(gmsh.model, comm, rank, gdim=gdim, **kwargs)
     return getattr(mesh_data, "mesh", mesh_data)
 
 
@@ -441,9 +431,7 @@ def test_gmsh_path_does_not_depend_on_the_partition():
 
     correspondence = periodic_correspondence_from_nodes(mesh, pairs)
     replaced = comm.allreduce(len(correspondence.indicator_vertices), op=MPI.SUM)
-    assert replaced >= 11, (
-        "a replaced vertex is missing from some process that holds it"
-    )
+    assert replaced >= 11, "a replaced vertex is missing from some process that holds it"
 
     periodic_mesh, _, _ = script._build_periodic_mesh(mesh, correspondence)
     num_vertices, volume, bad, _ = torus_invariants(periodic_mesh)
@@ -503,9 +491,7 @@ def test_gmsh_path_replaces_the_same_vertices_as_the_geometric_path():
     )
     assert_everywhere(
         comm,
-        np.array_equal(
-            np.sort(geometric.indicator_facets), np.sort(from_gmsh.indicator_facets)
-        ),
+        np.array_equal(np.sort(geometric.indicator_facets), np.sort(from_gmsh.indicator_facets)),
         "the two paths disagree on the seam facets",
     )
 
@@ -545,12 +531,8 @@ def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
         gmsh.model.add("to file")
         gmsh.model.occ.addRectangle(0, 0, 0, 1.0, 1.0)
         gmsh.model.occ.synchronize()
-        gmsh.model.mesh.setPeriodic(
-            1, [2], [4], [1, 0, 0, 1.0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
-        )
-        gmsh.model.mesh.setPeriodic(
-            1, [3], [1], [1, 0, 0, 0, 0, 1, 0, 1.0, 0, 0, 1, 0, 0, 0, 0, 1]
-        )
+        gmsh.model.mesh.setPeriodic(1, [2], [4], [1, 0, 0, 1.0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+        gmsh.model.mesh.setPeriodic(1, [3], [1], [1, 0, 0, 0, 0, 1, 0, 1.0, 0, 0, 1, 0, 0, 0, 0, 1])
         gmsh.model.addPhysicalGroup(2, [1], 1)
         gmsh.option.setNumber("Mesh.MeshSizeMin", 1.0 / 5)
         gmsh.option.setNumber("Mesh.MeshSizeMax", 1.0 / 5)
@@ -569,11 +551,7 @@ def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
             if "max_facet_to_cell_links" in part_sig.parameters
             else {}
         )
-        kwargs = {
-            "partitioner": dolfinx.mesh.create_cell_partitioner(
-                ghost_mode, **part_kwargs
-            )
-        }
+        kwargs = {"partitioner": dolfinx.mesh.create_cell_partitioner(ghost_mode, **part_kwargs)}
     periodic_mesh, _, _ = read_periodic_mesh_from_msh(filename, comm, gdim=2, **kwargs)
 
     num_vertices, volume, bad, jump = torus_invariants(periodic_mesh)
@@ -721,9 +699,7 @@ def test_gmsh_and_geometric_paths_agree_in_3d():
     )
     assert_everywhere(
         comm,
-        np.array_equal(
-            np.sort(geometric.indicator_facets), np.sort(from_gmsh.indicator_facets)
-        ),
+        np.array_equal(np.sort(geometric.indicator_facets), np.sort(from_gmsh.indicator_facets)),
         "the two paths disagree on the seam facets",
     )
 
