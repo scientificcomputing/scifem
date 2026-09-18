@@ -39,7 +39,7 @@ import ufl
 
 import dolfinx
 
-from script import create_periodic_mesh
+from scifem.periodic.mesh import create_periodic_mesh
 
 # A hand-written geometric partitioner needs wrapping before `create_mesh` will take it,
 # and the wrappers only exist on DOLFINx main (0.12.x); 0.11 has no way to pass cell

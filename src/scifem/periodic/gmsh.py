@@ -18,97 +18,15 @@ through the right-hand curve and with (1,0) through the top curve. Both routes l
 from __future__ import annotations
 
 
-from mpi4py import MPI
-
 import dolfinx
 import numpy as np
-import numpy.typing as npt
-from .mesh import create_periodic_mesh_from_gmsh
-
-
-@dataclasses.dataclass
-class GmshPeriodicNodes:
-    """The node pairs of a gmsh model, resolved to roots.
-
-    Args:
-        slave: 0-based gmsh node tags that are to be replaced, ascending and without
-            repeats. These are values of ``mesh.geometry.input_global_indices``.
-        master: For each entry of `slave`, the node it is identified with. Never itself a
-            slave, so no further resolution is needed.
-        num_nodes_global: The number of nodes in the gmsh model. Not
-            ``mesh.geometry.index_map().size_global``, which is smaller when ``create_mesh``
-            drops nodes that no cell references.
-    """
-
-    slave: npt.NDArray[np.int64]
-    master: npt.NDArray[np.int64]
-    num_nodes_global: int
-
-
-def _resolve_to_roots(slave, master):
-    """Follow every pair to a node that is not itself replaced.
-
-    Args:
-        slave: 0-based node tags, with repeats and possibly several masters each.
-        master: The node paired with each entry of `slave`.
-
-    Returns:
-        ``(unique_slave, root)``: each distinct slave once, and the node it ultimately
-        resolves to.
-
-    Raises:
-        RuntimeError: If the pairs cycle, or if two routes out of one node disagree on
-            where it ends up.
-    """
-    unique_slave, first = np.unique(slave, return_index=True)
-    # One master per slave to iterate on. Where a node has several -- a corner -- any one
-    # will do, because the agreement check below proves they all lead to the same place.
-    next_of = master[first]
-
-    # `position[n]` is where node n sits in `unique_slave`, or -1 if it is already a root.
-    lookup = np.full(int(max(unique_slave.max(), master.max())) + 2, -1, dtype=np.int64)
-    lookup[unique_slave] = np.arange(len(unique_slave), dtype=np.int64)
-
-    # Pointer doubling: each pass at least halves the remaining chain length, so
-    # ``ceil(log2(n)) + 1`` passes suffice unless the pairs cycle.
-    root = next_of.copy()
-    max_passes = int(np.ceil(np.log2(max(len(unique_slave), 2)))) + 1
-    for _ in range(max_passes):
-        position = lookup[root]
-        moving = position != -1
-        if not moving.any():
-            break
-        root[moving] = root[position[moving]]
-    else:
-        still = lookup[root] != -1
-        raise RuntimeError(
-            f"{int(np.count_nonzero(still))} periodic node chains do not end: the"
-            " `$Periodic` pairs cycle, so no node is a root. First offending node tag"
-            f" (1-based): {int(unique_slave[np.flatnonzero(still)[0]]) + 1}."
-        )
-
-    # Every recorded pair has to agree on the root, including the duplicates dropped
-    # above. A disagreement means the model itself is inconsistent, not that a route was
-    # picked badly.
-    def root_of(nodes):
-        position = lookup[nodes]
-        return np.where(position == -1, nodes, root[np.maximum(position, 0)])
-
-    mismatch = root_of(slave) != root_of(master)
-    if mismatch.any():
-        i = int(np.flatnonzero(mismatch)[0])
-        raise RuntimeError(
-            "Inconsistent `$Periodic` section: node tags (1-based)"
-            f" {int(slave[i]) + 1} and {int(master[i]) + 1} are recorded as a periodic"
-            f" pair but resolve to different roots, {int(root_of(slave[i : i + 1])[0]) + 1}"
-            f" and {int(root_of(master[i : i + 1])[0]) + 1}."
-        )
-    return unique_slave, root
+from .mesh import create_periodic_mesh_from_igi
+from .utils import PeriodicNodes, resolve_to_roots
 
 
 def extract_gmsh_periodic_nodes(
     model, include_high_order: bool = False, tol: float = 1e-8
-) -> GmshPeriodicNodes:
+) -> PeriodicNodes:
     """Collect the ``$Periodic`` node pairs of `model`, resolved to roots.
 
     Runs where the gmsh model lives, so serially on the reading rank.
@@ -124,7 +42,7 @@ def extract_gmsh_periodic_nodes(
             recorded with it. Pairs whose entity stored no transform are not checked.
 
     Returns:
-        The pairs, as :class:`GmshPeriodicNodes`.
+        The pairs, as :class:`PeriodicNodes`.
 
     Raises:
         RuntimeError: If the pairs cycle, disagree on a root, or contradict the affine
@@ -149,7 +67,7 @@ def extract_gmsh_periodic_nodes(
 
     if not slaves:
         empty = np.zeros(0, dtype=np.int64)
-        return GmshPeriodicNodes(empty, empty, num_nodes_global)
+        return PeriodicNodes(empty, empty, num_nodes_global)
 
     slave = np.concatenate(slaves)
     master = np.concatenate(masters)
@@ -174,267 +92,9 @@ def extract_gmsh_periodic_nodes(
                 f" {gap[i]:.3e} apart after the transform, tolerance {tol:.3e}."
             )
 
-    unique_slave, root = _resolve_to_roots(slave, master)
+    unique_slave, root = resolve_to_roots(slave, master)
     assert not np.isin(root, unique_slave).any(), "a root is itself replaced"
-    return GmshPeriodicNodes(unique_slave, root, num_nodes_global)
-
-
-from ..mpi_utils import (
-    broadcast_marked_entities,
-    exchange_to_destinations,
-    index_owner,
-    local_range,
-)
-
-
-def _vertices_that_can_be_paired(mesh):
-    """The local vertices a periodic pair could name, and their input global indices.
-
-    gmsh only pairs boundary entities, so restricting to the vertices of the boundary
-    keeps the post office below proportional to the surface rather than the volume.
-
-    Args:
-        mesh: The mesh to take the vertices of.
-
-    Returns:
-        ``(vertices, igi)``: local vertices on the boundary, owned and ghost, and the
-        input global index of each. Collective.
-    """
-    tdim = mesh.topology.dim
-    mesh.topology.create_entities(tdim - 1)
-    mesh.topology.create_connectivity(tdim - 1, tdim)
-    mesh.topology.create_connectivity(tdim - 1, 0)
-    # `entities_to_geometry` at dimension 0 needs the vertex-to-cell map to find a cell to
-    # read each vertex's node from.
-    mesh.topology.create_connectivity(0, tdim)
-    mesh.topology.create_connectivity(tdim, 0)
-    boundary_facets = broadcast_marked_entities(
-        mesh, tdim - 1, dolfinx.mesh.exterior_facet_indices(mesh.topology)
-    )
-    # A process can hold a copy of a boundary vertex without holding any boundary facet at
-    # it -- it may ghost a cell at the vertex whose own facets there are all interior --
-    # and it still has to register, or the fan-out will not reach it and it will disagree
-    # with the others about which vertices are replaced. Broadcasting the set closes that:
-    # the processes that do see a boundary facet mark the vertex, and the reduce-then-
-    # scatter carries the mark to every holder.
-    vertices = broadcast_marked_entities(
-        mesh,
-        0,
-        dolfinx.mesh.compute_incident_entities(mesh.topology, boundary_facets, tdim - 1, 0).astype(
-            np.int32
-        ),
-    )
-    nodes = dolfinx.mesh.entities_to_geometry(mesh, 0, vertices).reshape(-1)
-    return vertices, mesh.geometry.input_global_indices[nodes].astype(np.int64)
-
-
-def _seam_facets_from_vertices(mesh, indicator_vertices):
-    """The exterior facets all of whose vertices are in `indicator_vertices`.
-
-    This is exactly what ``locate_entities_boundary`` at ``tdim - 1`` returns for the
-    marker that produced `indicator_vertices`: it keeps a facet when every vertex of it is
-    marked, over the owned exterior facets. Deriving it means the caller need not have a
-    marker function at all.
-
-    Exteriority comes from ``exterior_facet_indices``, which is owned-only and then
-    broadened. A local test for a facet with one incident cell would be wrong: one
-    incident cell locally means the neighbouring cell is not ghosted, which is not the
-    same as the facet being exterior, and the broadening would carry the mistake to the
-    owner rather than drop it.
-
-    Args:
-        mesh: The mesh the vertices are local to.
-        indicator_vertices: Local vertices that are to be replaced, owned and ghost.
-
-    Returns:
-        Local facets on the seam, owned and ghost. Collective.
-    """
-    tdim = mesh.topology.dim
-    mesh.topology.create_entities(tdim - 1)
-    mesh.topology.create_connectivity(tdim - 1, tdim)
-    mesh.topology.create_connectivity(tdim - 1, 0)
-    f_to_v = mesh.topology.connectivity(tdim - 1, 0)
-
-    vertex_map = mesh.topology.index_map(0)
-    is_indicator = np.zeros(vertex_map.size_local + vertex_map.num_ghosts, dtype=np.bool_)
-    is_indicator[indicator_vertices] = True
-
-    exterior = dolfinx.mesh.exterior_facet_indices(mesh.topology)
-    num_facet_vertices = int(f_to_v.offsets[1] - f_to_v.offsets[0])
-    facet_vertices = f_to_v.array[
-        (f_to_v.offsets[exterior][:, None] + np.arange(num_facet_vertices, dtype=np.int32)).reshape(
-            -1
-        )
-    ].reshape(len(exterior), num_facet_vertices)
-    on_seam = exterior[is_indicator[facet_vertices].all(axis=1)]
-    return broadcast_marked_entities(mesh, tdim - 1, on_seam)
-
-
-from .mesh import VertexCorrespondence
-
-
-def periodic_correspondence_from_nodes(
-    mesh, pairs: GmshPeriodicNodes, root: int = 0
-) -> VertexCorrespondence:
-    """Turn gmsh node pairs held on one rank into a distributed vertex correspondence.
-
-    The pairs arrive as input global node indices on the reading rank, while the vertices
-    they name are spread over every rank, and neither side knows where the other is. A
-    post office resolves that: input global index ``i`` is looked after by a fixed rank,
-    :func:`_index_owner`, which every process can compute without asking anyone.
-
-    1. every process registers the boundary vertices it holds with the post offices for
-       their indices, saying whether it owns each one;
-    2. the reader sends each pair to the post office of its *master* index, which knows
-       who owns that vertex. It tells that owner which pair it answers, and forwards the
-       pair to the post office of the *slave* index, which passes it to every process
-       holding a copy;
-    3. those processes then ask the master's owner directly, which is what tells it who
-       needs the cells at that vertex.
-
-    Only the boundary vertices are registered, since gmsh pairs nothing else, so the post
-    office stays proportional to the surface. Nothing is gathered: no process holds more
-    than its own block of indices, except the reader, which holds the file it read.
-
-    The rank named for a master is its *vertex* owner, which is unique -- keeping the join
-    single-valued -- and always owns a cell incident to the vertex, which is what
-    :attr:`script.VertexCorrespondence.src_owner` requires.
-
-    Collective.
-
-    Args:
-        mesh: The mesh built from the same gmsh model, so that
-            ``mesh.geometry.input_global_indices`` is the node numbering `pairs` uses.
-        pairs: The node pairs, meaningful on `root` only.
-        root: The rank holding `pairs`.
-
-    Returns:
-        The correspondence :func:`script._build_periodic_mesh` consumes.
-
-    Raises:
-        RuntimeError: If a pair names a node that is not a vertex of the mesh.
-    """
-    comm = mesh.comm
-    num_owned_vertices = mesh.topology.index_map(0).size_local
-    num_nodes_global = comm.bcast(pairs.num_nodes_global if comm.rank == root else None, root=root)
-
-    # (1) Register the boundary vertices with the post offices for their indices.
-    local_vertices, local_igi = _vertices_that_can_be_paired(mesh)
-    owns = (local_vertices < num_owned_vertices).astype(np.int64)
-    registrar, registered = exchange_to_destinations(
-        comm,
-        index_owner(comm, local_igi, num_nodes_global),
-        np.stack([local_igi, owns], axis=1),
-    )
-    held_igi, held_owns = registered[:, 0], registered[:, 1].astype(bool)
-
-    # Index the register by its own block, so a lookup is one array read.
-    low, high = local_range(comm, num_nodes_global)
-    owner_of = np.full(max(high - low, 0), -1, dtype=np.int64)
-    owner_of[held_igi[held_owns] - low] = registrar[held_owns]
-
-    # (2) The reader hands each pair to the post office for its master index.
-    if comm.rank == root:
-        to_master_office = np.stack(
-            [
-                np.asarray(pairs.master, dtype=np.int64),
-                np.asarray(pairs.slave, dtype=np.int64),
-                np.arange(len(pairs.slave), dtype=np.int64),
-            ],
-            axis=1,
-        )
-    else:
-        to_master_office = np.zeros((0, 3), dtype=np.int64)
-    _, at_master_office = exchange_to_destinations(
-        comm,
-        index_owner(comm, to_master_office[:, 0], num_nodes_global),
-        to_master_office,
-    )
-    master_igi, slave_igi, pair_id = at_master_office.T
-
-    unknown = owner_of[master_igi - low] == -1 if len(master_igi) else np.zeros(0, bool)
-    # Collective: only the post offices see this, so it is reduced before anyone raises.
-    num_unknown = comm.allreduce(int(np.count_nonzero(unknown)), op=MPI.SUM)
-    if num_unknown:
-        raise RuntimeError(
-            f"{num_unknown} periodic pairs name a master node that is not a boundary"
-            " vertex of the distributed mesh. The pairs and the mesh have to come from"
-            " the same gmsh model, and the master nodes have to be cell vertices."
-        )
-    master_owner = owner_of[master_igi - low]
-
-    # Tell each master's owner which pair its vertex answers.
-    _, assignment = exchange_to_destinations(
-        comm, master_owner.astype(np.int32), np.stack([pair_id, master_igi], axis=1)
-    )
-    answers_pair, answers_igi = assignment[:, 0], assignment[:, 1]
-
-    # Forward the pair to the post office for its slave index, which knows the holders.
-    _, at_slave_office = exchange_to_destinations(
-        comm,
-        index_owner(comm, slave_igi, num_nodes_global),
-        np.stack([slave_igi, pair_id, master_owner], axis=1),
-    )
-    wanted_igi, wanted_pair, wanted_owner = at_slave_office.T
-
-    # Fan out to every process holding a copy of the slave vertex, ghosts included: each
-    # of them carries the vertex in `indicator_vertices` and needs its own `src_owner`.
-    holder_order = np.argsort(held_igi, kind="stable")
-    holder_igi = held_igi[holder_order]
-    holder_rank = registrar[holder_order]
-    first = np.searchsorted(holder_igi, wanted_igi, side="left")
-    last = np.searchsorted(holder_igi, wanted_igi, side="right")
-    repeats = last - first
-    fan = np.repeat(np.arange(len(wanted_igi)), repeats)
-    within = np.arange(len(fan)) - np.repeat(np.cumsum(repeats) - repeats, repeats)
-    _, delivered = exchange_to_destinations(
-        comm,
-        holder_rank[first[fan] + within],
-        np.stack([wanted_igi[fan], wanted_pair[fan], wanted_owner[fan]], axis=1),
-    )
-
-    # Back in local numbering. A vertex is delivered once per route that reaches it, and
-    # the correspondence wants it once.
-    igi_order = np.argsort(local_igi, kind="stable")
-    position = np.searchsorted(local_igi[igi_order], delivered[:, 0])
-    my_vertex = local_vertices[igi_order][position]
-    indicator_vertices, keep = np.unique(my_vertex, return_index=True)
-    indicator_vertices = indicator_vertices.astype(np.int32)
-    src_owner = delivered[keep, 2].astype(np.int32)
-    my_pair = delivered[keep, 1]
-
-    # (3) Ask the master's owner directly. The request is what tells it who needs the
-    # cells at that vertex, which is what `dest_owner` records.
-    dest_owner, requested = exchange_to_destinations(comm, src_owner, my_pair.reshape(-1, 1))
-
-    # Resolve each request to the local vertex answering it, via step (2)'s assignment.
-    answer_order = np.argsort(answers_pair, kind="stable")
-    answer_pair = answers_pair[answer_order]
-    answer_igi = answers_igi[answer_order]
-    position = np.searchsorted(answer_pair, requested[:, 0])
-    # A process can own no master vertex at all, and then receives no request either.
-    # Both arrays are empty and there is nothing to check, so the emptiness of the
-    # assignments must not by itself count as a failure.
-    found = (
-        np.zeros(len(requested), dtype=np.bool_)
-        if len(answer_pair) == 0
-        else answer_pair[np.minimum(position, len(answer_pair) - 1)] == requested[:, 0]
-    )
-    assert found.all(), "a request reached a rank that was not assigned that pair"
-    position = np.searchsorted(local_igi[igi_order], answer_igi[position])
-    partner_vertex = local_vertices[igi_order][position].astype(np.int32)
-
-    # The correspondence requires `dest_owner` ascending; `_exchange_to_destinations`
-    # sorts by source rank for exactly this.
-    assert np.all(dest_owner[:-1] <= dest_owner[1:]), "destination owners are not sorted"
-
-    return VertexCorrespondence(
-        indicator_vertices=indicator_vertices,
-        indicator_facets=_seam_facets_from_vertices(mesh, indicator_vertices),
-        src_owner=src_owner,
-        dest_owner=dest_owner.astype(np.int32),
-        partner_vertex=partner_vertex,
-    )
+    return PeriodicNodes(unique_slave, root, num_nodes_global)
 
 
 def read_periodic_mesh_from_msh(
@@ -473,7 +133,7 @@ def read_periodic_mesh_from_msh(
             pairs = extract_gmsh_periodic_nodes(gmsh.model)
         else:
             empty = np.zeros(0, dtype=np.int64)
-            pairs = GmshPeriodicNodes(empty, empty, 0)
+            pairs = PeriodicNodes(empty, empty, 0)
 
         mesh_data = dolfinx.io.gmsh.model_to_mesh(
             gmsh.model, comm, rank, gdim=gdim, partitioner=partitioner, **kwargs
@@ -483,6 +143,6 @@ def read_periodic_mesh_from_msh(
             gmsh.finalize()
 
     mesh = getattr(mesh_data, "mesh", mesh_data)
-    return create_periodic_mesh_from_gmsh(
+    return create_periodic_mesh_from_igi(
         mesh, pairs.slave, pairs.master, pairs.num_nodes_global, root=rank
     )

@@ -15,7 +15,7 @@ reading this file can see exactly what the fast versions are supposed to compute
 import numpy as np
 import pytest
 
-from script import (
+from scifem.periodic.mesh import (
     compute_insert_position,
     find_position,
     gather_ragged,
@@ -124,9 +124,7 @@ def test_find_position_matches_dense(seed):
     # a permutation, so `values` has no repeats -- the usual case
     values = rng.permutation(n_values).astype(np.int32)
     data = rng.choice(values, size=int(rng.integers(0, 60))).astype(np.int32)
-    assert np.array_equal(
-        find_position(data, values), find_position_dense(data, values)
-    )
+    assert np.array_equal(find_position(data, values), find_position_dense(data, values))
 
 
 @pytest.mark.parametrize("seed", range(25))
@@ -135,9 +133,7 @@ def test_find_position_matches_dense_with_repeats(seed):
     rng = np.random.default_rng(1000 + seed)
     values = rng.integers(0, 6, size=int(rng.integers(2, 30))).astype(np.int32)
     data = rng.choice(values, size=int(rng.integers(1, 40))).astype(np.int32)
-    assert np.array_equal(
-        find_position(data, values), find_position_dense(data, values)
-    )
+    assert np.array_equal(find_position(data, values), find_position_dense(data, values))
 
 
 def test_find_position_empty():

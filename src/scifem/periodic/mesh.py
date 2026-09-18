@@ -21,12 +21,15 @@ from ..mpi_utils import (
     exchange_to_destinations,
 )
 from ..compat import index_map, topology as compat_topology
+from ..compat import ghosting_ranks as _compat_ghosting_ranks
+from .utils import VertexCorrespondence, PeriodicNodes
+from .topological_search import periodic_correspondence_from_nodes
+from .geometrical_search import match_vertices_geometric
 
 __all__ = [
     "transfer_meshtags_to_periodic_mesh",
-    "VertexCorrespondence",
     "create_periodic_mesh",
-    "create_periodic_mesh_from_gmsh",
+    "create_periodic_mesh_from_igi",
 ]
 
 
@@ -113,195 +116,6 @@ def gather_ragged(offsets, selection):
     # Position within its own group, for every element of the concatenation at once.
     within = np.arange(int(sizes.sum())) - np.repeat(np.cumsum(sizes) - sizes, sizes)
     return np.repeat(offsets[selection], sizes) + within, sizes
-
-
-@dataclasses.dataclass
-class VertexCorrespondence:
-    """Which vertices of ``mesh`` are identified with which, and which ranks hold each end.
-
-    This is the input of {py:func}`_build_periodic_mesh`, which consumes nothing else and
-    never evaluates a coordinate.
-
-    Stores the data of {py:class}`dolfinx.geometry.PointOwnershipData` for the
-    `partner_vertex`, over query points that are the images of `indicator_vertices` -- the
-    vertices given up to the partner side -- plus one extra array, `indicator_facets`, the
-    facets given up with them.
-
-    The two halves are keyed independently, so `indicator_vertices[i]` is *not* the vertex
-    replaced by `partner_vertex[i]`: `indicator_vertices` and `src_owner` are keyed on what
-    this process gives up, `dest_owner` and `partner_vertex` on what other processes gave up
-    to it, and the two sides of a pair rarely live on the same process. Splitting a 6x6 unit
-    square over three ranks gives one rank 7 and 0, and another 0 and 8. In serial the two
-    lengths coincide, which makes the assumption easy to form and wrong to act on. They line
-    up only after the exchange, which is what `compute_insert_position` reorders.
-
-    Args:
-        indicator_vertices: Local vertices, owned and ghost, that are to be replaced by
-            their partner vertex. Broadened across processes: a vertex marked on its
-            owner is marked on every process that ghosts it.
-        indicator_facets: Local facets, owned and ghost, lying on the seam, i.e. the
-            exterior facets all of whose vertices are in `indicator_vertices`. Broadened
-            the same way.
-        src_owner: For each entry of `indicator_vertices`, the rank owning *one* of the
-            cells its partner vertex belongs to. A vertex is shared by several cells, so
-            which one this names is arbitrary -- `_build_periodic_mesh` recovers the rest
-            of the ranks holding a cell at that vertex, which all need the seam cells too.
-            Note also that this is a *cell* owner, not the owner of the partner vertex,
-            which the rank in question may merely ghost.
-        dest_owner: For each vertex this process is the far side of, the rank that asked.
-            Must be sorted ascending: the packing groups by destination and relies on it.
-        partner_vertex: For each entry of `dest_owner`, the local vertex that replaces the
-            vertex that rank gave up. Same length as `dest_owner`.
-    """
-
-    indicator_vertices: npt.NDArray[np.int32]
-    indicator_facets: npt.NDArray[np.int32]
-    src_owner: npt.NDArray[np.int32]
-    dest_owner: npt.NDArray[np.int32]
-    partner_vertex: npt.NDArray[np.int32]
-
-
-def _match_vertices_geometric(
-    mesh, indicator, mapping_function, max_chain_length: int | None = None
-) -> VertexCorrespondence:
-    """Pair up the vertices of the seam by evaluating `mapping_function` on them.
-
-    Selects the seam with `indicator`, moves each selected vertex with `mapping_function`,
-    and snaps the image onto the nearest vertex of the mesh, checking that it actually
-    landed there.
-
-    Args:
-        mesh: The mesh to make periodic.
-        indicator: Marks the vertices to be replaced, given coordinates as ``(3, n)``.
-        mapping_function: Maps a marked vertex to the one it is identified with, given
-            coordinates as ``(3, n)``.
-        max_chain_length: How many times `mapping_function` may be re-applied to reach a
-            vertex outside `indicator`, for a mapping that applies one offset per call and
-            so needs several passes to carry a corner to its root. Defaults to
-            ``mesh.topology.dim``, the number of directions such a mesh can be periodic
-            in. Exceeding it raises, which is how a cyclic mapping is caught.
-
-    Returns:
-        The correspondence {py:func}`_build_periodic_mesh` consumes.
-    """
-    comm = mesh.comm
-    if max_chain_length is None:
-        max_chain_length = mesh.topology.dim
-
-    mesh.topology.create_connectivity(mesh.topology.dim, mesh.topology.dim - 1)
-    mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
-
-    # Find the vertices of the seam through the indicator function, and the facets given
-    # up with them. Both are broadened so that the two sides agree on what is replaced.
-    indicator_vertices = broadcast_marked_entities(
-        mesh, 0, dolfinx.mesh.locate_entities_boundary(mesh, 0, indicator)
-    )
-    indicator_facets = broadcast_marked_entities(
-        mesh,
-        mesh.topology.dim - 1,
-        dolfinx.mesh.locate_entities_boundary(mesh, mesh.topology.dim - 1, indicator),
-    )
-
-    geom_index = dolfinx.mesh.entities_to_geometry(mesh, 0, indicator_vertices).reshape(-1)
-    owned_vertex_coords = mesh.geometry.x[geom_index]
-
-    # A geometric tolerance has to be a length. `np.finfo(...).eps` describes relative
-    # precision near 1.0, so as an absolute padding it stops meaning anything once the mesh
-    # sits away from the origin: at coordinates around 1e6 a single representable double is
-    # already 1.2e-10, larger than 10000 * eps. Take a small fraction of the smallest cell
-    # instead, floored by the rounding error of the coordinates themselves, which grows with
-    # distance from the origin.
-    _cell_map = mesh.topology.index_map(mesh.topology.dim)
-    _cell_sizes = dolfinx.cpp.mesh.h(
-        mesh._cpp_object,
-        mesh.topology.dim,
-        np.arange(_cell_map.size_local + _cell_map.num_ghosts, dtype=np.int32),
-    )
-    h_min = comm.allreduce(_cell_sizes.min() if _cell_sizes.size else np.inf, op=MPI.MIN)
-    coord_scale = comm.allreduce(
-        np.abs(mesh.geometry.x).max() if mesh.geometry.x.size else 0.0, op=MPI.MAX
-    )
-    eps = max(
-        1e-6 * h_min,
-        100 * np.finfo(mesh.geometry.x.dtype).eps * max(1.0, coord_scale),
-    )
-
-    # Map vertices to new coordinates
-    mapped_vertex_coords = np.ascontiguousarray(mapping_function(owned_vertex_coords.T).T)
-
-    # Follow the mapping to a vertex outside `indicator`; see `max_chain_length` above.
-    # Entirely local: `indicator` and `mapping_function` are pointwise in the coordinates,
-    # so a process may run out of chains to follow before another does.
-    local_unresolved = False
-    for _ in range(max_chain_length):
-        still_indicated = np.asarray(indicator(mapped_vertex_coords.T), dtype=np.bool_)
-        if not still_indicated.any():
-            break
-        mapped_vertex_coords[still_indicated] = mapping_function(
-            mapped_vertex_coords[still_indicated].T
-        ).T
-    else:
-        local_unresolved = True
-
-    # Collective check to check that all vertex mappings have been resolved.
-    if comm.allreduce(int(local_unresolved), op=MPI.SUM) > 0:
-        raise RuntimeError(
-            f"`mapping_function` did not reach a vertex outside `indicator` within"
-            f" {max_chain_length} applications. Either the two functions disagree, or the"
-            " mapping cycles: an indicator vertex is mapped onto another that maps back."
-        )
-
-    # For each vertex that will be replaced, find which process should take it over
-    vertex_ownership_data = dolfinx.geometry.determine_point_ownership(
-        mesh, mapped_vertex_coords, padding=eps
-    )
-    # On process that has taken over a vertex, find the closest vertex (local to proc) that
-    # will be its replacement
-    acquired_vertex_coords = vertex_ownership_data.dest_points
-    potential_closest_vertices = dolfinx.mesh.compute_incident_entities(
-        mesh.topology, vertex_ownership_data.dest_cells, mesh.topology.dim, 0
-    )
-    closest_vertex_bb_tree = dolfinx.geometry.bb_tree(
-        mesh, 0, entities=potential_closest_vertices, padding=eps
-    )
-    closest_vertex_mid_tree = dolfinx.geometry.create_midpoint_tree(
-        mesh, 0, potential_closest_vertices
-    )
-    closest_vertex = dolfinx.geometry.compute_closest_entity(
-        closest_vertex_bb_tree,
-        closest_vertex_mid_tree,
-        mesh,
-        acquired_vertex_coords,
-    )
-
-    # `compute_closest_entity` returns the closest candidate whether or not it is anywhere
-    # near the query point, so check that the mapped point really landed on it. A mapping
-    # wrong by a whole cell otherwise gives a valid-looking mesh that is not periodic.
-    closest_vertex_coords = mesh.geometry.x[
-        dolfinx.mesh.entities_to_geometry(mesh, 0, closest_vertex).reshape(-1)
-    ]
-    snap_distance = np.linalg.norm(closest_vertex_coords - acquired_vertex_coords, axis=1)
-    num_unsnapped = int(np.count_nonzero(snap_distance > eps))
-    # Collective: the condition is reduced so that either every process raises or none
-    # does. A one-sided raise would leave the others blocked in the rebuild's exchanges.
-    total_unsnapped = comm.allreduce(num_unsnapped, op=MPI.SUM)
-    if total_unsnapped > 0:
-        worst = comm.allreduce(float(np.max(snap_distance, initial=0.0)), op=MPI.MAX)
-        raise RuntimeError(
-            f"`mapping_function` did not map {total_unsnapped} vertices onto a vertex of"
-            f" the mesh; the largest gap between a mapped point and the closest vertex is"
-            f" {worst:.3e}. Every mapped point has to land on the vertex it is meant to be"
-            " identified with, otherwise the result is a mesh with the expected vertex and"
-            " cell counts that is not periodic."
-        )
-
-    return VertexCorrespondence(
-        indicator_vertices=indicator_vertices,
-        indicator_facets=indicator_facets,
-        src_owner=vertex_ownership_data.src_owner,
-        dest_owner=vertex_ownership_data.dest_owner,
-        partner_vertex=closest_vertex,
-    )
 
 
 def _reduced_vertex_map(mesh, indicator_vertices):
@@ -1499,7 +1313,7 @@ def create_periodic_mesh(
         The vertex ownership does not change, only additional ghosts are added to a given process
 
     Note:
-        This is {py:func}`_match_vertices_geometric` followed by {py:func}`_build_periodic_mesh`.
+        This is {py:func}`match_vertices_geometric` followed by {py:func}`_build_periodic_mesh`.
         Only the first half evaluates `indicator` and `mapping_function`; a reader that
         knows the vertex pairs already, such as one for the ``$Periodic`` section of a gmsh
         file, builds a {py:class}`VertexCorrespondence` and calls the second half directly.
@@ -1528,7 +1342,7 @@ def create_periodic_mesh(
 
         periodic_mesh = create_periodic_mesh(mesh, indicator, map)
     """
-    return _build_periodic_mesh(mesh, _match_vertices_geometric(mesh, indicator, mapping_function))
+    return _build_periodic_mesh(mesh, match_vertices_geometric(mesh, indicator, mapping_function))
 
 
 def create_periodic_mesh_from_igi(
@@ -1539,7 +1353,7 @@ def create_periodic_mesh_from_igi(
     The point of {py:class}`VertexCorrespondence` is that it is the seam between *finding*
     the periodic pairs and *rebuilding* the mesh from them. Everything geometric -- the
     indicator, the mapping function, the tolerance, the point searches -- lives on the
-    {py:func}`_match_vertices_geometric` side of it, and {py:func}`_build_periodic_mesh`
+    {py:func}`match_vertices_geometric` side of it, and {py:func}`_build_periodic_mesh`
     sees only the struct. So a reader that already knows the pairing, as gmsh does, fills
     the same fields and reuses the rebuild unchanged: no `indicator`, no
     `mapping_function`, and therefore no tolerance to tune and no risk of a snap onto the
@@ -1570,13 +1384,10 @@ def create_periodic_mesh_from_igi(
     """
     # Imported here rather than at module scope: `gmsh_periodic` builds the correspondence
     # this module consumes, so it imports `script`, and a top-level import would cycle.
-    import gmsh_periodic
 
-    pairs = gmsh_periodic.GmshPeriodicNodes(
+    pairs = PeriodicNodes(
         np.asarray(replace_igi, dtype=np.int64),
         np.asarray(partner_igi, dtype=np.int64),
         int(num_nodes_global),
     )
-    return _build_periodic_mesh(
-        mesh, gmsh_periodic.periodic_correspondence_from_nodes(mesh, pairs, root=root)
-    )
+    return _build_periodic_mesh(mesh, periodic_correspondence_from_nodes(mesh, pairs, root=root))

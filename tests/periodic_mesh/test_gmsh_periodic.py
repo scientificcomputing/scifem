@@ -15,7 +15,8 @@ import gmsh
 import numpy as np
 import pytest
 
-from gmsh_periodic import extract_gmsh_periodic_nodes
+from scifem.periodic.gmsh import extract_gmsh_periodic_nodes
+import scifem.periodic.mesh
 
 
 @pytest.fixture
@@ -245,10 +246,10 @@ from mpi4py import MPI  # noqa: E402
 import dolfinx  # noqa: E402
 import ufl  # noqa: E402
 
-import script  # noqa: E402
-from gmsh_periodic import (  # noqa: E402
-    GmshPeriodicNodes,
-    periodic_correspondence_from_nodes,
+from scifem.periodic.topological_search import periodic_correspondence_from_nodes
+
+from scifem.periodic.gmsh import (  # noqa: E402
+    PeriodicNodes,
     read_periodic_mesh_from_msh,
 )
 
@@ -323,7 +324,7 @@ def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_slave=False
         pairs = extract_gmsh_periodic_nodes(gmsh.model)
     else:
         empty = np.zeros(0, dtype=np.int64)
-        pairs = GmshPeriodicNodes(empty, empty, 0)
+        pairs = PeriodicNodes(empty, empty, 0)
 
     mesh = _model_to_mesh(comm, 0, gdim=2)
     if comm.rank == 0:
@@ -407,7 +408,7 @@ def test_gmsh_path_builds_a_torus():
     comm = MPI.COMM_WORLD
     mesh, pairs = periodic_square(comm)
     correspondence = periodic_correspondence_from_nodes(mesh, pairs)
-    periodic_mesh, _, _ = script._build_periodic_mesh(mesh, correspondence)
+    periodic_mesh, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, correspondence)
 
     num_vertices, volume, bad, jump = torus_invariants(periodic_mesh)
     assert bad == 0, f"{bad} owned facet(s) do not carry two cells"
@@ -433,7 +434,7 @@ def test_gmsh_path_does_not_depend_on_the_partition():
     replaced = comm.allreduce(len(correspondence.indicator_vertices), op=MPI.SUM)
     assert replaced >= 11, "a replaced vertex is missing from some process that holds it"
 
-    periodic_mesh, _, _ = script._build_periodic_mesh(mesh, correspondence)
+    periodic_mesh, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, correspondence)
     num_vertices, volume, bad, _ = torus_invariants(periodic_mesh)
     assert (num_vertices, bad) == (33, 0)
     assert np.isclose(volume, 1.0)
@@ -444,7 +445,7 @@ def test_gmsh_path_single_direction():
     comm = MPI.COMM_WORLD
     mesh, pairs = periodic_square(comm, directions=("x",))
     correspondence = periodic_correspondence_from_nodes(mesh, pairs)
-    periodic_mesh, _, _ = script._build_periodic_mesh(mesh, correspondence)
+    periodic_mesh, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, correspondence)
 
     before = mesh.topology.index_map(0).size_global
     after = periodic_mesh.topology.index_map(0).size_global
@@ -478,7 +479,9 @@ def test_gmsh_path_replaces_the_same_vertices_as_the_geometric_path():
         v[1] += np.isclose(x[1], 0.0) * 1.0
         return v
 
-    geometric = script._match_vertices_geometric(mesh, indicator, mapping)
+    geometric = scifem.periodic.geometrical_search.match_vertices_geometric(
+        mesh, indicator, mapping
+    )
     from_gmsh = periodic_correspondence_from_nodes(mesh, pairs)
 
     assert_everywhere(
@@ -496,19 +499,19 @@ def test_gmsh_path_replaces_the_same_vertices_as_the_geometric_path():
     )
 
     # and the meshes they build agree on the invariants
-    from_geometric, _, _ = script._build_periodic_mesh(mesh, geometric)
-    from_pairs, _, _ = script._build_periodic_mesh(mesh, from_gmsh)
+    from_geometric, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, geometric)
+    from_pairs, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, from_gmsh)
     assert torus_invariants(from_geometric)[:3] == torus_invariants(from_pairs)[:3]
 
 
 def test_public_entry_point_matches_the_pieces_it_composes():
-    """`create_periodic_mesh_from_gmsh` is the two halves, and has to stay that."""
+    """`create_periodic_mesh_from_igi` is the two halves, and has to stay that."""
     comm = MPI.COMM_WORLD
     mesh, pairs = periodic_square(comm)
-    expected, _, _ = script._build_periodic_mesh(
+    expected, _, _ = scifem.periodic.mesh._build_periodic_mesh(
         mesh, periodic_correspondence_from_nodes(mesh, pairs)
     )
-    got, _, _ = script.create_periodic_mesh_from_gmsh(
+    got, _, _ = scifem.periodic.mesh.create_periodic_mesh_from_igi(
         mesh, pairs.slave, pairs.master, pairs.num_nodes_global
     )
     assert torus_invariants(got)[:3] == torus_invariants(expected)[:3]
@@ -640,7 +643,7 @@ def test_gmsh_path_in_3d_builds_a_three_torus():
     comm = MPI.COMM_WORLD
     mesh, pairs = periodic_box(comm)
     correspondence = periodic_correspondence_from_nodes(mesh, pairs)
-    periodic_mesh, _, _ = script._build_periodic_mesh(mesh, correspondence)
+    periodic_mesh, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, correspondence)
 
     num_vertices, volume, bad, jump = torus_invariants(periodic_mesh)
     assert bad == 0, f"{bad} owned facet(s) do not carry two cells"
@@ -671,7 +674,9 @@ def test_gmsh_and_geometric_paths_agree_in_3d():
             v[d] += np.isclose(x[d], 0.0) * 1.0
         return v
 
-    geometric = script._match_vertices_geometric(mesh, indicator, mapping)
+    geometric = scifem.periodic.geometrical_search.match_vertices_geometric(
+        mesh, indicator, mapping
+    )
     from_gmsh = periodic_correspondence_from_nodes(mesh, pairs)
 
     assert_everywhere(
@@ -688,6 +693,6 @@ def test_gmsh_and_geometric_paths_agree_in_3d():
         "the two paths disagree on the seam facets",
     )
 
-    from_geometric, _, _ = script._build_periodic_mesh(mesh, geometric)
-    from_pairs, _, _ = script._build_periodic_mesh(mesh, from_gmsh)
+    from_geometric, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, geometric)
+    from_pairs, _, _ = scifem.periodic.mesh._build_periodic_mesh(mesh, from_gmsh)
     assert torus_invariants(from_geometric)[:3] == torus_invariants(from_pairs)[:3]

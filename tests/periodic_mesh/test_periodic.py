@@ -21,7 +21,8 @@ import ufl
 
 import dolfinx
 
-from script import _match_vertices_geometric, create_periodic_mesh
+from scifem.periodic.geometrical_search import match_vertices_geometric
+from scifem.periodic.mesh import create_periodic_mesh
 
 
 def unit_square(n=8, offset=0.0):
@@ -445,15 +446,15 @@ def test_chain_length_bound_is_the_topological_dimension(
     assert needed <= tdim, f"{name} needs more applications than tdim allows"
 
     # the default resolves the chain
-    _match_vertices_geometric(mesh, indicator, mapping)
+    match_vertices_geometric(mesh, indicator, mapping)
 
     # and so does exactly the number of applications this case needs
-    _match_vertices_geometric(mesh, indicator, mapping, max_chain_length=needed)
+    match_vertices_geometric(mesh, indicator, mapping, max_chain_length=needed)
 
     # one fewer does not: the bound is real, not decorative
     if needed > 1:
         with pytest.raises(RuntimeError, match="did not reach a vertex outside"):
-            _match_vertices_geometric(mesh, indicator, mapping, max_chain_length=needed - 1)
+            match_vertices_geometric(mesh, indicator, mapping, max_chain_length=needed - 1)
 
 
 def test_per_direction_corner_needs_one_application_per_direction():
@@ -466,6 +467,6 @@ def test_per_direction_corner_needs_one_application_per_direction():
         mesh = make_mesh()
         indicator, mapping = periodic_in(directions, per_direction=True)
         tdim = mesh.topology.dim
-        _match_vertices_geometric(mesh, indicator, mapping, max_chain_length=tdim)
+        match_vertices_geometric(mesh, indicator, mapping, max_chain_length=tdim)
         with pytest.raises(RuntimeError, match="did not reach a vertex outside"):
-            _match_vertices_geometric(mesh, indicator, mapping, max_chain_length=tdim - 1)
+            match_vertices_geometric(mesh, indicator, mapping, max_chain_length=tdim - 1)
