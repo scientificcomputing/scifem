@@ -149,7 +149,7 @@ def test_submesh_meshtags(edim):
             entity_communicator.array.astype(np.int32),
         )
         sub_tag, sub_entity_to_parent = scifem.transfer_meshtags_to_submesh(
-            parent_tag, submesh, vertex_to_parent, entity_to_parent
+            parent_tag, submesh, vertex_to_parent=vertex_to_parent, cell_to_parent=entity_to_parent
         )
         submesh.topology.create_connectivity(i, edim)
         midpoints = dolfinx.mesh.compute_midpoints(submesh, i, sub_tag.indices)

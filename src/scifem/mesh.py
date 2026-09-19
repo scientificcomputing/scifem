@@ -140,6 +140,7 @@ def create_entity_markers(
 def transfer_meshtags_to_submesh(
     entity_tag: dolfinx.mesh.MeshTags,
     submesh: dolfinx.mesh.Mesh,
+    *,
     vertex_to_parent: _EntityMap | npt.NDArray[np.int32],
     cell_to_parent: _EntityMap | npt.NDArray[np.int32],
 ) -> tuple[dolfinx.mesh.MeshTags, npt.NDArray[np.int32]]:
@@ -170,7 +171,7 @@ def transfer_meshtags_to_submesh(
     entity_tag.topology.create_connectivity(dim, sub_tdim)
     if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
         cpp_tag = dolfinx.mesh.transfer_meshtags_to_submesh(
-            entity_tag, submesh, vertex_to_parent, cell_to_parent
+            entity_tag, submesh, cell_to_parent, vertex_to_parent
         )
         warn(
             "The returned sub_to_parent_entity_map is empty, as it was wrong"
