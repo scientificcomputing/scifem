@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install dependencies for pyvista
-        run: apt-get update && apt-get install -y libgl1-mesa-dev mesa-utils
+        run: apt-get update && apt-get install -y --no-install-recommends libgl1 libosmesa6
 
       - name: Install dependencies
         run: |
