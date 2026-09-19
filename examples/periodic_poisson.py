@@ -10,10 +10,8 @@
 #
 # 1. **Building it.** What the indicator and mapping functions have to do, and what the
 #    resulting mesh does and does not change.
-# 2. **Checking the answer.** A fully periodic domain has no boundary, so the constants
-#    are in the kernel and the source has to be mean free. Less obviously, most of the
-#    natural test solutions also solve the *homogeneous Neumann* problem on the ordinary
-#    square, so they pass on a mesh where periodicity is broken.
+# 2. **Checking the answer.** Why the source has to be mean free, and why the obvious
+#    test solutions don't actually distinguish a periodic mesh from a broken one.
 # 3. **Looking at it.** `VTXWriter` and `VTKFile` draw a periodic mesh wrong, for a
 #    reason that is worth understanding rather than working around blindly.
 
