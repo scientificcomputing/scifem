@@ -166,7 +166,7 @@ L_compiled = dolfinx.fem.form(L)
 # Note that we have defined the variational form in a block form, and
 # that we have not included $h$ in the variational form. We will enforce this
 # once we have assembled the right hand side vector.
-# We can now assemble the matrix and vector usig {py:func}`dolfinx.fem.petsc.assemble_matrix`
+# We can now assemble the matrix and vector using {py:func}`dolfinx.fem.petsc.assemble_matrix`
 # and {py:func}`dolfinx.fem.petsc.assemble_vector`.
 
 if Version(dolfinx.__version__) < Version("0.10.0"):

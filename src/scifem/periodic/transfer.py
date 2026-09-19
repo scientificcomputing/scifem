@@ -61,7 +61,7 @@ def transfer_meshtags_to_periodic_mesh(
     periodic_mesh.topology.create_entities(meshtags.dim)  # This has to be created
     periodic_mesh.topology.create_connectivity(
         meshtags.dim, 0
-    )  # This is requried before distribute entity data
+    )  # This is required before distribute entity data
     local_entities, local_values = dolfinx.io.distribute_entity_data(
         periodic_mesh, meshtags.dim, igi_indices, values
     )

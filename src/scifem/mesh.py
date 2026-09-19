@@ -184,7 +184,10 @@ def transfer_meshtags_to_submesh(
         v_to_p = get_entity_map(vertex_to_parent)
         c_to_p = get_entity_map(cell_to_parent)
         cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
-            entity_tag._cpp_object, submesh.topology._cpp_object, v_to_p, c_to_p
+            entity_tag._cpp_object,
+            submesh.topology._cpp_object,
+            vertex_to_parent=v_to_p,
+            cell_to_parent=c_to_p,
         )
     return dolfinx.mesh.MeshTags(cpp_tag), sub_to_parent_entity_map
 
@@ -233,7 +236,7 @@ def extract_submesh(
         subnode_to_parent_node, entity_tag_on_submesh)`.
     """
 
-    # Accumulate all entities, including ghosts, for the specfic set of tagged entities
+    # Accumulate all entities, including ghosts, for the specific set of tagged entities
     edim = entity_tag.dim
     mesh.topology.create_connectivity(edim, mesh.topology.dim)
     tags_as_arr = np.asarray(tags, dtype=entity_tag.values.dtype)
@@ -396,7 +399,7 @@ def compute_interface_data(
     Returns:
         The integration data.
     """
-    # Future compatibilty check
+    # Future compatibility check
     integration_args: tuple[int] | tuple
     if Version("0.10.0") <= Version(dolfinx.__version__):
         integration_args = ()

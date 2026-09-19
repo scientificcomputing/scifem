@@ -7,7 +7,7 @@ Please note we have a code of conduct, please follow it in all your interactions
 ## Adding a new feature
 We really appreciate contributions to the project. If you want to add a new feature, please create an issue first to discuss the feature you would like to add. This way we can make sure that the feature is in line with the goals of the project and that it is not already being worked on by someone else.
 
-Any new feature should be accompanied by tests and an example that should be part of the documentation. The tests should be added to the test suite in the `tests` folder and the example should be added to the `example` folder, and added to the `_toc.yml` file so that it is included in the documentation.
+Any new feature should be accompanied by tests and an example that should be part of the documentation. The tests should be added to the test suite in the `tests` folder and the example should be added to the `examples` folder, and added to the `_toc.yml` file so that it is included in the documentation.
 
 ## New contributor guide
 
@@ -98,7 +98,7 @@ You can read more about using pytest in the [official documentation of pytest](h
 ## Documentation
 The documentation is hosted at GitHub pages and created with [`JupyterBook`](https://jupyterbook.org/en/stable/intro.html). Contributions to the documentation is very welcomed.
 
-To build the documentation locally you can installed the `docs` optional dependencies, i.e
+To build the documentation locally you can install the `docs` optional dependencies, i.e
 ```
 python3 -m pip install -e ".[docs]"
 ```
@@ -112,7 +112,7 @@ jupyter-book build -W --keep-going .
 ```
 which will turn warnings into errors.
 
-For reference, please see the [github workflow](https://github.com/scientificcomputing/scifem/blob/main/.github/workflows/pages.yml) that is used for building the pages.
+For reference, please see the [github workflow](https://github.com/scientificcomputing/scifem/blob/main/.github/workflows/deploy_docs.yml) that is used for building the pages.
 
 
 ## Need help?

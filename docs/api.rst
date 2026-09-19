@@ -85,7 +85,7 @@ Solvers
 Periodic meshes
 ###############
 
-Building a mesh periodic, moving data on and off it, and the vertex correspondence the
+Building a periodic mesh, moving data on and off it, and the vertex correspondence the
 rebuild runs on -- found either from the coordinates or from the ``$Periodic`` section of
 a gmsh model.
 

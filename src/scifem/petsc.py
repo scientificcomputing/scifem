@@ -100,8 +100,8 @@ if dolfinx.has_petsc4py:
 
         Args:
             b: The vector to apply lifting to.
-            a: Sequence fo forms to apply lifting from. If the system is blocked or nested,
-                his is a nested list of forms.
+            a: Sequence of forms to apply lifting from. If the system is blocked or nested,
+                this is a nested list of forms.
             bcs: The boundary conditions to apply. If the form is blocked or nested, this is a list,
                 while if it is a single form, this is a nested list.
             x: Vector to subtract from the boundary conditions. Usually used in a Newton iteration.

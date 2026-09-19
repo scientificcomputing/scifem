@@ -15,11 +15,6 @@ the regular pattern a structured square repeats. And its periodicity is read fro
 model's ``$Periodic`` section, so the fixture exercises
 {py:func}`scifem.periodic.create_periodic_mesh_from_igi` rather than the geometric
 search -- the path a caller reading a ``.msh`` file takes.
-
-Run serially, or under MPI::
-
-    python3 -m pytest test_transfer_function.py
-    mpirun -n 3 python3 -m pytest test_transfer_function.py
 """
 
 from mpi4py import MPI
@@ -29,7 +24,7 @@ import numpy as np
 import pytest
 
 import dolfinx
-
+import inspect
 from scifem.periodic.gmsh import extract_gmsh_periodic_nodes
 from scifem.periodic.mesh import create_periodic_mesh_from_igi
 from scifem.periodic.transfer import transfer_function_to_parent_mesh
@@ -80,9 +75,11 @@ def meshes():
             pairs = PeriodicNodes(num_nodes_global=0)
         # The rebuild needs a ghost layer across every interprocess facet, which
         # `model_to_mesh` does not give by default.
-        mesh_data = dolfinx.io.gmsh.model_to_mesh(
-            gmsh.model, comm, 0, gdim=2, ghost_mode=dolfinx.mesh.GhostMode.shared_facet
-        )
+        gmodel_to_mesh = inspect.signature(dolfinx.io.gmsh.model_to_mesh)
+        kwargs = {}
+        if "ghost_mode" in gmodel_to_mesh.parameters:
+            kwargs["ghost_mode"] = dolfinx.mesh.GhostMode.shared_facet
+        mesh_data = dolfinx.io.gmsh.model_to_mesh(gmsh.model, comm, 0, gdim=2, **kwargs)
     finally:
         gmsh.finalize()
 

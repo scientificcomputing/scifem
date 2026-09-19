@@ -10,7 +10,7 @@ See the [documentation](https://scientificcomputing.github.io/scifem/) for the A
 ## Backwards compatibility
 We aim to support the last two stable releases of DOLFINx. Sometimes features are supported for longer if need be.
 
-Some features might depend on functionality added to DOLFINx, which means that they wont be backwards compatibile.
+Some features might depend on functionality added to DOLFINx, which means that they won't be backwards compatible.
 
 ## Features
 
@@ -59,7 +59,7 @@ Some features might depend on functionality added to DOLFINx, which means that t
 
 ## Installation
 
-The package is partly written in C++ and relies on `dolfinx`. User are encouraged to install `scifem` with `pip` in an environment where `dolfinx` is already installed or with `conda`.
+The package is partly written in C++ and relies on `dolfinx`. Users are encouraged to install `scifem` with `pip` in an environment where `dolfinx` is already installed or with `conda`.
 
 ### `pip`
 To install the package with `pip` run
@@ -110,7 +110,7 @@ spack add py-scifem+petsc+hdf5+biomed+adios2 ^mpich ^petsc+mumps+hypre ^py-fenic
 spack concretize
 spack install
 ```
-Finally, note that spack needs some packages already installed on your system. On a clean ubuntu container for example one need to install the following packages before running spack
+Finally, note that spack needs some packages already installed on your system. On a clean ubuntu container for example one needs to install the following packages before running spack
 ```bash
 apt update && apt install gcc unzip git python3-dev g++ gfortran xz-utils -y
 ```
