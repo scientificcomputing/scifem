@@ -6,7 +6,6 @@ if sys.version_info >= (3, 13):
 else:
     from typing_extensions import deprecated
 
-from warnings import warn
 from . import _scifem  # type: ignore
 import collections
 import dolfinx
