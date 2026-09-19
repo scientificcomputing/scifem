@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: MIT
 #
 # DOLFINx gives you full control for marking entities.
-# However, sometimes this can feel a bit repetative.
+# However, sometimes this can feel a bit repetitive.
 # In this example we will show how to use {py:func}`scifem.create_entity_markers`.
 
 from mpi4py import MPI

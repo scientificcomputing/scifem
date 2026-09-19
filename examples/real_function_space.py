@@ -4,6 +4,26 @@
 #
 # License: MIT
 #
+# `````{note}
+# {py:func}`scifem.create_real_functionspace` is deprecated on DOLFINx >=v0.11.0 in favour of
+# {py:func}`basix.ufl.real_element`, which is now the recommended way to build the space
+# below. This example is kept as it stands, using
+# {py:func}`create_real_functionspace<scifem.create_real_functionspace>`, for
+# consistency with older DOLFINx versions that do not have the basix real element.
+#
+# The only thing that changes is how `R` is created. Instead of
+# ````python
+# R = scifem.create_real_functionspace(mesh, value_shape=value_shape)
+# ````
+# on DOLFINx >=v0.11.0 one would write
+# ````python
+# element = basix.ufl.real_element(
+#     mesh.basix_cell(), value_shape=value_shape, dtype=mesh.geometry.x.dtype
+# )
+# R = dolfinx.fem.functionspace(mesh, element)
+# ````
+# `````
+#
 # In this example we will show how to use the "real" function space to solve
 # a singular Poisson problem.
 #
@@ -166,7 +186,7 @@ L_compiled = dolfinx.fem.form(L)
 # Note that we have defined the variational form in a block form, and
 # that we have not included $h$ in the variational form. We will enforce this
 # once we have assembled the right hand side vector.
-# We can now assemble the matrix and vector usig {py:func}`dolfinx.fem.petsc.assemble_matrix`
+# We can now assemble the matrix and vector using {py:func}`dolfinx.fem.petsc.assemble_matrix`
 # and {py:func}`dolfinx.fem.petsc.assemble_vector`.
 
 if Version(dolfinx.__version__) < Version("0.10.0"):

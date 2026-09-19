@@ -23,6 +23,7 @@ from .mesh import (
 from .eval import evaluate_function, find_cell_extrema, compute_extrema
 from .interpolation import interpolation_matrix, prepare_interpolation_data
 from .geometry import closest_point_projection
+from scifem import periodic
 
 meta = metadata("scifem")
 __version__ = meta["Version"]
@@ -63,6 +64,7 @@ __all__ = [
     "prepare_interpolation_data",
     "find_cell_extrema",
     "compute_extrema",
+    "periodic",
 ]
 
 

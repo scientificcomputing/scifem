@@ -17,6 +17,21 @@ import dolfinx
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "BaseXDMFFile",
+    "FunctionSpaceData",
+    "NumpyXDMFFile",
+    "XDMFData",
+    "XDMFFile",
+    "check_function_space",
+    "create_function_space_data",
+    "create_pointcloud",
+    "h5pyfile",
+    "write_hdf5_adios",
+    "write_hdf5_h5py",
+    "write_xdmf",
+]
+
 
 def deprecated(func):
     """This is a decorator which can be used to mark functions
@@ -521,7 +536,7 @@ class BaseXDMFFile(abc.ABC):
             self._outfile.Close()
             assert self._adios.RemoveIO("Point cloud writer")
         except ValueError:
-            # File is allready closed
+            # File is already closed
             logger.debug("ADIOS2 file already closed")
 
     def close(self) -> None:
