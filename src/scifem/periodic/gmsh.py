@@ -12,7 +12,7 @@ through the right-hand curve and with (1,0) through the top curve. Both routes l
 
 A note on names. Each pair has a node that is kept and a node that is identified with it
 and disappears; this module calls them the `partner` and the `replaced` node, matching
-`partner_vertex` and `replaced_vertices` in {py:mod}`script`. gmsh's own API calls them
+`partner_vertex` and `replaced_vertices` in :py:mod:`scifem.periodic`. gmsh's own API calls them
 the master and the slave -- ``getPeriodicNodes`` returns ``masterNodeTags``, and
 ``setPeriodic`` takes the replaced entities first and their partners second -- so that is
 what a reader of the gmsh documentation will see.
@@ -48,7 +48,7 @@ def extract_gmsh_periodic_nodes(
             and is close to tautological for a model this process just built.
 
     Returns:
-        The pairs, as :class:`PeriodicNodes`.
+        The pairs, as :py:class:`PeriodicNodes`.
 
     Raises:
         RuntimeError: If the pairs cycle, disagree on a root, or contradict the affine
@@ -129,16 +129,21 @@ def read_periodic_mesh_from_msh(
         rank: The rank that reads the file.
         gdim: Geometric dimension of the mesh.
         partitioner: Cell partitioner, passed through to ``model_to_mesh``.
-        tag_base: Passed through to :func:`create_periodic_mesh_from_igi`.
+        tag_base: Passed through to :py:func:`create_periodic_mesh_from_igi`.
         kwargs: Further arguments for ``model_to_mesh``, such as ``ghost_mode`` where the
             installed DOLFINx takes it there.
 
     Returns:
         ``(periodic_mesh, replaced_vertices, replacement_map)``, as
-        {py:func}`scifem.periodic.mesh.create_periodic_mesh`.
+        :py:func:`scifem.periodic.create_periodic_mesh`.
     """
-    import gmsh
-
+    try:
+        import gmsh
+    except ImportError as e:
+        raise ImportError(
+            "The `gmsh` Python module is required to read a `.msh` file and make it"
+            " periodic. Install it with `pip install gmsh`."
+        ) from e
     started_here = False
     try:
         if comm.rank == rank:

@@ -176,3 +176,4 @@ _probe*.py
 *.pvtu
 *.vtu
 *.pvd
+*.png

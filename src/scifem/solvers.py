@@ -309,14 +309,14 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
 
         @property
         def F(self):
-            """The list of residuals where each entry is a ``dolfinx.fem.Form``."""
+            """The list of residuals where each entry is a :py:class:`dolfinx.fem.Form`."""
             return self._F
 
         @property
         def J(self):
             """
             The Jacobian blocks represented as lists of lists where each entry
-            is a ``dolfinx.fem.Form``.
+            is a :py:class:`dolfinx.fem.Form`.
             """
             return self._J
 

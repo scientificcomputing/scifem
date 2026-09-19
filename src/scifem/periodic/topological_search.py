@@ -22,11 +22,11 @@ def periodic_correspondence_from_nodes(
     The topological half of finding the pairs: the identification is given, as indices into
     the mesh's input global numbering, and this resolves it against the distribution. No
     coordinate is read and no tolerance is involved, which is what separates it from
-    {py:func}`scifem.periodic.geometrical_search.match_vertices_geometric`.
+    :py:func:`scifem.periodic.geometrical_search.match_vertices_geometric`.
 
     The pairs arrive on one process while the vertices they name are spread over every one,
     and neither side knows where the other is. A post office resolves that: input global
-    index ``i`` is looked after by a fixed rank, {py:func}`scifem.mpi_utils.index_owner`,
+    index ``i`` is looked after by a fixed rank, ``scifem.mpi_utils.index_owner``,
     which every process can compute without asking anyone.
 
     1. every process registers the boundary vertices it holds with the post offices for
@@ -45,7 +45,7 @@ def periodic_correspondence_from_nodes(
 
     The rank named for a partner is its *vertex* owner, which is unique -- keeping the join
     single-valued -- and always owns a cell incident to the vertex, which is what
-    {py:attr}`scifem.periodic.utils.VertexCorrespondence.src_owner` requires.
+    ``src_owner`` of :py:class:`scifem.periodic.utils.VertexCorrespondence` requires.
 
     Collective.
 
@@ -56,7 +56,7 @@ def periodic_correspondence_from_nodes(
         root: The rank holding `pairs`.
 
     Returns:
-        The correspondence {py:mod}`scifem.periodic.mesh` rebuilds from.
+        The correspondence :py:mod:`scifem.periodic` rebuilds from.
 
     Raises:
         RuntimeError: If a pair names a node that is not a vertex of the mesh.

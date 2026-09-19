@@ -9,7 +9,7 @@ class PeriodicNodes:
 
     The pairs are given in the mesh's input global numbering, so they say nothing about how
     the mesh is distributed and can come from anywhere that knows it --
-    {py:func}`scifem.periodic.gmsh.extract_gmsh_periodic_nodes` reads them out of a
+    :py:func:`scifem.periodic.gmsh.extract_gmsh_periodic_nodes` reads them out of a
     ``$Periodic`` section, but nothing here depends on that.
 
     Only the process that has the pairs holds them; every other one passes an empty set,
@@ -25,7 +25,7 @@ class PeriodicNodes:
             index. Not ``mesh.geometry.index_map().size_global``, which is smaller whenever
             the mesh was built from a node set with entries no cell references. Taken from
             `root` and broadcast, so the default stands on every other process; on `root` it
-            has to be set, and {py:func}`periodic_correspondence_from_nodes` checks that it
+            has to be set, and :py:func:`periodic_correspondence_from_nodes` checks that it
             was.
     """
 
@@ -42,11 +42,11 @@ class PeriodicNodes:
 class VertexCorrespondence:
     """Which vertices of ``mesh`` are identified with which, and which ranks hold each end.
 
-    This is what {py:mod}`scifem.periodic.mesh` rebuilds from: it consumes nothing else and
+    This is what :py:mod:`scifem.periodic` rebuilds from: it consumes nothing else and
     never evaluates a coordinate, which is what lets the pairs be found either
     geometrically or topologically.
 
-    Stores the data of {py:class}`dolfinx.geometry.PointOwnershipData` for the
+    Stores the data of :py:class:`dolfinx.geometry.PointOwnershipData` for the
     `partner_vertex`, over query points that are the images of `indicator_vertices` -- the
     vertices given up to the partner side -- plus one extra array, `indicator_facets`, the
     facets given up with them.

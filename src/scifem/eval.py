@@ -124,7 +124,7 @@ def find_cell_extrema(
     tol: float | None = None,
 ) -> tuple[npt.NDArray[np.floating], np.floating]:
     """
-    Find the extrema of a {py:class}`ufl.core.expr.Expr` within a cell.
+    Find the extrema of a :py:class:`ufl.core.expr.Expr` within a cell.
 
     Args:
         u: The expression to find the extrema of.
@@ -162,7 +162,7 @@ def find_cell_extrema(
     cmap = compat.cmap(mesh)
 
     def eval_J(x_ref):
-        # Evaluating basis functions through {py:func}`dolfinx.fem.Function.eval`
+        # Evaluating basis functions through :py:func:`dolfinx.fem.Function.eval`
         # is faster than generating an expression for the same thing
         if isinstance(u, dolfinx.fem.Function):
             # This could in theory be made even faster by taking out some of the eval code
@@ -249,8 +249,8 @@ def compute_LP_average(
 ) -> npt.NDArray[np.float32 | np.float64 | np.complex128 | np.complex64]:
     r"""
     Compute the :math:`L^p(\Omega)`-average of a scalar-valued
-    {py:class}`ufl-expression<ufl.core.expr.Expr>` over each cell in a
-    {py:class}`domain<dolfinx.mesh.Mesh>`
+    :py:class:`ufl-expression<ufl.core.expr.Expr>` over each cell in a
+    :py:class:`domain<dolfinx.mesh.Mesh>`
 
     Args:
         u: The UFL-expression to evaluate

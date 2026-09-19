@@ -77,8 +77,8 @@ def transfer_function_to_parent_mesh(
     """
     Transfer a function from a periodic mesh to the ``parent_mesh`` it was created from.
 
-    Use this to visualize a solution. {py:class}`dolfinx.io.VTXWriter` and
-    {py:meth}`dolfinx.io.VTKFile.write_function` place one output point per degree of
+    Use this to visualize a solution. :py:class:`dolfinx.io.VTXWriter` and
+    :py:meth:`dolfinx.io.VTKFile.write_function` place one output point per degree of
     freedom, which a periodic mesh cannot supply a coordinate for: a degree of freedom on
     the seam belongs to cells on opposite sides of the domain. On the parent mesh the two
     sides are distinct nodes again, so only the seam is duplicated.
@@ -86,7 +86,7 @@ def transfer_function_to_parent_mesh(
     Args:
         u: The function on the periodic mesh
         parent_mesh: The mesh that was passed to
-            {py:func}`scifem.periodic.mesh.create_periodic_mesh`
+            :py:func:`scifem.periodic.create_periodic_mesh`
 
     Returns:
         A function on ``parent_mesh``, in the same space as ``u``

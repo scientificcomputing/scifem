@@ -141,7 +141,7 @@ def _partner_in_reduced_map(comm, sub_map, parent_to_sub, partner_vertex):
 
     Args:
         comm: The communicator to reduce the check over.
-        sub_map: A reduced vertex map, from :func:`_reduced_vertex_map`.
+        sub_map: A reduced vertex map, from :py:func:`_reduced_vertex_map`.
         parent_to_sub: Its companion map from local vertices, as returned alongside it.
         partner_vertex: Local vertices to look up.
 
@@ -311,7 +311,7 @@ class PartnerHolders:
 
     The two halves answer the two questions the rebuild asks of a partner vertex: what this
     process has to serve, and who will serve it. They are keyed independently, like the
-    halves of {py:class}`VertexCorrespondence`.
+    halves of :py:class:`VertexCorrespondence`.
     """
 
     #: Local partner vertices this process has to pack cells at, grouped by destination.
@@ -334,7 +334,7 @@ def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner, tag: int):
     """Spread each ``(partner vertex, destination)`` pair to every rank holding the vertex.
 
     `partner_vertex` names one holder of each partner vertex -- whichever rank answered
-    :func:`dolfinx.geometry.determine_point_ownership` for it -- but the cells meeting that
+    :py:func:`dolfinx.geometry.determine_point_ownership` for it -- but the cells meeting that
     vertex are spread over every rank that holds it, and none of them sees the whole star:
     with `shared_facet` ghosting a rank ghosts its facet neighbours, which in 3D is a small
     part of a vertex's cells. This hands each holder the destinations its own share has to
@@ -350,7 +350,7 @@ def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner, tag: int):
         tag: MPI tag for the consensus exchange behind `index_to_dest_ranks`.
 
     Returns:
-        A {py:class}`PartnerHolders`. Its `destinations` and `sources` describe the
+        A :py:class:`PartnerHolders`. Its `destinations` and `sources` describe the
         neighbourhood the cells travel over; `served`/`offsets`/`holders` are the same
         information read from the other end, which is what the seam facets are sent by.
     """
@@ -607,7 +607,7 @@ def _build_periodic_mesh(
 
     Purely topological: the correspondence already says which vertex replaces which and
     which ranks are involved, so nothing here evaluates a coordinate or a user function.
-    See {py:func}`create_periodic_mesh` for `tag_base` and the return value.
+    See :py:func:`create_periodic_mesh` for `tag_base` and the return value.
     """
     # One tag per consensus exchange, consecutive from `tag_base`.
     (
@@ -1402,18 +1402,18 @@ def create_periodic_mesh(
         The vertex ownership does not change, only additional ghosts are added to a given process
 
     Note:
-        This is {py:func}`match_vertices_geometric` followed by {py:func}`_build_periodic_mesh`.
+        This is :py:func:`match_vertices_geometric` followed by :py:func:`_build_periodic_mesh`.
         Only the first half evaluates `indicator` and `mapping_function`; a reader that
         knows the vertex pairs already, such as one for the ``$Periodic`` section of a gmsh
-        file, builds a {py:class}`VertexCorrespondence` and calls the second half directly.
+        file, builds a :py:class:`VertexCorrespondence` and calls the second half directly.
 
     Args:
         mesh: The mesh to make periodic. It has to carry a layer of ghost cells across
-            every interprocess facet; see {py:func}`check_facet_ghosting`.
+            every interprocess facet; see :py:func:`check_facet_ghosting`.
         indicator: Marks the entities to be replaced, given coordinates as ``(3, n)``.
         mapping_function: Maps a marked vertex to the one it is identified with, given
             coordinates as ``(3, n)``.
-        tag_base: The first of {py:data}`NUM_CONSENSUS_TAGS` consecutive MPI tags for the
+        tag_base: The first of :py:data:`NUM_CONSENSUS_TAGS` consecutive MPI tags for the
             consensus exchanges inside the rebuild. Only worth setting when another such
             exchange can be in flight on an overlapping communicator at the same time --
             a nested call, or two sub-communicators that share ranks -- since the tags
@@ -1434,18 +1434,18 @@ def create_periodic_mesh(
     Example:
 
         .. code-block:: python
-        .. highlight:: python
 
-        mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 7, 19)
-        def indicator(x):
-            return numpy.isclose(x[1], 1)
+            mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 7, 19)
 
-        def map(x):
-            values = x.copy()
-            values[1] -= 1
-            return values
+            def indicator(x):
+                return numpy.isclose(x[1], 1)
 
-        periodic_mesh = create_periodic_mesh(mesh, indicator, map)
+            def map(x):
+                values = x.copy()
+                values[1] -= 1
+                return values
+
+            periodic_mesh, _, _ = create_periodic_mesh(mesh, indicator, map)
     """
     return _build_periodic_mesh(
         mesh, match_vertices_geometric(mesh, indicator, mapping_function), tag_base
@@ -1462,10 +1462,10 @@ def create_periodic_mesh_from_igi(
 ) -> tuple[dolfinx.mesh.Mesh, npt.NDArray[np.int32], npt.NDArray[np.int32]]:
     """Make `mesh` periodic from the node pairs .
 
-    The point of {py:class}`VertexCorrespondence` is that it is the seam between *finding*
+    The point of :py:class:`VertexCorrespondence` is that it is the seam between *finding*
     the periodic pairs and *rebuilding* the mesh from them. Everything geometric -- the
     indicator, the mapping function, the tolerance, the point searches -- lives on the
-    {py:func}`match_vertices_geometric` side of it, and {py:func}`_build_periodic_mesh`
+    :py:func:`match_vertices_geometric` side of it, and :py:func:`_build_periodic_mesh`
     sees only the struct. So a reader that already knows the pairing, as gmsh does, fills
     the same fields and reuses the rebuild unchanged: no `indicator`, no
     `mapping_function`, and therefore no tolerance to tune and no risk of a snap onto the
@@ -1476,28 +1476,30 @@ def create_periodic_mesh_from_igi(
 
     Args:
         mesh: The mesh read from the same gmsh model, so that
-            ``mesh.geometry.input_global_indices`` is the node numbering the pairs use.
+            :py:attr:`mesh.geometry.input_global_indices
+            <dolfinx.mesh.Geometry.input_global_indices>` is the node numbering the pairs use.
         replaced_igi, partner_igi: Corresponding node pairs, as 0-based gmsh node tags. Held
             on `root` only; ignored elsewhere. Every partner must be a root -- a node that
             is not itself a replaced -- so chains through a corner have to be resolved first,
-            which {py:func}`scifem.periodic.gmsh.extract_gmsh_periodic_nodes` does for a
+            which :py:func:`scifem.periodic.gmsh.extract_gmsh_periodic_nodes` does for a
             gmsh model.
         num_nodes_global: The number of nodes in the gmsh model. Not
-            ``mesh.geometry.index_map().size_global``, which is smaller when
-            ``create_mesh`` drops nodes no cell references.
+            :py:meth:`mesh.geometry.index_map().size_global<dolfinx.mesh.Geometry.index_map>`,
+            which is smaller when :py:func:`create_mesh<dolfinx.mesh.create_mesh>` drops nodes
+            no cell references.
         root: The rank holding the pairs.
-        tag_base: The first of {py:data}`NUM_CONSENSUS_TAGS` consecutive MPI tags for the
+        tag_base: The first of :py:data:`NUM_CONSENSUS_TAGS` consecutive MPI tags for the
             consensus exchanges inside the rebuild. Only worth setting when another such
             exchange can be in flight on an overlapping communicator at the same time --
             a nested call, or two sub-communicators that share ranks -- since the tags
             would then have to be spaced apart.
 
     Returns:
-        As {py:func}`create_periodic_mesh`.
+        As :py:func:`create_periodic_mesh`.
 
     Note:
         To go straight from a ``.msh`` file, use
-        {py:func}`scifem.periodic.gmsh.read_periodic_mesh_from_msh`, which reads the pairs out of
+        :py:func:`scifem.periodic.gmsh.read_periodic_mesh_from_msh`, which reads the pairs out of
         the model before the reader finalizes it.
     """
     # Imported here rather than at module scope: `gmsh_periodic` builds the correspondence

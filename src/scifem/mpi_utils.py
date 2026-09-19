@@ -212,7 +212,7 @@ def local_range(comm, num_indices):
 def index_owner(comm, indices, num_indices):
     """Which process is the post office for each of `indices`.
 
-    The inverse of :func:`_local_range`, vectorised: the first ``num_indices % size``
+    The inverse of :py:func:`_local_range`, vectorised: the first ``num_indices % size``
     ranks hold one extra, so the blocks differ in length by at most one and no rank is
     left out.
 

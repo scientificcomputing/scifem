@@ -27,7 +27,7 @@ import ufl
 import basix.ufl
 import dolfinx
 import dolfinx.fem.petsc
-from scifem import assemble_scalar
+from scifem import assemble_scalar, evaluate_function
 from scifem.periodic import create_periodic_mesh
 from scifem.periodic import transfer_function_to_parent_mesh
 
@@ -37,8 +37,8 @@ from scifem.periodic import transfer_function_to_parent_mesh
 #
 # We start from an ordinary mesh. It must carry a layer of ghost cells across every
 # interprocess facet, which is the default for
-# {py:func}`dolfinx.mesh.create_unit_square`; {py:func}`scifem.periodic.create_periodic_mesh` checks this and
-# raises if it is missing.
+# {py:func}`dolfinx.mesh.create_unit_square`;
+# {py:func}`scifem.periodic.create_periodic_mesh` checks this and raises if it is missing.
 
 N = 25
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N)
@@ -97,7 +97,7 @@ if mesh.comm.rank == 0:
 # The other two return values record what happened, for transferring data defined on the
 # original mesh. `replaced_vertices` lists the vertices that disappeared, and
 # `replacement_map` maps each old (process-local) vertex to its new index;
-# {py:func}`scifem.periodic.transfer.transfer_meshtags_to_periodic_mesh` uses them to carry a
+# {py:func}`scifem.periodic.transfer_meshtags_to_periodic_mesh` uses them to carry a
 # {py:class}`dolfinx.mesh.MeshTags` across.
 
 # ## The variational problem
@@ -155,13 +155,14 @@ def u_exact(x):
 
 # ### Assembling and solving
 #
-# We use {py:func}`scifem.create_real_functionspace` for the multiplier and solve the
-# resulting $2\times 2$ block system.
+# The multiplier lives in a "real" space: one degree of freedom for the whole domain. We
+# build it from {py:func}`basix.ufl.real_element` and solve the resulting $2\times 2$
+# block system.
 
 # +
 degree = 2
 V = dolfinx.fem.functionspace(periodic_mesh, ("Lagrange", degree))
-r_el = basix.ufl.real_element(periodic_mesh.basix_cell(), shape=())
+r_el = basix.ufl.real_element(periodic_mesh.basix_cell(), value_shape=())
 R = dolfinx.fem.functionspace(periodic_mesh, r_el)
 
 W = ufl.MixedFunctionSpace(V, R)
@@ -223,35 +224,23 @@ if mesh.comm.rank == 0:
 
 # +
 s = np.linspace(0.0, 1.0, 37)[:-1]
-left = np.column_stack([np.zeros_like(s), s, np.zeros_like(s)])
-right = np.column_stack([np.ones_like(s), s, np.zeros_like(s)])
-bottom = np.column_stack([s, np.zeros_like(s), np.zeros_like(s)])
-top = np.column_stack([s, np.ones_like(s), np.zeros_like(s)])
-
-
-def evaluate(u, points):
-    """Evaluate `u` at `points`, on whichever ranks own them."""
-    mesh_ = u.function_space.mesh
-    tree = dolfinx.geometry.bb_tree(mesh_, mesh_.topology.dim)
-    candidates = dolfinx.geometry.compute_collisions_points(tree, points)
-    colliding = dolfinx.geometry.compute_colliding_cells(mesh_, candidates, points)
-    owned = np.flatnonzero([len(colliding.links(i)) > 0 for i in range(len(points))])
-    cells = np.array([colliding.links(i)[0] for i in owned], dtype=np.int32)
-    return owned, u.eval(points[owned], cells).reshape(-1)
+left = np.column_stack([np.zeros_like(s), s])
+right = np.column_stack([np.ones_like(s), s])
+bottom = np.column_stack([s, np.zeros_like(s)])
+top = np.column_stack([s, np.ones_like(s)])
 
 
 def seam_jump(u, side_a, side_b):
-    ia, va = evaluate(u, side_a)
-    ib, vb = evaluate(u, side_b)
-    shared = np.intersect1d(ia, ib)
-    if len(shared) == 0:
-        return 0.0
-    diff = np.abs(va[np.searchsorted(ia, shared)] - vb[np.searchsorted(ib, shared)])
-    return float(diff.max())
+    """The largest disagreement between matching points on the two sides of a seam."""
+    values_a = evaluate_function(u, side_a)
+    values_b = evaluate_function(u, side_b)
+    return float(np.abs(values_a - values_b).max())
 
 
-jump_x = mesh.comm.allreduce(seam_jump(uh, left, right), op=MPI.MAX)
-jump_y = mesh.comm.allreduce(seam_jump(uh, bottom, top), op=MPI.MAX)
+# `evaluate_function` broadcasts, so every rank already has the same values and no
+# further reduction is needed.
+jump_x = seam_jump(uh, left, right)
+jump_y = seam_jump(uh, bottom, top)
 if mesh.comm.rank == 0:
     print(f"max |u(0, y) - u(1, y)| = {jump_x:.3e}")
     print(f"max |u(x, 0) - u(x, 1)| = {jump_y:.3e}")
@@ -301,9 +290,9 @@ if mesh.comm.rank == 0:
 #
 # The geometry of the periodic mesh still has both sides of the seam, so the fix is to
 # put the solution back on the mesh it was built from, where the two sides are distinct
-# nodes again. {py:func}`scifem.periodic.create_periodic_mesh` preserves cells -- local cell `c` is the same cell
-# in both meshes, with the same geometry dofmap -- so
-# {py:func}`scifem.periodic.transfer.transfer_function_to_parent_mesh` is a per-cell
+# nodes again. {py:func}`scifem.periodic.create_periodic_mesh` preserves cells -- local
+# cell `c` is the same cell in both meshes, with the same geometry dofmap -- so
+# {py:func}`scifem.periodic.transfer_function_to_parent_mesh` is a per-cell
 # copy.
 #
 # ```{admonition} Why a plain per-cell copy is correct
@@ -318,7 +307,7 @@ if mesh.comm.rank == 0:
 # space, which is exactly the space the permutation has been absorbed into.
 #
 # This is also its precondition, and
-# {py:func}`scifem.periodic.transfer.transfer_function_to_parent_mesh` checks it. An
+# {py:func}`scifem.periodic.transfer_function_to_parent_mesh` checks it. An
 # element whose transformations are *not* pure permutations, such as `RT`, `N1curl` or
 # `BDM`, keeps them out of the dofmap and applies them during assembly, so a per-cell
 # copy of one would be wrong; interpolate into Lagrange or discontinuous Lagrange first,

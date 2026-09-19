@@ -90,10 +90,10 @@ Solvers
 Periodic meshes
 ###############
 
-Building a periodic mesh
-========================
+Building a periodic mesh, and moving data on and off it
+=======================================================
 
-.. automodule:: scifem.periodic.mesh
+.. automodule:: scifem.periodic
     :members:
 
 .. automodule:: scifem.periodic.utils
@@ -112,12 +112,6 @@ coordinates, or read from the ``$Periodic`` section of a gmsh model.
     :members:
 
 .. automodule:: scifem.periodic.gmsh
-    :members:
-
-Moving data on and off a periodic mesh
-======================================
-
-.. automodule:: scifem.periodic.transfer
     :members:
 
 PETSc utilities

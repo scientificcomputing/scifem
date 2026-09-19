@@ -13,7 +13,7 @@ The mesh comes from gmsh rather than ``create_unit_square``, for two reasons. It
 are unstructured, so the orientations the copy has to be invariant to are not laid out in
 the regular pattern a structured square repeats. And its periodicity is read from the
 model's ``$Periodic`` section, so the fixture exercises
-{py:func}`scifem.periodic.mesh.create_periodic_mesh_from_igi` rather than the geometric
+{py:func}`scifem.periodic.create_periodic_mesh_from_igi` rather than the geometric
 search -- the path a caller reading a ``.msh`` file takes.
 
 Run serially, or under MPI::

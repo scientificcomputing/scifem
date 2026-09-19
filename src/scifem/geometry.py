@@ -127,7 +127,7 @@ def _closest_point_projection(
     NOTE:
         Reference implementation in Python. This should only be used for testing and debugging,
         and is not optimized for performance. The performant implementation can be found in
-        {py:func}`closest_point_projection`.
+        :py:func:`closest_point_projection`.
 
     Uses the Goldstein-Levitin-Polyak Gradient projection method, where
     potential simplex constraints are handled by an exact projection using a

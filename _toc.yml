@@ -4,16 +4,25 @@
 format: jb-book
 root: README
 parts:
-  - caption: Features
+  - caption: Meshes and tags
+    chapters:
+      - file: "examples/mark_entities.py"
+      - file: "examples/transfer_tags_to_submesh"
+  - caption: Periodic meshes
+    chapters:
+      - file: "examples/periodic_poisson.py"
+      - file: "examples/periodic_heat_gmsh.py"
+  - caption: Function spaces and solvers
     chapters:
       - file: "examples/real_function_space.py"
-      - file: "examples/periodic_poisson.py"
-      - file: "examples/point_source.py"
-      - file: "examples/xdmf_point_cloud.py"
-      - file: "examples/mark_entities.py"
       - file: "examples/blocked_solver.py"
+  - caption: Sources and evaluation
+    chapters:
+      - file: "examples/point_source.py"
       - file: "examples/evaluate_function.py"
-      - file: "examples/transfer_tags_to_submesh"
+  - caption: Output
+    chapters:
+      - file: "examples/xdmf_point_cloud.py"
   - caption: Reference
     chapters:
       - file: "docs/api.rst"

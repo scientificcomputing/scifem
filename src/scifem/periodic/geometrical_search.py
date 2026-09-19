@@ -26,7 +26,7 @@ def match_vertices_geometric(
             in. Exceeding it raises, which is how a cyclic mapping is caught.
 
     Returns:
-        The correspondence {py:mod}`scifem.periodic.mesh` rebuilds from.
+        The correspondence :py:mod:`scifem.periodic` rebuilds from.
     """
     comm = mesh.comm
     if max_chain_length is None:

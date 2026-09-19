@@ -111,7 +111,7 @@ submesh, cell_map, vertex_map, node_map = dolfinx.mesh.create_submesh(
 # We transfer the cell markers to the submesh
 
 sub_cell_marker, sub_cell_map = transfer_meshtags_to_submesh(
-    cell_marker, submesh, vertex_map, cell_map)
+    cell_marker, submesh, vertex_to_parent=vertex_map, cell_to_parent=cell_map)
 
 # and visualize it
 
