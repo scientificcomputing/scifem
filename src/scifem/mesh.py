@@ -248,7 +248,9 @@ def extract_submesh(
             entity_tag, submesh, vertex_to_parent=vertex_map, cell_to_parent=cell_map
         )
     else:
-        new_et, _ = transfer_meshtags_to_submesh(entity_tag, submesh, vertex_map, cell_map)
+        new_et, _ = transfer_meshtags_to_submesh(
+            entity_tag, submesh, vertex_to_parent=vertex_map, cell_to_parent=cell_map
+        )
     new_et.name = entity_tag.name
     return SubmeshData(submesh, cell_map, vertex_map, node_map, new_et)
 
