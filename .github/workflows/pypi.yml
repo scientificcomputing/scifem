@@ -15,7 +15,7 @@ jobs:
     - name: Install build dependencies
       run: |
         python3 -m pip install --upgrade build twine
-        python3 -m pip install -r build-requirements.txt
+        python3 -m pip install --group build
 
     - name: Build SDist and wheel
       run: python3 -m build --no-isolation --sdist

@@ -42,6 +42,18 @@ gmsh = ["gmsh"]
 all = ["scifem[docs,dev,test,adios2,h5py,biomed,gmsh]"]
 petsc = ["petsc4py"]
 
+[dependency-groups]
+# Keep in sync with [build-system].requires above. Needed as a group, not just
+# as build-system metadata, because scifem is installed with
+# `--no-build-isolation`, so the build backend has to already be present.
+build = [
+    "scikit-build-core[pyproject]>=0.11.0",
+    "nanobind>=1.3.2",
+    "setuptools>=77.0.3",
+    "packaging>=24.2",
+    "pkgconfig",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
