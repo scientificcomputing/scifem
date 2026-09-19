@@ -245,7 +245,7 @@ def extract_submesh(
     # Transfer cell markers
     if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
         new_et = dolfinx.mesh.transfer_meshtags_to_submesh(
-            entity_tag, submesh, vertex_map, cell_map
+            entity_tag, submesh, vertex_to_parent=vertex_map, cell_to_parent=cell_map
         )
     else:
         new_et, _ = transfer_meshtags_to_submesh(entity_tag, submesh, vertex_map, cell_map)
