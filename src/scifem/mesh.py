@@ -186,8 +186,8 @@ def transfer_meshtags_to_submesh(
     cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
         entity_tag._cpp_object,
         submesh.topology._cpp_object,
-        vertex_to_parent=v_to_p,
-        cell_to_parent=c_to_p,
+        v_to_p,
+        c_to_p,
     )
     return dolfinx.mesh.MeshTags(cpp_tag), sub_to_parent_entity_map
 
