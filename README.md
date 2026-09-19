@@ -4,22 +4,58 @@ This package contains a collection of tools for scientific computing with a focu
 
 Many users that are transitioning from legacy FEniCS to FEniCSx may find the transition difficult due to the lack of some functionalities in FEniCSx.
 This package aims to provide some of the functionalities that are missing in FEniCSx.
-The package is still in its early stages and many functionalities are still missing.
+
+See the [documentation](https://scientificcomputing.github.io/scifem/) for the API reference and runnable examples of the features below.
+
+## Backwards compatibility
+We aim to support the last two stable releases of DOLFINx. Sometimes features are supported for longer if need be.
+
+Some features might depend on functionality added to DOLFINx, which means that they wont be backwards compatibile.
 
 ## Features
 
-- Real-space implementation for usage in DOLFINx (>=v0.8.0)
-- Save quadrature functions as point clouds
-- Save any function that can tabulate dof coordinates as point clouds.
-- Point sources for usage in DOLFINx (>=v0.8.0)
+### Meshes, tags and submeshes
+
+- Create `MeshTags` from a list of tags and corresponding locator functions.
+- Extract a submesh of entities of any co-dimension.
+- Locate the interface between two subdomains, and the exterior facets of a subdomain.
+
+### Periodic meshes
+
+- Build a periodic mesh (MPI supported), by merging the vertices on opposite sides of the domain. The periodicity lives in the topology, so a continuous function space on the result is periodic with no constraint matrix, as opposed to [DOLFINx_MPC](https://github.com/jorgensd/dolfinx_mpc).
+- Take the vertex pairs from the `$Periodic` section of a gmsh model rather than from the coordinates.
+- Move mesh tags onto a periodic mesh, and move a solution back onto the mesh it was built from. Required for post-processing with Pyvista or Paraview.
+- Diagnose the two ways an input mesh can be unsuitable, a missing ghost layer and cells that collapse onto each other across a seam.
+
+### Function spaces and degrees of freedom
+
+- Spaces of functions that are constant on each subdomain.
+- Maps between degrees of freedom and vertices, in both directions.
+
+### Assembly, sources and boundary conditions
+
+- Assemble a scalar or a norm over all processes in a single call.
+- Point sources for usage in DOLFINx (>=v0.8.0).
   - Point sources in vector spaces are only supported on v0.9.0, post [DOLFINx PR 3429](https://github.com/FEniCS/dolfinx/pull/3429).
     For older versions, apply one point source in each sub space.
-- Simplified wrapper to create MeshTags based on a list of tags and corresponding locator functions.
-- Maps between degrees of freedom and vertices: `vertex_to_dofmap` and `dof_to_vertex`
-- Blocked Newton Solver
-- Function evaluation at specified points
-- Interpolation matrices from any `ufl.core.expr.Expr` into a compatible space.
-- Periodic meshes
+- Interpolate an expression onto the degrees of freedom of a set of facets.
+- Helpers for the PETSc vector operations that surround a solve: zeroing, ghost updates, lifting and boundary conditions.
+
+### Evaluation, interpolation and geometry
+
+- Evaluate a function at arbitrary points, in parallel.
+- Find the extrema of a UFL expression within each cell, or over a whole domain.
+- Project points onto the closest point of a mesh.
+- Build interpolation matrices from any `ufl.core.expr.Expr` into a compatible space.
+
+### Output
+
+- Save quadrature functions as point clouds.
+- Save any function that can tabulate dof coordinates as point clouds.
+
+### Biomedical
+
+- Read MRI data onto a mesh, as a function or as cell tags. Requires the `biomed` extra.
 
 ## Installation
 
@@ -85,10 +121,6 @@ To install the package with `conda` run
 ```bash
 conda install -c conda-forge scifem
 ```
-
-
-
-
 
 ## Having issues or want to contribute?
 

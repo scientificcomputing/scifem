@@ -3,13 +3,20 @@ import numpy.typing as npt
 import dataclasses
 
 
+__all__ = [
+    "PeriodicNodes",
+    "VertexCorrespondence",
+    "resolve_to_roots",
+]
+
+
 @dataclasses.dataclass
 class PeriodicNodes:
     """Node pairs to identify, resolved to roots.
 
     The pairs are given in the mesh's input global numbering, so they say nothing about how
     the mesh is distributed and can come from anywhere that knows it --
-    :py:func:`scifem.periodic.gmsh.extract_gmsh_periodic_nodes` reads them out of a
+    :py:func:`scifem.periodic.extract_gmsh_periodic_nodes` reads them out of a
     ``$Periodic`` section, but nothing here depends on that.
 
     Only the process that has the pairs holds them; every other one passes an empty set,
@@ -18,7 +25,8 @@ class PeriodicNodes:
 
     Args:
         replaced: 0-based node indices that are to be replaced, ascending and without
-            repeats. These are values of ``mesh.geometry.input_global_indices``.
+            repeats. These are values of
+            :py:attr:`input_global_indices<dolfinx.mesh.Geometry.input_global_indices>`.
         partner: For each entry of `replaced`, the node it is identified with. Never itself
             replaced, so no further resolution is needed.
         num_nodes_global: The size of the input global numbering, i.e. one past its largest

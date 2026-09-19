@@ -27,6 +27,12 @@ from .mesh import create_periodic_mesh_from_igi, DEFAULT_TAG_BASE
 from .utils import PeriodicNodes, resolve_to_roots
 
 
+__all__ = [
+    "extract_gmsh_periodic_nodes",
+    "read_periodic_mesh_from_msh",
+]
+
+
 def extract_gmsh_periodic_nodes(
     model, include_high_order: bool = False, tol: float | None = 1e-8
 ) -> PeriodicNodes:

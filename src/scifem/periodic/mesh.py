@@ -27,6 +27,10 @@ from .topological_search import periodic_correspondence_from_nodes
 from .geometrical_search import match_vertices_geometric
 
 __all__ = [
+    "DEFAULT_TAG_BASE",
+    "NUM_CONSENSUS_TAGS",
+    "check_cells_stayed_distinct",
+    "check_facet_ghosting",
     "create_periodic_mesh",
     "create_periodic_mesh_from_igi",
 ]
@@ -1402,7 +1406,7 @@ def create_periodic_mesh(
         The vertex ownership does not change, only additional ghosts are added to a given process
 
     Note:
-        This is :py:func:`match_vertices_geometric` followed by :py:func:`_build_periodic_mesh`.
+        This is :py:func:`match_vertices_geometric` followed by ``_build_periodic_mesh``.
         Only the first half evaluates `indicator` and `mapping_function`; a reader that
         knows the vertex pairs already, such as one for the ``$Periodic`` section of a gmsh
         file, builds a :py:class:`VertexCorrespondence` and calls the second half directly.
@@ -1413,9 +1417,10 @@ def create_periodic_mesh(
         indicator: Marks the entities to be replaced, given coordinates as ``(3, n)``.
         mapping_function: Maps a marked vertex to the one it is identified with, given
             coordinates as ``(3, n)``.
-        tag_base: The first of :py:data:`NUM_CONSENSUS_TAGS` consecutive MPI tags for the
-            consensus exchanges inside the rebuild. Only worth setting when another such
-            exchange can be in flight on an overlapping communicator at the same time --
+        tag_base: The first of :py:data:`scifem.periodic.mesh.NUM_CONSENSUS_TAGS`
+            consecutive MPI tags for the consensus exchanges inside the rebuild. Only
+            worth setting when another such exchange can be in flight on an overlapping
+            communicator at the same time --
             a nested call, or two sub-communicators that share ranks -- since the tags
             would then have to be spaced apart.
 
@@ -1465,7 +1470,7 @@ def create_periodic_mesh_from_igi(
     The point of :py:class:`VertexCorrespondence` is that it is the seam between *finding*
     the periodic pairs and *rebuilding* the mesh from them. Everything geometric -- the
     indicator, the mapping function, the tolerance, the point searches -- lives on the
-    :py:func:`match_vertices_geometric` side of it, and :py:func:`_build_periodic_mesh`
+    :py:func:`match_vertices_geometric` side of it, and ``_build_periodic_mesh``
     sees only the struct. So a reader that already knows the pairing, as gmsh does, fills
     the same fields and reuses the rebuild unchanged: no `indicator`, no
     `mapping_function`, and therefore no tolerance to tune and no risk of a snap onto the
@@ -1481,16 +1486,17 @@ def create_periodic_mesh_from_igi(
         replaced_igi, partner_igi: Corresponding node pairs, as 0-based gmsh node tags. Held
             on `root` only; ignored elsewhere. Every partner must be a root -- a node that
             is not itself a replaced -- so chains through a corner have to be resolved first,
-            which :py:func:`scifem.periodic.gmsh.extract_gmsh_periodic_nodes` does for a
+            which :py:func:`scifem.periodic.extract_gmsh_periodic_nodes` does for a
             gmsh model.
         num_nodes_global: The number of nodes in the gmsh model. Not
             :py:meth:`mesh.geometry.index_map().size_global<dolfinx.mesh.Geometry.index_map>`,
             which is smaller when :py:func:`create_mesh<dolfinx.mesh.create_mesh>` drops nodes
             no cell references.
         root: The rank holding the pairs.
-        tag_base: The first of :py:data:`NUM_CONSENSUS_TAGS` consecutive MPI tags for the
-            consensus exchanges inside the rebuild. Only worth setting when another such
-            exchange can be in flight on an overlapping communicator at the same time --
+        tag_base: The first of :py:data:`scifem.periodic.mesh.NUM_CONSENSUS_TAGS`
+            consecutive MPI tags for the consensus exchanges inside the rebuild. Only
+            worth setting when another such exchange can be in flight on an overlapping
+            communicator at the same time --
             a nested call, or two sub-communicators that share ranks -- since the tags
             would then have to be spaced apart.
 
@@ -1499,7 +1505,7 @@ def create_periodic_mesh_from_igi(
 
     Note:
         To go straight from a ``.msh`` file, use
-        :py:func:`scifem.periodic.gmsh.read_periodic_mesh_from_msh`, which reads the pairs out of
+        :py:func:`scifem.periodic.read_periodic_mesh_from_msh`, which reads the pairs out of
         the model before the reader finalizes it.
     """
     # Imported here rather than at module scope: `gmsh_periodic` builds the correspondence

@@ -14,6 +14,11 @@ from .utils import (
 import dolfinx
 
 
+__all__ = [
+    "periodic_correspondence_from_nodes",
+]
+
+
 def periodic_correspondence_from_nodes(
     mesh, pairs: PeriodicNodes, root: int = 0
 ) -> VertexCorrespondence:
@@ -22,7 +27,7 @@ def periodic_correspondence_from_nodes(
     The topological half of finding the pairs: the identification is given, as indices into
     the mesh's input global numbering, and this resolves it against the distribution. No
     coordinate is read and no tolerance is involved, which is what separates it from
-    :py:func:`scifem.periodic.geometrical_search.match_vertices_geometric`.
+    :py:func:`scifem.periodic.match_vertices_geometric`.
 
     The pairs arrive on one process while the vertices they name are spread over every one,
     and neither side knows where the other is. A post office resolves that: input global
@@ -45,7 +50,7 @@ def periodic_correspondence_from_nodes(
 
     The rank named for a partner is its *vertex* owner, which is unique -- keeping the join
     single-valued -- and always owns a cell incident to the vertex, which is what
-    ``src_owner`` of :py:class:`scifem.periodic.utils.VertexCorrespondence` requires.
+    ``src_owner`` of :py:class:`scifem.periodic.VertexCorrespondence` requires.
 
     Collective.
 

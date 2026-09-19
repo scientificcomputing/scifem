@@ -18,6 +18,18 @@ import pytest
 from scifem.periodic.gmsh import extract_gmsh_periodic_nodes
 import scifem.periodic.mesh
 
+from mpi4py import MPI
+
+import dolfinx
+import ufl
+
+from scifem.periodic.topological_search import periodic_correspondence_from_nodes
+
+from scifem.periodic import (
+    PeriodicNodes,
+    read_periodic_mesh_from_msh,
+)
+
 
 @pytest.fixture
 def gmsh_session():
@@ -240,27 +252,6 @@ def test_inconsistent_pairs_are_rejected(monkeypatch, gmsh_session):
     monkeypatch.setattr(model.mesh, "getPeriodicNodes", contradictory)
     with pytest.raises(RuntimeError, match="different roots"):
         extract_gmsh_periodic_nodes(model)
-
-
-# --------------------------------------------------------------------------- #
-# the distributed path: gmsh pairs -> VertexCorrespondence -> periodic mesh
-#
-# Run under MPI to exercise it::
-#
-#     mpirun -n 3 python3 -m pytest test_gmsh_periodic.py
-# --------------------------------------------------------------------------- #
-
-from mpi4py import MPI  # noqa: E402
-
-import dolfinx  # noqa: E402
-import ufl  # noqa: E402
-
-from scifem.periodic.topological_search import periodic_correspondence_from_nodes
-
-from scifem.periodic.gmsh import (  # noqa: E402
-    PeriodicNodes,
-    read_periodic_mesh_from_msh,
-)
 
 
 def _model_to_mesh(comm, rank, gdim):
@@ -504,9 +495,7 @@ def test_gmsh_path_replaces_the_same_vertices_as_the_geometric_path():
         v[1] += np.isclose(x[1], 0.0) * 1.0
         return v
 
-    geometric = scifem.periodic.geometrical_search.match_vertices_geometric(
-        mesh, indicator, mapping
-    )
+    geometric = scifem.periodic.match_vertices_geometric(mesh, indicator, mapping)
     from_gmsh = periodic_correspondence_from_nodes(mesh, pairs)
 
     assert_everywhere(
@@ -705,9 +694,7 @@ def test_gmsh_and_geometric_paths_agree_in_3d():
             v[d] += np.isclose(x[d], 0.0) * 1.0
         return v
 
-    geometric = scifem.periodic.geometrical_search.match_vertices_geometric(
-        mesh, indicator, mapping
-    )
+    geometric = scifem.periodic.match_vertices_geometric(mesh, indicator, mapping)
     from_gmsh = periodic_correspondence_from_nodes(mesh, pairs)
 
     assert_everywhere(

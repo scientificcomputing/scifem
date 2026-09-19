@@ -5,6 +5,11 @@ import dolfinx
 import numpy as np
 
 
+__all__ = [
+    "match_vertices_geometric",
+]
+
+
 def match_vertices_geometric(
     mesh, indicator, mapping_function, max_chain_length: int | None = None
 ) -> VertexCorrespondence:

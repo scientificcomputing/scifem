@@ -9,7 +9,7 @@
 # {py:func}`scifem.periodic.create_periodic_mesh` an indicator and a mapping function.
 # gmsh already knows the pairs when the model is meshed periodically, so a ``.msh`` file
 # carries them in its ``$Periodic`` section and nothing has to be rediscovered.
-# {py:func}`scifem.periodic.gmsh.read_periodic_mesh_from_msh` reads them.
+# {py:func}`scifem.periodic.read_periodic_mesh_from_msh` reads them.
 #
 # That route is worth preferring when it is available. There is no tolerance to tune and
 # no risk of snapping onto the wrong vertex, and it expresses rotational and reflective
@@ -32,7 +32,7 @@ import ufl
 import dolfinx
 import dolfinx.fem.petsc
 from scifem import assemble_scalar, evaluate_function
-from scifem.periodic.gmsh import read_periodic_mesh_from_msh
+from scifem.periodic import read_periodic_mesh_from_msh
 from scifem.periodic import transfer_function_to_parent_mesh
 
 # -

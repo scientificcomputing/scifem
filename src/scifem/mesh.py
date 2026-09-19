@@ -90,7 +90,7 @@ def create_entity_markers(
     """Mark entities of specified dimension according to a geometrical marker function.
 
     Args:
-        domain: A ``dolfinx.mesh.Mesh`` object
+        domain: A :py:class:`dolfinx.mesh.Mesh` object
         dim: Dimension of the entities to mark
         entities_list: A list of tuples with the following elements:
 
@@ -100,7 +100,7 @@ def create_entity_markers(
             - ``index 2``: Optional, if True, the entities will be marked on the boundary
 
     Returns:
-        A ``dolfinx.mesh.MeshTags`` object with the corresponding entities marked.
+        A :py:class:`dolfinx.mesh.MeshTags` object with the corresponding entities marked.
         If an entity satisfies multiple input marker functions,
         it is not deterministic what value the entity gets.
 
