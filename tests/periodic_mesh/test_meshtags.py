@@ -25,7 +25,8 @@ from mpi4py import MPI
 
 import dolfinx
 
-from scifem.periodic.mesh import create_periodic_mesh, transfer_meshtags_to_periodic_mesh
+from scifem.periodic.mesh import create_periodic_mesh
+from scifem.periodic.transfer import transfer_meshtags_to_periodic_mesh
 
 
 def unit_square(n=8):

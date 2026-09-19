@@ -27,7 +27,6 @@ from .topological_search import periodic_correspondence_from_nodes
 from .geometrical_search import match_vertices_geometric
 
 __all__ = [
-    "transfer_meshtags_to_periodic_mesh",
     "create_periodic_mesh",
     "create_periodic_mesh_from_igi",
 ]
@@ -38,62 +37,6 @@ DEFAULT_TAG_BASE = 1101
 #: How many consecutive tags from ``tag_base`` the rebuild consumes, so that a caller
 #: making several overlapping calls knows how far apart to space them.
 NUM_CONSENSUS_TAGS = 5
-
-
-def transfer_meshtags_to_periodic_mesh(
-    mesh: dolfinx.mesh.Mesh,
-    periodic_mesh: dolfinx.mesh.Mesh,
-    replaced_vertices: npt.NDArray[np.int32],
-    meshtags: dolfinx.mesh.MeshTags,
-) -> dolfinx.mesh.MeshTags:
-    """
-    Transfer a mesh tag from a mesh to the periodic mesh.
-
-    Note:
-        Entities that have been replaced (vertices, edges, faces) are removed from the mesh tag
-
-    Args:
-        mesh: The original mesh
-        periodic_mesh: The periodic mesh
-        replaced_vertices: The vertices that have been replaced (local to process)
-        meshtags: The mesh tag to transfer
-    """
-
-    # Remove entities that are fully replaced (all incident vertices replaced).
-    if meshtags.dim != mesh.topology.dim:
-        mesh.topology.create_connectivity(meshtags.dim, 0)
-        e_to_v = mesh.topology.connectivity(meshtags.dim, 0)
-        # One cell type, so the offsets are a constant stride and the connectivity can be
-        # read as a rectangular array. The assert is where a mixed-topology mesh stops.
-        stride = np.diff(e_to_v.offsets)
-        assert np.all(stride == stride[:1]), (
-            f"entities of dimension {meshtags.dim} do not all have the same number of"
-            " vertices, so the connectivity cannot be read as a rectangular array"
-        )
-        # Dropped when every vertex is replaced: the entity has been merged into its
-        # partner, and its input global indices no longer name anything.
-        entity_vertices = e_to_v.array.reshape(len(e_to_v.offsets) - 1, -1)
-        dropped = np.isin(entity_vertices[meshtags.indices], replaced_vertices).all(axis=1)
-        indices = meshtags.indices[~dropped]
-        values = meshtags.values[~dropped]
-    else:
-        indices = meshtags.indices
-        values = meshtags.values
-    geom_indices = dolfinx.mesh.entities_to_geometry(mesh, meshtags.dim, indices)
-    igi_indices = mesh.geometry.input_global_indices[geom_indices]
-
-    periodic_mesh.topology.create_connectivity(mesh.topology.dim, 0)  # This should exist by default
-    periodic_mesh.topology.create_entities(meshtags.dim)  # This has to be created
-    periodic_mesh.topology.create_connectivity(
-        meshtags.dim, 0
-    )  # This is requried before distribute entity data
-    local_entities, local_values = dolfinx.io.distribute_entity_data(
-        periodic_mesh, meshtags.dim, igi_indices, values
-    )
-    adj = dolfinx.graph.adjacencylist(local_entities)
-    return dolfinx.mesh.meshtags_from_entities(
-        periodic_mesh, meshtags.dim, adj, local_values.astype(np.int32, copy=False)
-    )
 
 
 def gather_ragged(offsets, selection):
