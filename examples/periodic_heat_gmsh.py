@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 #
-# The {doo}`Poisson example <periodic_poisson>` found its periodic vertex
+# The {doc}`Poisson example <periodic_poisson>` found its periodic vertex
 # pairs from the coordinates, by giving
 # {py:func}`scifem.periodic.create_periodic_mesh` an indicator and a mapping function.
 # gmsh already knows the pairs when the model is meshed periodically, so a ``.msh`` file
