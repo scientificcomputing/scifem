@@ -2,11 +2,6 @@
 API reference
 #############
 
-The names below are grouped by what they are for. Everything down to `Solvers`_ is
-re-exported at the top level, so ``scifem.assemble_scalar`` and
-``scifem.assembly.assemble_scalar`` are the same function and the short path is the
-documented one. The subpackages are documented under their own paths.
-
 .. currentmodule:: scifem
 
 Mesh utilities
@@ -90,29 +85,19 @@ Solvers
 Periodic meshes
 ###############
 
-Building a periodic mesh, and moving data on and off it
-=======================================================
+Building a mesh periodic, moving data on and off it, and the vertex correspondence the
+rebuild runs on -- found either from the coordinates or from the ``$Periodic`` section of
+a gmsh model.
 
 .. automodule:: scifem.periodic
     :members:
 
-.. automodule:: scifem.periodic.utils
-    :members:
+The two MPI tag constants are documented from the module that defines them, since that is
+where their values are written down.
 
-Finding the periodic vertex pairs
-=================================
+.. autodata:: scifem.periodic.mesh.DEFAULT_TAG_BASE
 
-The rebuild above takes the vertex correspondence as input. It can be found from the
-coordinates, or read from the ``$Periodic`` section of a gmsh model.
-
-.. automodule:: scifem.periodic.geometrical_search
-    :members:
-
-.. automodule:: scifem.periodic.topological_search
-    :members:
-
-.. automodule:: scifem.periodic.gmsh
-    :members:
+.. autodata:: scifem.periodic.mesh.NUM_CONSENSUS_TAGS
 
 PETSc utilities
 ###############
