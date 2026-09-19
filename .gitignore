@@ -173,3 +173,6 @@ cython_debug/
 *.msh
 _audit
 _probe*.py
+*.pvtu
+*.vtu
+*.pvd
