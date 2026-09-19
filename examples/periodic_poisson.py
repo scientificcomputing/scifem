@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: MIT
 #
 # This example solves the Poisson problem on a doubly periodic unit square built with
-# {py:func}`scifem.periodic.mesh.create_periodic_mesh`, and covers the three things that
+# {py:func}`scifem.periodic.create_periodic_mesh`, and covers the three things that
 # are easy to get wrong on such a mesh:
 #
 # 1. **Building it.** What the indicator and mapping functions have to do, and what the
@@ -24,11 +24,12 @@ import numpy as np
 import pyvista
 import ufl
 
+import basix.ufl
 import dolfinx
 import dolfinx.fem.petsc
-from scifem import assemble_scalar, create_real_functionspace
-from scifem.periodic.mesh import create_periodic_mesh
-from scifem.periodic.transfer import transfer_function_to_parent_mesh
+from scifem import assemble_scalar
+from scifem.periodic import create_periodic_mesh
+from scifem.periodic import transfer_function_to_parent_mesh
 
 # -
 
@@ -36,7 +37,7 @@ from scifem.periodic.transfer import transfer_function_to_parent_mesh
 #
 # We start from an ordinary mesh. It must carry a layer of ghost cells across every
 # interprocess facet, which is the default for
-# {py:func}`dolfinx.mesh.create_unit_square`; `create_periodic_mesh` checks this and
+# {py:func}`dolfinx.mesh.create_unit_square`; {py:func}`scifem.periodic.create_periodic_mesh` checks this and
 # raises if it is missing.
 
 N = 25
@@ -123,7 +124,7 @@ if mesh.comm.rank == 0:
 # `ksp_type: preonly` PETSc always reports convergence, so `ksp_error_if_not_converged`
 # never fires, and MUMPS' null-pivot detection (`mat_mumps_icntl_24`) returns a vector
 # regardless. Pinning the mean with a Lagrange multiplier instead, as in the
-# {ref}`real function space example <examples/real_function_space.py>`, makes the system
+# {doc}`real_function_space`, makes the system
 # nonsingular, so an incompatible $f$ shows up as a wrong answer rather than a plausible
 # one.
 #
@@ -160,7 +161,8 @@ def u_exact(x):
 # +
 degree = 2
 V = dolfinx.fem.functionspace(periodic_mesh, ("Lagrange", degree))
-R = create_real_functionspace(periodic_mesh)
+r_el = basix.ufl.real_element(periodic_mesh.basix_cell(), shape=())
+R = dolfinx.fem.functionspace(periodic_mesh, r_el)
 
 W = ufl.MixedFunctionSpace(V, R)
 u, lmbda = ufl.TrialFunctions(W)
@@ -285,7 +287,6 @@ if mesh.comm.rank == 0:
 # the domain*, so no single coordinate can represent it -- whichever cell is visited last
 # wins. Every cell touching the seam then gets drawn stretched right across the domain.
 
-# +
 dof_x = V.tabulate_dof_coordinates()
 stretched = 0
 for cell in range(periodic_mesh.topology.index_map(tdim).size_local):
@@ -295,13 +296,12 @@ stretched = mesh.comm.allreduce(stretched, op=MPI.SUM)
 num_cells = periodic_mesh.topology.index_map(tdim).size_global
 if mesh.comm.rank == 0:
     print(f"cells VTX would draw stretched across the domain: {stretched}/{num_cells}")
-# -
 
 # ### Moving the solution to the parent mesh
 #
 # The geometry of the periodic mesh still has both sides of the seam, so the fix is to
 # put the solution back on the mesh it was built from, where the two sides are distinct
-# nodes again. `create_periodic_mesh` preserves cells -- local cell `c` is the same cell
+# nodes again. {py:func}`scifem.periodic.create_periodic_mesh` preserves cells -- local cell `c` is the same cell
 # in both meshes, with the same geometry dofmap -- so
 # {py:func}`scifem.periodic.transfer.transfer_function_to_parent_mesh` is a per-cell
 # copy.
