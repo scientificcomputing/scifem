@@ -169,26 +169,26 @@ def transfer_meshtags_to_submesh(
     submesh.topology.create_connectivity(sub_tdim, entity_tag.dim)
     entity_tag.topology.create_connectivity(dim, 0)
     entity_tag.topology.create_connectivity(dim, sub_tdim)
-    if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
-        cpp_tag = dolfinx.mesh.transfer_meshtags_to_submesh(
-            entity_tag, submesh, cell_to_parent, vertex_to_parent
-        )
-        warn(
-            "The returned sub_to_parent_entity_map is empty, as it was wrong"
-            + " in previous iterations."
-            + "Consult the library authors if you need this mapping.",
-            DeprecationWarning,
-        )
-        sub_to_parent_entity_map = np.array([], dtype=np.int32)
-    else:
-        v_to_p = get_entity_map(vertex_to_parent)
-        c_to_p = get_entity_map(cell_to_parent)
-        cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
-            entity_tag._cpp_object,
-            submesh.topology._cpp_object,
-            vertex_to_parent=v_to_p,
-            cell_to_parent=c_to_p,
-        )
+    # if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
+    #     cpp_tag = dolfinx.mesh.transfer_meshtags_to_submesh(
+    #         entity_tag, submesh, cell_to_parent, vertex_to_parent
+    #     )
+    #     warn(
+    #         "The returned sub_to_parent_entity_map is empty, as it was wrong"
+    #         + " in previous iterations."
+    #         + "Consult the library authors if you need this mapping.",
+    #         DeprecationWarning,
+    #     )
+    #     sub_to_parent_entity_map = np.array([], dtype=np.int32)
+    # else:
+    v_to_p = get_entity_map(vertex_to_parent)
+    c_to_p = get_entity_map(cell_to_parent)
+    cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
+        entity_tag._cpp_object,
+        submesh.topology._cpp_object,
+        vertex_to_parent=v_to_p,
+        cell_to_parent=c_to_p,
+    )
     return dolfinx.mesh.MeshTags(cpp_tag), sub_to_parent_entity_map
 
 

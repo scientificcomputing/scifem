@@ -12,8 +12,8 @@
 #    resulting mesh does and does not change.
 # 2. **Checking the answer.** Why the source has to be mean free, and why the obvious
 #    test solutions don't actually distinguish a periodic mesh from a broken one.
-# 3. **Looking at it.** `VTXWriter` and `VTKFile` draw a periodic mesh wrong, for a
-#    reason that is worth understanding rather than working around blindly.
+# 3. **Looking at it.** {py:class}`VTXWriter<dolfinx.io.VTXWriter>` and
+#    {py:class}`VTKFile<dolfinx.io.VTKFile>` draw a periodic mesh wrongly.
 
 # +
 from mpi4py import MPI
@@ -37,6 +37,13 @@ from scifem.periodic import transfer_function_to_parent_mesh
 # interprocess facet, which is the default for
 # {py:func}`dolfinx.mesh.create_unit_square`;
 # {py:func}`scifem.periodic.create_periodic_mesh` checks this and raises if it is missing.
+# If you build your mesh by hand, please ensure that you supply
+# {py:attr}`dolfinx.mesh.GhostMode.shared_facet` in the mesh construction
+# ```{tip} API compatibility
+# On `main` of DOLFINx, ghost mode is supplied directly to {py:func}`dolfinx.mesh.create_mesh`,
+# rather than through the partitioner. Use {py:func}`scifem.compat.create_partitioner` to get
+# a partitioner that works on all versions.
+# ```
 
 N = 25
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N)

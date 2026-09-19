@@ -3,6 +3,41 @@
 import numpy.typing as npt
 import numpy as np
 import dolfinx
+import inspect
+
+
+def create_partitioner(
+    ghost_mode: dolfinx.mesh.GhostMode = dolfinx.mesh.GhostMode.shared_facet,
+    max_facet_to_cell_links: int = 2,
+):
+    """Create a partitioner across the supported DOLFINx versions.
+
+    The constructor has changed shape more than once and none of the forms is
+    introspectable, so they are told apart by the `TypeError` the call itself raises:
+
+    1. communicator and ghost mode only, everything else through setters;
+    2. the same with `max_facet_to_cell_links` passed positionally;
+    3. as (2) without the communicator.
+
+    Args:
+        comm: The communicator of the new partitioner.
+        ghost_mode: The ghosting mode to use.
+        max_facet_to_cell_links: Maximum number of cells that can share a facet. Used by
+            forms (2) and (3) only, which take it directly; form (1) does not accept it.
+
+    Returns:
+        The default partitioner
+    """
+    if not hasattr(dolfinx.mesh, "create_cell_partitioner"):
+        partitioner = dolfinx.graph.partitioner()
+    else:
+        sig = inspect.signature(dolfinx.mesh.create_cell_partitioner)
+        part_kwargs = {}
+        if "max_facet_to_cell_links" in sig.parameters:
+            part_kwargs["max_facet_to_cell_links"] = max_facet_to_cell_links
+
+        partitioner = dolfinx.mesh.create_cell_partitioner(ghost_mode, **part_kwargs)
+    return partitioner
 
 
 def cmap(mesh: dolfinx.mesh.Mesh) -> dolfinx.fem.CoordinateElement:

@@ -9,8 +9,6 @@ second. Run them with::
     python3 -m pytest test_gmsh_periodic.py
 """
 
-import inspect
-
 import gmsh
 import numpy as np
 import pytest
@@ -29,6 +27,7 @@ from scifem.periodic import (
     PeriodicNodes,
     read_periodic_mesh_from_msh,
 )
+from scifem.periodic.gmsh import model_to_mesh
 
 
 @pytest.fixture
@@ -254,28 +253,6 @@ def test_inconsistent_pairs_are_rejected(monkeypatch, gmsh_session):
         extract_gmsh_periodic_nodes(model)
 
 
-def _model_to_mesh(comm, rank, gdim):
-    """``model_to_mesh`` with shared-facet ghosting, wherever the version wants it told.
-
-    On 0.12 it is a ``model_to_mesh`` keyword; on 0.11 it goes through the partitioner.
-    Getting this wrong does not fail here -- it fails much later, when an interior facet
-    integral finds an interprocess facet with only one cell.
-    """
-    ghost_mode = dolfinx.mesh.GhostMode.shared_facet
-    if "ghost_mode" in inspect.signature(dolfinx.io.gmsh.model_to_mesh).parameters:
-        kwargs = {"ghost_mode": ghost_mode}
-    else:
-        part_sig = inspect.signature(dolfinx.mesh.create_cell_partitioner)
-        part_kwargs = (
-            {"max_facet_to_cell_links": 2}
-            if "max_facet_to_cell_links" in part_sig.parameters
-            else {}
-        )
-        kwargs = {"partitioner": dolfinx.mesh.create_cell_partitioner(ghost_mode, **part_kwargs)}
-    mesh_data = dolfinx.io.gmsh.model_to_mesh(gmsh.model, comm, rank, gdim=gdim, **kwargs)
-    return getattr(mesh_data, "mesh", mesh_data)
-
-
 def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_replaced=False, order=1):
     """A distributed unit square from gmsh, with the pairs read off its model.
 
@@ -331,7 +308,7 @@ def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_replaced=Fa
     else:
         pairs = PeriodicNodes()
 
-    mesh = _model_to_mesh(comm, 0, gdim=2)
+    mesh = model_to_mesh(gmsh.model, comm, rank=0, gdim=2)
     if started_here:
         gmsh.finalize()
     return mesh, pairs
@@ -562,17 +539,10 @@ def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
     comm.Barrier()
 
     ghost_mode = dolfinx.mesh.GhostMode.shared_facet
-    if "ghost_mode" in inspect.signature(dolfinx.io.gmsh.model_to_mesh).parameters:
-        kwargs = {"ghost_mode": ghost_mode}
-    else:
-        part_sig = inspect.signature(dolfinx.mesh.create_cell_partitioner)
-        part_kwargs = (
-            {"max_facet_to_cell_links": 2}
-            if "max_facet_to_cell_links" in part_sig.parameters
-            else {}
-        )
-        kwargs = {"partitioner": dolfinx.mesh.create_cell_partitioner(ghost_mode, **part_kwargs)}
-    periodic_mesh, _, _ = read_periodic_mesh_from_msh(filename, comm, gdim=2, **kwargs)
+    partitioner = scifem.compat.create_partitioner(ghost_mode=ghost_mode, max_facet_to_cell_links=2)
+    periodic_mesh, _, _ = read_periodic_mesh_from_msh(
+        filename, comm, gdim=2, partitioner=partitioner
+    )
 
     num_vertices, volume, bad, jump = torus_invariants(periodic_mesh)
     assert (num_vertices, bad) == (33, 0)
@@ -648,7 +618,7 @@ def periodic_box(comm, res=1.0 / 4, low_is_replaced=True, order=1):
     else:
         pairs = PeriodicNodes()
 
-    mesh = _model_to_mesh(comm, 0, gdim=3)
+    mesh = model_to_mesh(gmsh.model, comm, rank=0, gdim=3)
     if started_here:
         gmsh.finalize()
     return mesh, pairs

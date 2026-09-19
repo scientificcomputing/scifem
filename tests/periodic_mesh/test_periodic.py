@@ -24,6 +24,7 @@ import ufl
 
 import dolfinx
 
+from scifem.compat import create_partitioner
 from scifem.periodic.geometrical_search import match_vertices_geometric
 from scifem.periodic.mesh import create_periodic_mesh
 from scifem.periodic.mesh import (
@@ -674,21 +675,18 @@ def test_a_facet_with_three_distinct_cells_is_not_a_collapse():
         cells = np.zeros((0, 3), dtype=np.int64)
 
     # Ghosting is a `create_mesh` keyword on 0.12 and a partitioner on 0.11, the same split
-    # `_model_to_mesh` carries in test_gmsh_periodic.py. Both places have to be told that a
+    # `model_to_mesh` carries in test_gmsh_periodic.py. Both places have to be told that a
     # facet may carry three cells, or the third sheet is not ghosted and the check sees two.
+    partitioner = create_partitioner(dolfinx.mesh.GhostMode.shared_facet, max_facet_to_cell_links=3)
     ghost_mode = dolfinx.mesh.GhostMode.shared_facet
+    kwargs = {}
     if "ghost_mode" in inspect.signature(dolfinx.mesh.create_mesh).parameters:
-        ghosting = {"ghost_mode": ghost_mode}
-    else:
-        ghosting = {
-            "partitioner": dolfinx.mesh.create_cell_partitioner(
-                ghost_mode, max_facet_to_cell_links=3
-            )
-        }
+        kwargs["ghost_mode"] = ghost_mode
+    kwargs["partitioner"] = partitioner
 
     domain = ufl.Mesh(basix.ufl.element("Lagrange", "triangle", 1, shape=(3,)))
     mesh = dolfinx.mesh.create_mesh(
-        comm, cells, domain, points, max_facet_to_cell_links=3, **ghosting
+        comm, cells, domain, points, max_facet_to_cell_links=3, **kwargs
     )
     assert mesh.topology.index_map(2).size_global == 6
 

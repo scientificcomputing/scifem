@@ -20,17 +20,51 @@ what a reader of the gmsh documentation will see.
 
 from __future__ import annotations
 
-
+import typing
+from mpi4py import MPI as _MPI
 import dolfinx
 import numpy as np
 from .mesh import create_periodic_mesh_from_igi, DEFAULT_TAG_BASE
 from .utils import PeriodicNodes, resolve_to_roots
-
+import inspect
+from ..compat import create_partitioner
 
 __all__ = [
     "extract_gmsh_periodic_nodes",
     "read_periodic_mesh_from_msh",
+    "model_to_mesh",
 ]
+
+
+def model_to_mesh(
+    model,
+    comm,
+    rank: int = 0,
+    gdim: int = 3,
+    max_facet_to_cell_links: int = 2,
+    ghost_mode: dolfinx.mesh.GhostMode = dolfinx.mesh.GhostMode.shared_facet,
+    partitioner: typing.Callable[
+        [_MPI.Comm, int, int, dolfinx.cpp.graph.AdjacencyList_int32],
+        dolfinx.cpp.graph.AdjacencyList_int32,
+    ]
+    | None = None,
+):
+    """``model_to_mesh`` with shared-facet ghosting, wherever the version wants it told.
+
+    On 0.12 it is a ``model_to_mesh`` keyword; on 0.11 it goes through the partitioner.
+    Getting this wrong does not fail here -- it fails much later, when an interior facet
+    integral finds an interprocess facet with only one cell.
+    """
+    kwargs = {}
+    if "ghost_mode" in inspect.signature(dolfinx.io.gmsh.model_to_mesh).parameters:
+        kwargs["ghost_mode"] = ghost_mode
+    if "max_facet_to_cell_links" in inspect.signature(dolfinx.io.gmsh.model_to_mesh).parameters:
+        kwargs["max_facet_to_cell_links"] = max_facet_to_cell_links
+    partitioner = create_partitioner(ghost_mode, max_facet_to_cell_links=max_facet_to_cell_links)
+    if "partitioner" in inspect.signature(dolfinx.io.gmsh.model_to_mesh).parameters:
+        kwargs["partitioner"] = partitioner
+    mesh_data = dolfinx.io.gmsh.model_to_mesh(model, comm, rank=rank, gdim=gdim, **kwargs)
+    return getattr(mesh_data, "mesh", mesh_data)
 
 
 def extract_gmsh_periodic_nodes(
@@ -161,9 +195,8 @@ def read_periodic_mesh_from_msh(
             pairs = extract_gmsh_periodic_nodes(gmsh.model)
         else:
             pairs = PeriodicNodes(0)
-
-        mesh_data = dolfinx.io.gmsh.model_to_mesh(
-            gmsh.model, comm, rank, gdim=gdim, partitioner=partitioner, **kwargs
+        mesh_data = model_to_mesh(
+            gmsh.model, comm, rank=rank, gdim=gdim, partitioner=partitioner, **kwargs
         )
     finally:
         if started_here and gmsh.isInitialized():
