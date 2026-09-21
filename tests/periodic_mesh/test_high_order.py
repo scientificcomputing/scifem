@@ -15,6 +15,8 @@ Run serially, or under MPI::
     mpirun -n 3 python3 -m pytest test_high_order.py
 """
 
+import inspect
+
 import basix
 import dolfinx
 import numpy as np
@@ -59,6 +61,16 @@ def higher_order(mesh, degree):
     variant = 0 if degree <= 2 else int(basix.LagrangeVariant.gll_isaac)
     cmap = dolfinx.fem.coordinate_element(mesh.topology.cell_type, degree, variant)
     return dolfinx.fem.interpolate_geometry(mesh, cmap)
+
+
+def supports_discontinuous_geometry():
+    """Whether this DOLFINx takes a `discontinuous` flag for its coordinate element.
+
+    scifem supports more than one DOLFINx release. The flag arrives with
+    FEniCS/dolfinx#4544, and without it a torn geometry cannot be asked for at all, so the
+    test below is expected to fail rather than skipped.
+    """
+    return "discontinuous" in inspect.signature(dolfinx.fem.coordinate_element).parameters
 
 
 def discontinuous_element(cell_name, degree):
@@ -261,6 +273,7 @@ def test_geometry_can_be_raised_after_the_merge():
 
 
 @pytest.mark.xfail(
+    not supports_discontinuous_geometry(),
     strict=True,
     reason=(
         "needs FEniCS/dolfinx#4544, `Discontinuous CoordinateElement`, which exposes"

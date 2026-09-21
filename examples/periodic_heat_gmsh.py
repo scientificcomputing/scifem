@@ -241,22 +241,29 @@ with dolfinx.io.VTXWriter(mesh.comm, "periodic_heat.bp", [u_parent]) as writer:
 # cylinder, cut in two by where we chose to unroll it.
 
 # +
-grid = pyvista.UnstructuredGrid(*dolfinx.plot.vtk_mesh(u_parent.function_space))
-grid.point_data["u"] = u_parent.x.array.real
+solution_mesh = pyvista.UnstructuredGrid(*dolfinx.plot.vtk_mesh(u_parent.function_space))
+solution_mesh.point_data["u"] = u_parent.x.array.real
 
 # The temperature is small in absolute terms, so scale the warp to a fixed height.
 peak = comm.allreduce(np.abs(u_parent.x.array).max(), op=MPI.MAX)
 
-plotter = pyvista.Plotter()
-plotter.add_mesh(
-    grid.warp_by_scalar("u", factor=0.5 / peak),
-    scalars="u",
-    cmap="inferno",
-    scalar_bar_args={"title": "u"},
-)
-plotter.add_mesh(grid, style="wireframe", color="gray", opacity=0.25)
-plotter.camera_position = [(0.5, -2.1, 1.9), (0.5, 0.5, 0.15), (0.0, 0.0, 1.0)]
-plotter.camera.zoom(1.15)
-if not pyvista.OFF_SCREEN:
-    plotter.show()
+# Each process holds only its own piece of the mesh, so the pieces are merged onto rank 0;
+# plotting without this would give one picture of each partition rather than of the domain.
+pieces = comm.gather(solution_mesh, root=0)
+if pieces is not None:
+    grid = pyvista.merge(pieces)
+    plotter = pyvista.Plotter()
+    plotter.add_mesh(
+        grid.warp_by_scalar("u", factor=0.5 / peak),
+        scalars="u",
+        cmap="inferno",
+        scalar_bar_args={"title": "u"},
+    )
+    plotter.add_mesh(grid, style="wireframe", color="gray", opacity=0.25)
+    plotter.camera_position = [(0.5, -2.1, 1.9), (0.5, 0.5, 0.15), (0.0, 0.0, 1.0)]
+    plotter.camera.zoom(1.15)
+    if not pyvista.OFF_SCREEN:
+        plotter.show()
+    else:
+        plotter.screenshot("periodic_heat.png")
 # -
