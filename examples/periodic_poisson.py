@@ -66,7 +66,7 @@ mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, ghost_mode=dolfinx.
 # corner $(1, 1)$ as well: it is marked once, and the mapping has to shift it in *both*
 # directions at once so that it lands on $(0, 0)$.
 
-# + 
+# +
 def indicator(x):
     return np.isclose(x[0], 1.0) | np.isclose(x[1], 1.0)
 
@@ -83,7 +83,7 @@ periodic_mesh, replaced_vertices, replacement_map = create_periodic_mesh(
 )
 # -
 
-# The rebuild is purely **topological**; 
+# The rebuild is purely **topological**;
 # the {py:class}`dolfinx.mesh.Topology` loses a set of vertices,
 # because each pair has been merged into a single vertex.
 # The **geometry** is untouched: every node of the original
@@ -114,11 +114,11 @@ if mesh.comm.rank == 0:
 
 # So the mesh is a torus topologically, while still retaining all its node coordinates.
 # The two cells that meet across the seam are genuine neighbours, and a continuous
-# function space on the periodic mesh is automatically periodic. 
+# function space on the periodic mesh is automatically periodic.
 # There is no [constraint matrix](https://github.com/jorgensd/dolfinx_mpc.git), and no
 # boundary condition to apply, because the domain now has no boundary at all.
 
-# + 
+# +
 def compute_num_exterior_facets(mesh):
     """Count the number of exterior facets on a mesh."""
     mesh.topology.create_connectivity(mesh.topology.dim - 1, mesh.topology.dim)
