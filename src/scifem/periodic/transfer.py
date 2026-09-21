@@ -92,23 +92,18 @@ def transfer_function_to_parent_mesh(
         A function on ``parent_mesh``, in the same space as ``u``
 
     Note:
-        The transfer is a cell-wise copy, as ``create_periodic_mesh`` leaves the cells and
-        the geometry untouched. It therefore requires an element whose dof
-        transformations are folded into the dofmap, which is the case for Lagrange and
-        discontinuous Lagrange, but not for ``RT``, ``N1curl`` or ``BDM``. Those are not
-        accepted by the writers either, so interpolate them first.
+        The transfer is cell-wise, as ``create_periodic_mesh`` leaves the cells and the
+        geometry untouched. Merging the seam can change a cell's orientation, so the two
+        meshes need not agree on the dof transformations of a cell; the cell-wise
+        :py:meth:`dolfinx.fem.Function.interpolate` used here accounts for that, so
+        elements that apply their transformations at assembly time, such as ``RT``,
+        ``N1curl`` and ``BDM``, transfer correctly too. The writers still require Lagrange
+        or discontinuous Lagrange, so interpolate before writing.
 
     Raises:
-        ValueError: If the element of ``u`` needs runtime dof transformations, or if
-            ``parent_mesh`` does not have the same cells as the mesh of ``u``
+        ValueError: If ``parent_mesh`` does not have the same cells as the mesh of ``u``
     """
     V = u.function_space
-    if V.element.needs_dof_transformations:
-        raise ValueError(
-            f"Cannot transfer a '{V.ufl_element().family_name}' function cell-wise, as its"
-            " dof transformations are not folded into the dofmap. Interpolate into"
-            " Lagrange or discontinuous Lagrange first."
-        )
     cell_map = parent_mesh.topology.index_map(parent_mesh.topology.dim)
     if cell_map.size_local != V.mesh.topology.index_map(V.mesh.topology.dim).size_local:
         raise ValueError("parent_mesh does not have the same cells as the mesh of u.")

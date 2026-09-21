@@ -151,12 +151,26 @@ def test_transfer_survives_the_dof_reordering(meshes, degree):
     assert mesh.comm.allreduce(local, op=MPI.MAX) > 1e-13
 
 
-def test_rejects_an_element_needing_dof_transformations(meshes):
-    """RT/N1curl/BDM keep their transformations out of the dofmap, so a copy is invalid."""
+@pytest.mark.parametrize("family", ["RT", "N1curl", "BDM"])
+@pytest.mark.parametrize("degree", [1, 2, 3])
+def test_transfer_handles_elements_needing_dof_transformations(meshes, family, degree):
+    """RT/N1curl/BDM apply their transformations at assembly rather than folding them into
+    the dofmap, so the transfer has to account for the orientations the two meshes disagree
+    on. The result must still match interpolating on the parent."""
     mesh, periodic_mesh = meshes
-    u = dolfinx.fem.Function(dolfinx.fem.functionspace(periodic_mesh, ("RT", 1)))
-    with pytest.raises(ValueError, match="not folded into the dofmap"):
-        transfer_function_to_parent_mesh(u, mesh)
+    V = dolfinx.fem.functionspace(periodic_mesh, (family, degree))
+    assert V.element.needs_dof_transformations, (
+        f"{family}{degree} folds its transformations into the dofmap, so this test is vacuous"
+    )
+    u = dolfinx.fem.Function(V)
+    u.interpolate(_periodic_vector)
+
+    transferred = transfer_function_to_parent_mesh(u, mesh)
+
+    expected = dolfinx.fem.Function(dolfinx.fem.functionspace(mesh, (family, degree)))
+    expected.interpolate(_periodic_vector)
+
+    np.testing.assert_allclose(transferred.x.array, expected.x.array, atol=1e-13)
 
 
 def test_rejects_an_unrelated_parent_mesh(meshes):
