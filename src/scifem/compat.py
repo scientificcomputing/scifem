@@ -5,6 +5,8 @@ import numpy as np
 import dolfinx
 import inspect
 
+__all__ = ["create_partitioner"]
+
 
 def create_partitioner(
     ghost_mode: dolfinx.mesh.GhostMode = dolfinx.mesh.GhostMode.shared_facet,

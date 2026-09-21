@@ -110,3 +110,10 @@ XDMF output
 
 .. automodule:: scifem.xdmf
     :members:
+
+
+Compat functions
+################
+
+.. automodule:: scifem.compat
+    :members:

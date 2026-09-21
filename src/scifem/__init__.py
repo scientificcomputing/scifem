@@ -24,6 +24,7 @@ from .eval import evaluate_function, find_cell_extrema, compute_extrema
 from .interpolation import interpolation_matrix, prepare_interpolation_data
 from .geometry import closest_point_projection
 from scifem import periodic
+from scifem import compat
 
 meta = metadata("scifem")
 __version__ = meta["Version"]
@@ -43,6 +44,7 @@ __all__ = [
     "closest_point_projection",
     "assemble_scalar",
     "create_space_of_simple_functions",
+    "compat",
     "compute_interface_data",
     "compute_subdomain_exterior_facets",
     "create_real_functionspace",
