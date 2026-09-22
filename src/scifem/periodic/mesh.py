@@ -53,7 +53,8 @@ def gather_ragged(offsets, selection):
     Returns:
         ``(positions, sizes)``: where in `data` each element of the concatenation lies, so
         that ``data[positions]`` is the concatenation itself, and the size of each group
-        taken, so that a running sum of it gives the concatenation's own offsets.
+        taken, so that a running sum of it gives the concatenation's own offsets. Both are
+        ``np.intp``, so that `sizes` can be handed straight back to ``np.repeat``.
 
     Example:
 
@@ -66,10 +67,15 @@ def gather_ragged(offsets, selection):
         gives ``positions = [2, 3, 4, 0, 1]`` and ``sizes = [3, 2]``.
     """
     selection = np.asarray(selection)
-    sizes = (offsets[selection + 1] - offsets[selection]).astype(np.int64)
+    # `intp`, not `int64`: `sizes` is used as repeat counts, both here and by the callers,
+    # and `np.repeat` casts those to `np.intp` under the 'safe' rule. On a 32-bit platform
+    # `intp` is `int32`, so an `int64` count array is refused outright rather than
+    # narrowed. `intp` is wide enough by construction -- a group size is bounded by the
+    # length of `data`, which is indexed by `intp` in the first place.
+    sizes = (offsets[selection + 1] - offsets[selection]).astype(np.intp)
     # Position within its own group, for every element of the concatenation at once.
     within = np.arange(int(sizes.sum())) - np.repeat(np.cumsum(sizes) - sizes, sizes)
-    return np.repeat(offsets[selection], sizes) + within, sizes
+    return (np.repeat(offsets[selection], sizes) + within).astype(np.intp, copy=False), sizes
 
 
 def _reduced_vertex_map(mesh, indicator_vertices):

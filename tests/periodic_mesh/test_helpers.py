@@ -84,6 +84,20 @@ def test_gather_ragged_docstring_example():
     assert np.array_equal(sizes, [3, 2])
 
 
+def test_gather_ragged_returns_counts_np_repeat_accepts():
+    """`np.repeat` casts its repeat counts to `np.intp` under the 'safe' rule.
+
+    `sizes` is used as repeat counts by every caller, so an `int64` `sizes` fails on a
+    32-bit platform, where `intp` is `int32` -- see
+    https://github.com/scientificcomputing/scifem/issues/259. The assertion is a no-op on a
+    64-bit platform, where `intp` is `int64` and both dtypes work; it is here to state the
+    contract the callers rely on.
+    """
+    offsets = np.array([0, 2, 2, 5], dtype=np.int64)
+    positions, sizes = gather_ragged(offsets, np.array([2, 0], dtype=np.int64))
+    assert sizes.dtype == np.intp and positions.dtype == np.intp
+
+
 def test_gather_ragged_takes_an_empty_group():
     offsets = np.array([0, 2, 2, 5], dtype=np.int64)
     positions, sizes = gather_ragged(offsets, np.array([1, 1], dtype=np.int64))
