@@ -29,6 +29,7 @@ from scifem.periodic.gmsh import extract_gmsh_periodic_nodes
 from scifem.periodic.mesh import create_periodic_mesh_from_igi
 from scifem.periodic.transfer import transfer_function_to_parent_mesh
 from scifem.periodic.utils import PeriodicNodes
+from scifem.compat import create_partitioner
 
 
 def _periodic_scalar(x):
@@ -77,9 +78,13 @@ def meshes():
         # `model_to_mesh` does not give by default.
         gmodel_to_mesh = inspect.signature(dolfinx.io.gmsh.model_to_mesh)
         kwargs = {}
+        ghost_mode = dolfinx.mesh.GhostMode.shared_facet
         if "ghost_mode" in gmodel_to_mesh.parameters:
-            kwargs["ghost_mode"] = dolfinx.mesh.GhostMode.shared_facet
-        mesh_data = dolfinx.io.gmsh.model_to_mesh(gmsh.model, comm, 0, gdim=2, **kwargs)
+            kwargs["ghost_mode"] = ghost_mode
+        partitioner = create_partitioner(ghost_mode)
+        mesh_data = dolfinx.io.gmsh.model_to_mesh(
+            gmsh.model, comm, 0, gdim=2, partitioner=partitioner, **kwargs
+        )
     finally:
         gmsh.finalize()
 
