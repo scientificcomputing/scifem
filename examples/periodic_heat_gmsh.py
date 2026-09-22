@@ -11,15 +11,14 @@
 # carries them in its ``$Periodic`` section and nothing has to be rediscovered.
 # {py:func}`scifem.periodic.read_periodic_mesh_from_msh` reads them.
 #
-# That route is worth preferring when it is available. There is no tolerance to tune and
-# no risk of snapping onto the wrong vertex, and it expresses rotational and reflective
-# periodicity, which a coordinate mapping can only do if you write the transform out by
-# hand.
+# If you know the periodic pairs of mesh nodes in advanced, this is the preferred route.
+# It is more robust than a coordinate based search, as it is prone to floating point
+# tolerances and risks pairing with the wrong vertex if the mesh is too fine or the map
+# is wrong.
 #
-# On that mesh we run the heat equation from a localised source. Each step is an implicit
-# Euler solve, and the mass term makes the operator positive definite, so unlike the
-# Poisson problem on a torus there is no kernel, no compatibility condition and no
-# Lagrange multiplier -- `preonly` with a MUMPS LU factorisation just solves it.
+# With the mesh loaded from GMSH we will solve the heat equation with a localized heat-source
+# and periodic boundary conditions in one direction.
+# As usual, we import the modules required for this demo.
 
 # +
 from mpi4py import MPI
@@ -43,7 +42,7 @@ from scifem.periodic import transfer_function_to_parent_mesh
 # sides are glued while the top and bottom stay real boundaries. The domain is a cylinder,
 # not a torus.
 #
-# `setPeriodic` takes the curves that are *replaced* first and their partners second,
+# In the GMSH Python API, `setPeriodic` takes the curves that are *replaced* first and their partners second,
 # along with the $4\times 4$ affine transform, row-major, that carries the partner onto
 # the replaced curve. Here that is a translation by one in $x$. The curve tags of
 # `addRectangle` are 1 bottom, 2 right, 3 top and 4 left, so the right curve is replaced
@@ -85,6 +84,7 @@ periodic_mesh, replaced_vertices, replacement_map = read_periodic_mesh_from_msh(
 # order, which is what
 # {py:func}`scifem.periodic.transfer_function_to_parent_mesh` requires.
 
+# +
 mesh_data = dolfinx.io.gmsh.read_from_msh(
     mesh_file, comm, gdim=2, ghost_mode=dolfinx.mesh.GhostMode.shared_facet
 )
@@ -95,6 +95,7 @@ if comm.rank == 0:
         f"vertices: {mesh.topology.index_map(0).size_global} -> "
         f"{periodic_mesh.topology.index_map(0).size_global}"
     )
+# -
 
 # ## A heat source next to the seam
 #
@@ -117,15 +118,16 @@ if comm.rank == 0:
 #   + \Delta t \int_\Omega g v \,\mathrm{d}x .
 # $$
 #
-# The source sits at $x_0 = 0.15$, close to the seam and **away from the middle of the
-# mesh**. That is the whole point of the placement. The heat has two ways round the
-# cylinder, a short one of length $x_0$ through the seam and a long one of length
-# $1 - x_0$, and the solution must end up symmetric about the line $x = x_0$ *measured
-# around the cylinder*. A source at $x_0 = 0.5$ would sit on the mirror line of the square
-# itself, so that symmetry would hold on an ordinary mesh too and would test nothing.
+# Heat spreads the same way in both directions from the source, so the solution is
+# symmetric about the line $x = x_0$, with distance measured around the cylinder. Going left
+# from the source just means passing through the seam.
+#
+# We put the source at $x_0 = 0.15$ rather than at $0.5$. At $0.5$ the same symmetry would
+# hold on an ordinary square too, so it would say nothing about the seam. The value of $y_0$
+# does not affect this; it is off centre only to avoid a second symmetry in $y$.
 
 # +
-x0, y0, sigma = 0.15, 0.5, 0.05
+x0, y0, sigma = 0.15, 0.8, 0.05
 dt_value = 5e-3
 num_steps = 20
 
@@ -165,7 +167,7 @@ uh, source_integral = solve_heat(periodic_mesh)
 
 # ## Verification
 #
-# ### Nothing leaks
+# ### The total heat is conserved
 #
 # Testing the step equation with $v = 1$, which the space contains, leaves
 # $\int u^{n+1} = \int u^{n} + \Delta t \int g$: the stiffness term drops out because
@@ -182,11 +184,20 @@ if comm.rank == 0:
     )
 # -
 
-# ### The heat goes both ways round
+# ### The solution is symmetric around the cylinder
 #
-# Now the test the off-centre source buys us. Sample the temperature at $x_0 \pm d$,
-# wrapping around, along the line $y = y_0$. On the cylinder the two must agree; on the
-# ordinary square the short way round is blocked, so they cannot.
+# We compare the temperature at $x_0 - d$ and $x_0 + d$ along the line $y = y_0$, wrapping
+# back into the square. With $x_0 = 0.15$, any $d$ larger than that sends $x_0 - d$ around
+# the seam: for $d = 0.2$ we compare $x = 0.95$ with $x = 0.35$.
+#
+# Heat can only reach $x = 0.95$ by crossing the seam, while $x = 0.35$ is reached without
+# crossing it. So if the two temperatures agree, heat has passed through the seam. On the
+# ordinary square there is an insulated wall at $x = 0$ instead, the heat cannot get to
+# $x = 0.95$, and the two disagree. We solve on that mesh too, as a control.
+#
+# Note that we sample points inside the domain, not on the seam. The two sides of the seam
+# share the same degrees of freedom, so they hold equal values whether or not the mesh was
+# built correctly. Points inside the domain do not, so comparing them tells us something.
 
 
 # +
@@ -207,16 +218,21 @@ sampled = {
     )
     for label, field in (("periodic", uh), ("plain", control))
 }
+gaps = {label: np.abs(behind - ahead) for label, (behind, ahead) in sampled.items()}
 
 if comm.rank == 0:
     print(f"\n{'d':>6} {'u(x0-d)':>10} {'u(x0+d)':>10} {'diff':>10} {'plain diff':>12}")
     for i, d in enumerate(offsets):
-        behind, ahead = sampled["periodic"][0][i], sampled["periodic"][1][i]
-        plain_behind, plain_ahead = sampled["plain"][0][i], sampled["plain"][1][i]
         print(
-            f"{d:6.1f} {behind:10.6f} {ahead:10.6f} {abs(behind - ahead):10.2e}"
-            f" {abs(plain_behind - plain_ahead):12.2e}"
+            f"{d:6.1f} {sampled['periodic'][0][i]:10.6f} {sampled['periodic'][1][i]:10.6f}"
+            f" {gaps['periodic'][i]:10.2e} {gaps['plain'][i]:12.2e}"
         )
+
+# The two columns sit an order of magnitude either side of a single threshold, so one
+# number asserts both halves of the claim: the cylinder is symmetric to discretisation
+# error, and the square is not symmetric at all.
+assert gaps["periodic"].max() < 1e-4, "the solution is not symmetric around the cylinder"
+assert gaps["plain"].min() > 1e-4, "the control is symmetric too, so this proves nothing"
 # -
 
 # The periodic column agrees to discretisation error; the plain mesh is off by orders of
