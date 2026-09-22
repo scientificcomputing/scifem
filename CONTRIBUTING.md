@@ -7,7 +7,7 @@ Please note we have a code of conduct, please follow it in all your interactions
 ## Adding a new feature
 We really appreciate contributions to the project. If you want to add a new feature, please create an issue first to discuss the feature you would like to add. This way we can make sure that the feature is in line with the goals of the project and that it is not already being worked on by someone else.
 
-Any new feature should be accompanied by tests and an example that should be part of the documentation. The tests should be added to the test suite in the `tests` folder and the example should be added to the `example` folder, and added to the `_toc.yml` file so that it is included in the documentation.
+Any new feature should be accompanied by tests and an example that should be part of the documentation. The tests should be added to the test suite in the `tests` folder and the example should be added to the `examples` folder, and added to the `_toc.yml` file so that it is included in the documentation.
 
 ## New contributor guide
 
@@ -54,6 +54,28 @@ pre-commit run --all
 ```
 To learn more about pre-commit you can check out https://pre-commit.com
 
+## Building from source
+
+`scifem` has a compiled component, so building it needs `scikit-build-core`, `nanobind` and
+the rest of the build backend. These are declared twice in `pyproject.toml`: in
+`[build-system].requires`, which `pip` installs automatically into an isolated build
+environment, and in the `build` [dependency group](https://peps.python.org/pep-0735/),
+which you install yourself when that isolation is turned off.
+
+Isolation is usually turned off when building against an existing DOLFINx, because a fresh
+build environment would pull in a second, incompatible `nanobind`. In that case install the
+build group first:
+
+```
+python3 -m pip install --group build
+python3 -m pip install --no-build-isolation --check-build-dependencies -e ".[all]"
+```
+
+Both commands are run from the root of the repository, since `--group` reads the
+`pyproject.toml` in the current directory. It needs `pip >= 25.1`.
+
+The two lists have to be kept in sync by hand; if you change one, change the other.
+
 ## Test suite
 For every new feature of bugfix you should also make sure to not lower the code coverage for the test suite. This means that if you for example add a new function then you should also make sure that the function is properly tested (at a minimum it should be covered by the test suite).
 
@@ -61,7 +83,7 @@ To run the test suite, please install the package with the optional dependencies
 ```
 python3 -m pip install -e ".[all]"
 ```
-in the root of the repository. To run the tests you can execute the command
+in the root of the repository, or the `--no-build-isolation` variant above. To run the tests you can execute the command
 ```
 python3 -m pytest
 ```
@@ -76,7 +98,7 @@ You can read more about using pytest in the [official documentation of pytest](h
 ## Documentation
 The documentation is hosted at GitHub pages and created with [`JupyterBook`](https://jupyterbook.org/en/stable/intro.html). Contributions to the documentation is very welcomed.
 
-To build the documentation locally you can installed the `docs` optional dependencies, i.e
+To build the documentation locally you can install the `docs` optional dependencies, i.e
 ```
 python3 -m pip install -e ".[docs]"
 ```
@@ -90,7 +112,7 @@ jupyter-book build -W --keep-going .
 ```
 which will turn warnings into errors.
 
-For reference, please see the [github workflow](https://github.com/scientificcomputing/scifem/blob/main/.github/workflows/pages.yml) that is used for building the pages.
+For reference, please see the [github workflow](https://github.com/scientificcomputing/scifem/blob/main/.github/workflows/deploy_docs.yml) that is used for building the pages.
 
 
 ## Need help?

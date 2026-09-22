@@ -1,0 +1,237 @@
+# Read the periodic node correspondence gmsh stores in a model
+# SPDX-License-Identifier: MIT
+
+"""Turn a gmsh model's ``$Periodic`` section into a vertex correspondence.
+
+gmsh already knows which nodes a periodic boundary identifies -- it built the mesh that
+way -- but what it stores is a *relation*, not a function. Pairs are recorded per model
+entity, including the dimension-0 point entities, so a node can appear several times with
+different partners: on a doubly periodic square the node at (1,1) is paired with (0,1)
+through the right-hand curve and with (1,0) through the top curve. Both routes lead to
+(0,0), and resolving to that common root is what this module does.
+
+A note on names. Each pair has a node that is kept and a node that is identified with it
+and disappears; this module calls them the `partner` and the `replaced` node, matching
+`partner_vertex` and `replaced_vertices` in :py:mod:`scifem.periodic`. gmsh's own API calls them
+the master and the slave -- ``getPeriodicNodes`` returns ``masterNodeTags``, and
+``setPeriodic`` takes the replaced entities first and their partners second -- so that is
+what a reader of the gmsh documentation will see.
+"""
+
+from __future__ import annotations
+
+import typing
+from mpi4py import MPI as _MPI
+import dolfinx
+import numpy as np
+from .mesh import create_periodic_mesh_from_igi, DEFAULT_TAG_BASE
+from .utils import PeriodicNodes, resolve_to_roots
+import inspect
+from ..compat import create_partitioner
+
+__all__ = [
+    "extract_gmsh_periodic_nodes",
+    "read_periodic_mesh_from_msh",
+    "model_to_mesh",
+]
+
+
+def model_to_mesh(
+    model,
+    comm,
+    rank: int = 0,
+    gdim: int = 3,
+    max_facet_to_cell_links: int = 2,
+    ghost_mode: dolfinx.mesh.GhostMode = dolfinx.mesh.GhostMode.shared_facet,
+    partitioner: typing.Callable[
+        [_MPI.Comm, int, int, dolfinx.cpp.graph.AdjacencyList_int32],
+        dolfinx.cpp.graph.AdjacencyList_int32,
+    ]
+    | None = None,
+):
+    """``model_to_mesh`` with shared-facet ghosting, wherever the version wants it told.
+
+    On 0.12.0.dev0, ``model_to_mesh`` takes `ghost_mode` directly and threads it into whatever
+    partitioner is used -- the caller's, or its own default if `partitioner` is `None` --
+    at call time. On 0.11 there is no such keyword, so `ghost_mode` can only reach the
+    mesh through a partitioner already built with it, which is constructed here unless
+    the caller supplied one. Getting this wrong does not fail here -- it fails much
+    later, when an interior facet integral finds an interprocess facet with only one
+    cell.
+
+    Args:
+        model: An initialised, meshed ``gmsh.model``.
+        comm: The communicator to distribute the mesh over.
+        rank: The rank that reads the model.
+        gdim: Geometric dimension of the mesh.
+        max_facet_to_cell_links: Passed to `model_to_mesh` where it takes it directly,
+            and to the partitioner constructed here otherwise.
+        ghost_mode: The ghost mode the mesh must be built with; see
+            :py:func:`scifem.periodic.mesh.check_facet_ghosting` for why the rebuild
+            needs `shared_facet`.
+        partitioner: A caller-supplied partitioner, which takes priority over the one
+            built here from `ghost_mode`. On 0.11, supplying one means `ghost_mode` and
+            `max_facet_to_cell_links` are not applied, since there both only take effect
+            through the partitioner.
+
+    Returns:
+        The mesh.
+    """
+    params = inspect.signature(dolfinx.io.gmsh.model_to_mesh).parameters
+    kwargs: dict[str, typing.Any] = {"partitioner": partitioner}
+    if "ghost_mode" in params:
+        kwargs["ghost_mode"] = ghost_mode
+        if "max_facet_to_cell_links" in params:
+            kwargs["max_facet_to_cell_links"] = max_facet_to_cell_links
+    elif partitioner is None:
+        kwargs["partitioner"] = create_partitioner(
+            ghost_mode, max_facet_to_cell_links=max_facet_to_cell_links
+        )
+    mesh_data = dolfinx.io.gmsh.model_to_mesh(model, comm, rank=rank, gdim=gdim, **kwargs)
+    return getattr(mesh_data, "mesh", mesh_data)
+
+
+def extract_gmsh_periodic_nodes(
+    model, include_high_order: bool = False, tol: float | None = 1e-8
+) -> PeriodicNodes:
+    """Collect the ``$Periodic`` node pairs of `model`, resolved to roots.
+
+    Runs where the gmsh model lives, so serially on the reading rank.
+
+    Args:
+        model: An initialised ``gmsh.model`` carrying a meshed, periodic geometry.
+        include_high_order: Keep the nodes that are not cell vertices. The correspondence
+            this feeds is between *vertices*, and on a higher-order mesh
+            ``entities_to_geometry(mesh, 0, vertices)`` returns each vertex's corner node,
+            so the default is what is wanted. The resolution below treats the extra nodes
+            no differently, so the flag costs nothing either way.
+        tol: Absolute tolerance for checking each pair against the affine transform gmsh
+            recorded with it; `None` skips the check. Pairs whose entity stored no
+            transform are never checked. The check earns its place on a file from
+            elsewhere, where nothing has yet compared `$Periodic` against the coordinates,
+            and is close to tautological for a model this process just built.
+
+    Returns:
+        The pairs, as :py:class:`PeriodicNodes`.
+
+    Raises:
+        RuntimeError: If the pairs cycle, disagree on a root, or contradict the affine
+            transform recorded with them.
+    """
+    replaced_nodes, partner_nodes, hops = [], [], []
+    for dim, tag in model.getEntities():
+        partner_tag, node_tags, partner_node_tags, affine = model.mesh.getPeriodicNodes(
+            dim, tag, include_high_order
+        )
+        # gmsh returns the entity itself as its own partner when it is not periodic.
+        if partner_tag == tag or len(node_tags) == 0:
+            continue
+        s = np.asarray(node_tags, dtype=np.int64) - 1
+        m = np.asarray(partner_node_tags, dtype=np.int64) - 1
+        replaced_nodes.append(s)
+        partner_nodes.append(m)
+        hops.append((s, m, np.asarray(affine, dtype=np.float64)))
+
+    all_node_tags, all_coords, _ = model.mesh.getNodes()
+    num_nodes_global = int(np.asarray(all_node_tags, dtype=np.int64).max())
+
+    if not replaced_nodes:
+        return PeriodicNodes(num_nodes_global=num_nodes_global)
+
+    replaced = np.concatenate(replaced_nodes)
+    partner = np.concatenate(partner_nodes)
+
+    # Coordinates by 0-based node tag, through a sorted index. Tags are unique, so the
+    # search is exact.
+    node_tags = np.asarray(all_node_tags, dtype=np.int64) - 1
+    node_coords = np.asarray(all_coords, dtype=np.float64).reshape(-1, 3)
+    tag_order = np.argsort(node_tags)
+    sorted_tags = node_tags[tag_order]
+
+    def coordinates_of(nodes):
+        return node_coords[tag_order[np.searchsorted(sorted_tags, nodes)]]
+
+    for s, m, affine in hops if tol is not None else ():
+        # gmsh stores a 4x4 row-major matrix, or nothing at all for some entities.
+        if affine.size != 16:
+            continue
+        matrix = affine.reshape(4, 4)
+        mapped = coordinates_of(m) @ matrix[:3, :3].T + matrix[:3, 3]
+        gap = np.linalg.norm(mapped - coordinates_of(s), axis=1)
+        if (gap > tol).any():
+            i = int(np.argmax(gap))
+            raise RuntimeError(
+                "A `$Periodic` pair does not satisfy the affine transform recorded with"
+                f" it: node tags (1-based) {int(m[i]) + 1} and {int(s[i]) + 1} are"
+                f" {gap[i]:.3e} apart after the transform, tolerance {tol:.3e}."
+            )
+
+    unique_replaced, root = resolve_to_roots(replaced, partner)
+    assert not np.isin(root, unique_replaced).any(), "a root is itself replaced"
+    return PeriodicNodes(unique_replaced, root, num_nodes_global)
+
+
+def read_periodic_mesh_from_msh(
+    filename,
+    comm,
+    rank: int = 0,
+    gdim: int = 3,
+    partitioner=None,
+    tag_base: int = DEFAULT_TAG_BASE,
+    **kwargs,
+):
+    """Read a ``.msh`` file and make the mesh periodic from its ``$Periodic`` section.
+
+    Owns the gmsh session, because the pairs have to be read out of the model *before* it
+    is finalized and the usual readers finalize it on the way out.
+
+    Collective.
+
+    Args:
+        filename: The ``.msh`` file. Read on `rank` only.
+        comm: The communicator to distribute the mesh over.
+        rank: The rank that reads the file.
+        gdim: Geometric dimension of the mesh.
+        partitioner: Cell partitioner, passed through to ``model_to_mesh``.
+        tag_base: Passed through to :py:func:`create_periodic_mesh_from_igi`.
+        kwargs: Further arguments for ``model_to_mesh``, such as ``ghost_mode`` where the
+            installed DOLFINx takes it there.
+
+    Returns:
+        ``(periodic_mesh, replaced_vertices, replacement_map)``, as
+        :py:func:`scifem.periodic.create_periodic_mesh`.
+    """
+    try:
+        import gmsh
+    except ImportError as e:
+        raise ImportError(
+            "The `gmsh` Python module is required to read a `.msh` file and make it"
+            " periodic. Install it with `pip install gmsh`."
+        ) from e
+    started_here = False
+    try:
+        if comm.rank == rank:
+            if not gmsh.isInitialized():
+                gmsh.initialize()
+                started_here = True
+            gmsh.model.add("periodic mesh from file")
+            gmsh.merge(str(filename))
+            pairs = extract_gmsh_periodic_nodes(gmsh.model)
+        else:
+            pairs = PeriodicNodes(0)
+        mesh_data = model_to_mesh(
+            gmsh.model, comm, rank=rank, gdim=gdim, partitioner=partitioner, **kwargs
+        )
+    finally:
+        if started_here and gmsh.isInitialized():
+            gmsh.finalize()
+
+    mesh = getattr(mesh_data, "mesh", mesh_data)
+    return create_periodic_mesh_from_igi(
+        mesh,
+        pairs.replaced,
+        pairs.partner,
+        pairs.num_nodes_global,
+        root=rank,
+        tag_base=tag_base,
+    )

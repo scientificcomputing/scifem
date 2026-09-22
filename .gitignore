@@ -169,3 +169,11 @@ cython_debug/
 *.bp
 
 .scifem_extrema*
+*.bp
+*.msh
+_audit
+_probe*.py
+*.pvtu
+*.vtu
+*.pvd
+*.png

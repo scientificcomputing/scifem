@@ -6,7 +6,6 @@ if sys.version_info >= (3, 13):
 else:
     from typing_extensions import deprecated
 
-from warnings import warn
 from . import _scifem  # type: ignore
 import collections
 import dolfinx
@@ -90,7 +89,7 @@ def create_entity_markers(
     """Mark entities of specified dimension according to a geometrical marker function.
 
     Args:
-        domain: A ``dolfinx.mesh.Mesh`` object
+        domain: A :py:class:`dolfinx.mesh.Mesh` object
         dim: Dimension of the entities to mark
         entities_list: A list of tuples with the following elements:
 
@@ -100,7 +99,7 @@ def create_entity_markers(
             - ``index 2``: Optional, if True, the entities will be marked on the boundary
 
     Returns:
-        A ``dolfinx.mesh.MeshTags`` object with the corresponding entities marked.
+        A :py:class:`dolfinx.mesh.MeshTags` object with the corresponding entities marked.
         If an entity satisfies multiple input marker functions,
         it is not deterministic what value the entity gets.
 
@@ -140,6 +139,7 @@ def create_entity_markers(
 def transfer_meshtags_to_submesh(
     entity_tag: dolfinx.mesh.MeshTags,
     submesh: dolfinx.mesh.Mesh,
+    *,
     vertex_to_parent: _EntityMap | npt.NDArray[np.int32],
     cell_to_parent: _EntityMap | npt.NDArray[np.int32],
 ) -> tuple[dolfinx.mesh.MeshTags, npt.NDArray[np.int32]]:
@@ -168,23 +168,26 @@ def transfer_meshtags_to_submesh(
     submesh.topology.create_connectivity(sub_tdim, entity_tag.dim)
     entity_tag.topology.create_connectivity(dim, 0)
     entity_tag.topology.create_connectivity(dim, sub_tdim)
-    if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
-        cpp_tag = dolfinx.mesh.transfer_meshtags_to_submesh(
-            entity_tag, submesh, vertex_to_parent, cell_to_parent
-        )
-        warn(
-            "The returned sub_to_parent_entity_map is empty, as it was wrong"
-            + " in previous iterations."
-            + "Consult the library authors if you need this mapping.",
-            DeprecationWarning,
-        )
-        sub_to_parent_entity_map = np.array([], dtype=np.int32)
-    else:
-        v_to_p = get_entity_map(vertex_to_parent)
-        c_to_p = get_entity_map(cell_to_parent)
-        cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
-            entity_tag._cpp_object, submesh.topology._cpp_object, v_to_p, c_to_p
-        )
+    # if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
+    #     cpp_tag = dolfinx.mesh.transfer_meshtags_to_submesh(
+    #         entity_tag, submesh, cell_to_parent, vertex_to_parent
+    #     )
+    #     warn(
+    #         "The returned sub_to_parent_entity_map is empty, as it was wrong"
+    #         + " in previous iterations."
+    #         + "Consult the library authors if you need this mapping.",
+    #         DeprecationWarning,
+    #     )
+    #     sub_to_parent_entity_map = np.array([], dtype=np.int32)
+    # else:
+    v_to_p = get_entity_map(vertex_to_parent)
+    c_to_p = get_entity_map(cell_to_parent)
+    cpp_tag, sub_to_parent_entity_map = _scifem.transfer_meshtags_to_submesh_int32(
+        entity_tag._cpp_object,
+        submesh.topology._cpp_object,
+        v_to_p,
+        c_to_p,
+    )
     return dolfinx.mesh.MeshTags(cpp_tag), sub_to_parent_entity_map
 
 
@@ -232,7 +235,7 @@ def extract_submesh(
         subnode_to_parent_node, entity_tag_on_submesh)`.
     """
 
-    # Accumulate all entities, including ghosts, for the specfic set of tagged entities
+    # Accumulate all entities, including ghosts, for the specific set of tagged entities
     edim = entity_tag.dim
     mesh.topology.create_connectivity(edim, mesh.topology.dim)
     tags_as_arr = np.asarray(tags, dtype=entity_tag.values.dtype)
@@ -244,10 +247,12 @@ def extract_submesh(
     # Transfer cell markers
     if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
         new_et = dolfinx.mesh.transfer_meshtags_to_submesh(
-            entity_tag, submesh, vertex_map, cell_map
+            entity_tag, submesh, vertex_to_parent=vertex_map, cell_to_parent=cell_map
         )
     else:
-        new_et, _ = transfer_meshtags_to_submesh(entity_tag, submesh, vertex_map, cell_map)
+        new_et, _ = transfer_meshtags_to_submesh(
+            entity_tag, submesh, vertex_to_parent=vertex_map, cell_to_parent=cell_map
+        )
     new_et.name = entity_tag.name
     return SubmeshData(submesh, cell_map, vertex_map, node_map, new_et)
 
@@ -393,7 +398,7 @@ def compute_interface_data(
     Returns:
         The integration data.
     """
-    # Future compatibilty check
+    # Future compatibility check
     integration_args: tuple[int] | tuple
     if Version("0.10.0") <= Version(dolfinx.__version__):
         integration_args = ()

@@ -6,7 +6,7 @@
 #
 # Quadrature functions are not possible to visualize directly in ParaView, as they are not defined on a mesh.
 # However, we can visualize them as point clouds.
-# In this example we will show how you can use `scifem` to save your quadrature fuctions as XDMF files,
+# In this example we will show how you can use `scifem` to save your quadrature functions as XDMF files,
 # which can be loaded into ParaView for visualization.
 #
 # ```{note}
