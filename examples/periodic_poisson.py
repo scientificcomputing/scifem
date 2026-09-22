@@ -38,7 +38,7 @@ from scifem.periodic import create_periodic_mesh, transfer_function_to_parent_me
 # (periodic-building)=
 # ## Creating a periodic mesh
 #
-# To create a periodic mesh in DOLFINx, one has to start from an existing mesh, or {doc}`read the mesh with periodic data from file <periodic_heat_gmsh>`. 
+# To create a periodic mesh in DOLFINx, one has to start from an existing mesh, or {doc}`read the mesh with periodic data from file <periodic_heat_gmsh>`.
 # It is important to note that if you would like periodicity to properly work in parallel, one has to build the mesh with the
 # {py:attr}`shared_facet<dolfinx.mesh.GhostMode.shared_facet>` ghost mode.
 # {py:func}`scifem.periodic.create_periodic_mesh` checks this and raises if it is missing.
