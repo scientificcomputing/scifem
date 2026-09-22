@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: MIT
 #
 # This example solves the Poisson problem on a doubly periodic unit square built with
-# {py:func}`scifem.periodic.create_periodic_mesh`, and covers the four things that
-# are easy to get wrong on such a mesh:
+# {py:func}`scifem.periodic.create_periodic_mesh`, and covers the four most important aspects
+# of these meshes in DOLFINx:
 #
 # 1. **{ref}`Building it <periodic-building>`.** What the indicator and mapping functions
 #    do, and how the resulting mesh differs from the original.
@@ -18,7 +18,7 @@
 # 4. **{ref}`Looking at it <periodic-visualisation>`.** {py:class}`VTXWriter<dolfinx.io.VTXWriter>`
 #    and {py:class}`VTKFile<dolfinx.io.VTKFile>` draw a periodic mesh wrongly.
 
-# We start by importing all the relevant libraries we require.
+# We import the various modules required in this example.
 
 # +
 from mpi4py import MPI
@@ -29,27 +29,25 @@ import pyvista
 import ufl
 
 import basix.ufl
-import dolfinx
 import dolfinx.fem.petsc
 from scifem import assemble_scalar
-from scifem.periodic import create_periodic_mesh
-from scifem.periodic import transfer_function_to_parent_mesh, transfer_meshtags_to_periodic_mesh
+from scifem.periodic import create_periodic_mesh, transfer_function_to_parent_mesh, transfer_meshtags_to_periodic_mesh
 
 # -
 
 # (periodic-building)=
 # ## Creating a periodic mesh
 #
-# We will start from an ordinary DOLFINx mesh, with
-# {py:attr}`shared_facet<dolfinx.mesh.GhostMode.shared_facet>` ghost mode,
-# This is **required** to ensure that periodicity works correctly across interprocess boundaries.
+# To create a periodic mesh in DOLFINx, one has to start from an existing mesh, or {doc}`read the mesh with periodic data from file <periodic_heat_gmsh>`. 
+# It is important to note that if you would like periodicity to properly work in parallel, one has to build the mesh with the
+# {py:attr}`shared_facet<dolfinx.mesh.GhostMode.shared_facet>` ghost mode.
 # {py:func}`scifem.periodic.create_periodic_mesh` checks this and raises if it is missing.
 # If you build your mesh by hand, please ensure that you supply
 # {py:attr}`dolfinx.mesh.GhostMode.shared_facet` in the mesh construction
 # ```{admonition} API compatibility
 # :class: tip dropdown
 #
-# On `main` of DOLFINx, ghost mode is supplied directly to {py:func}`dolfinx.mesh.create_mesh`,
+# On the `main` branch of DOLFINx, ghost mode is supplied directly to {py:func}`dolfinx.mesh.create_mesh`,
 # rather than through the partitioner. Use {py:func}`scifem.compat.create_partitioner` to get
 # a partitioner that works on all versions.
 # ```
@@ -58,9 +56,9 @@ N = 25
 mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, N, N, ghost_mode=dolfinx.mesh.GhostMode.shared_facet)
 
 # Periodicity is described by two functions of a `(3, num_points)` coordinate array.
-# The **indicator** marks the vertices that are to disappear, and the **mapping
-# function** says, for each marked vertex, which vertex it is identified with. Here we
-# remove the $x=1$ and $y=1$ sides and glue them onto $x=0$ and $y=0$.
+# The `indicator` function marks the vertices that are to disappear, and the `mapping`
+# function` converts each marked vertex to its partner vertex.
+# Here we remove the $x=1$ and $y=1$ sides and glue them onto $x=0$ and $y=0$.
 #
 # Both functions are evaluated on the same array, so they must be written to handle the
 # corner $(1, 1)$ as well: it is marked once, and the mapping has to shift it in *both*
@@ -71,7 +69,7 @@ def indicator(x):
     return np.isclose(x[0], 1.0) | np.isclose(x[1], 1.0)
 
 
-def mapping_function(x):
+def mapping(x):
     values = x.copy()
     values[0] -= np.isclose(x[0], 1.0)
     values[1] -= np.isclose(x[1], 1.0)
@@ -79,36 +77,36 @@ def mapping_function(x):
 
 
 periodic_mesh, replaced_vertices, replacement_map = create_periodic_mesh(
-    mesh, indicator, mapping_function
+    mesh, indicator, mapping
 )
 # -
 
-# The rebuild is purely **topological**;
+# The rebuild is purely topological;
 # the {py:class}`dolfinx.mesh.Topology` loses a set of vertices,
 # because each pair has been merged into a single vertex.
-# The **geometry** is untouched: every node of the original
-# mesh is still there, with its original coordinates, and the cells
-# are the same cells.
+# The nodes in the original {py:class}`dolfinx.mesh.Geometry` are untouched,
+# with their node numbering preserved{ref}`*<new-geometry>`.
 # ```{admonition} The new Geometry
+# :name: new-geometry
 # :class: note dropdown
 #
 # The new {py:class}`dolfinx.mesh.Geometry` is not the same as the original,
-# because the new topology might have more cells (local to process) than the
-# original, which has to be reflected in the geometry dofmap.
+# because the new topology might have more cells and ghosted nodes (local to process)
+# than the original, which has to be reflected in the geometry dofmap.
 # ```
 
 tdim = periodic_mesh.topology.dim
 if mesh.comm.rank == 0:
     print(
-        f"vertices:      {mesh.topology.index_map(0).size_global:6d} -> "
+        f"vertices: {mesh.topology.index_map(0).size_global:6d} -> "
         f"{periodic_mesh.topology.index_map(0).size_global:6d}"
     )
     print(
-        f"geometry nodes:{mesh.geometry.index_map().size_global:6d} -> "
+        f"geometry nodes: {mesh.geometry.index_map().size_global:6d} -> "
         f"{periodic_mesh.geometry.index_map().size_global:6d}"
     )
     print(
-        f"cells:         {mesh.topology.index_map(tdim).size_global:6d} -> "
+        f"cells: {mesh.topology.index_map(tdim).size_global:6d} -> "
         f"{periodic_mesh.topology.index_map(tdim).size_global:6d}"
     )
 
@@ -140,8 +138,8 @@ if mesh.comm.rank == 0:
 # (periodic-meshtags)=
 # ## Transferring meshtags
 #
-# In this example we will also observe what happens to a {py:class}`dolfinx.mesh.MeshTags` when
-# transferred to a periodic mesh. We start by creating a {py:class}`dolfinx.mesh.MeshTags` object
+# In this section we look at how making a periodic mesh affects {py:class}`dolfinx.mesh.MeshTags`.
+# We start by creating a {py:class}`dolfinx.mesh.MeshTags` object
 # on the orignal mesh, marking all facets, including those we want to replace.
 
 interior_marker = -1
@@ -255,9 +253,9 @@ assert np.isclose(area_bottom, 1.0)
 #
 # We do not enforce the mean with a boundary condition, but with a Lagrange multiplier
 # $\lambda$, as in {doc}`real_function_space`, which makes the discrete system
-# nonsingular. That is worth being precise about, because the multiplier does not merely
-# pin the constant -- it also *absorbs* any violation of the compatibility condition. The
-# system actually solved is
+# nonsingular. Note that the multiplier does not just enforce the constraint, but also
+# absorbs any violation of the compatibility condition. We observe this by considering
+# the modified problem and what it solves when the source is not mean free:
 #
 # $$
 # \begin{align}
@@ -266,20 +264,21 @@ assert np.isclose(area_bottom, 1.0)
 # \end{align}
 # $$
 #
-# and testing the first equation against $v = 1$ gives $\lambda\,|\Omega| = \int_\Omega
-# f \,\mathrm{d}x$: the multiplier comes out as the mean of the source,
-# $\bar f := |\Omega|^{-1}\int_\Omega f \,\mathrm{d}x$. So the system is
-# nonsingular for *any* $f$, and the solver will not complain. What it returns is the
-# solution of $-\Delta u = f - \bar f$, a different problem from the one we posed
-# whenever $\bar f \neq 0$.
+# Derive the weak form, and test the first equation against $v = 1$.
+# Then the first term drops out as $\nabla v = 0$ and the boundary term doesn't exist as
+# $\partial\Omega=\emptyset$. We are left with $\lambda\,|\Omega| = \int_\Omega f
+# \,\mathrm{d}x$, i.e., $\lambda = \bar f := |\Omega|^{-1}\int_\Omega f~\mathrm{d}x$.
+# Therefore the discrete system returns the solution of $-\Delta u = f - \bar f$. That
+# source is mean free by construction, so the problem it solves is well-posed for any $f$,
+# it is simply a different problem from the one we intended whenever $\bar f \neq 0$.
 # ```
 #
 # ### Choosing a solution that actually tests periodicity
 #
 # We manufacture the problem from an exact solution. The obvious candidates are bad ones:
 #
-# - $\sin(2\pi x)\sin(2\pi y)$ vanishes identically **on the seam**, so the merged
-#   degrees of freedom carry no information and a bug in the identification is invisible.
+# - $\sin(2\pi x)\sin(2\pi y)$ vanishes identically **on the seam**, so any check that
+#   compares the two sides of a seam is comparing zero with zero and says nothing there.
 # - $\cos(2\pi x)\cos(2\pi y)$ has zero normal derivative on all four sides of the unit
 #   square, so it *also* solves the homogeneous Neumann problem. An ordinary
 #   non-periodic mesh reproduces it exactly as well, and the test proves nothing.
@@ -287,8 +286,10 @@ assert np.isclose(area_bottom, 1.0)
 # We therefore use
 #
 # $$
-# u_{\text{exact}}(x, y) = \sin(2\pi x) + \sin(2\pi y),
-# \qquad f = -\Delta u_{\text{exact}} = 4\pi^2 u_{\text{exact}},
+# \begin{align}
+# u_{\text{exact}}(x, y) &= \sin(2\pi x) + \sin(2\pi y)\\
+# \qquad f &= -\Delta u_{\text{exact}} = 4\pi^2 u_{\text{exact}},
+# \end{align}
 # $$
 #
 # which is periodic, mean free, non-zero on the seam, and has a normal derivative of
@@ -382,7 +383,11 @@ if mesh.comm.rank == 0:
 #
 # What it confirms is that the seam facets really did become interior facets, and that the
 # degrees of freedom on them were merged with a consistent orientation. It cannot tell a
-# correct pairing from a wrong one, as a seam glued with a shift would pass just as cleanly.
+# correct pairing from a wrong one, as a seam glued with a shift would pass just as
+# cleanly. That is caught instead by the comparison against the exact solution further
+# down: a shifted gluing does not match the normal derivative across the seam, so the
+# manufactured solution no longer solves the problem the mesh describes, and the $L^2$
+# error says so.
 #
 # If $V$ were a discontinuous space the integral would no longer vanish identically, since
 # nothing there forces the two sides of a facet to agree. A seam jump out of proportion to
@@ -397,14 +402,14 @@ if mesh.comm.rank == 0:
 
 # ### The solution is *not* a homogeneous Neumann solution
 #
-# This is the check that distinguishes a working periodic mesh from a broken one, and the
-# same measure makes it. The normal derivative on the seam is exactly what a homogeneous
-# Neumann solution is not allowed to have. The `bottom` and `left` markers carry the whole
+# The following check distinguishes a working periodic mesh from a broken one:
+# The normal derivative on the seam is exactly what a homogeneous Neumann solution
+# is not allowed to have. The `bottom` and `left` markers carry the whole
 # seam, of total length $2$, and $\partial u/\partial n = \pm 2\pi$ along both, so
 #
 # $$
 # \int_\Gamma \left(\frac{\partial u}{\partial n}\right)^2 \mathrm{d}s
-#   = 2 \cdot (2\pi)^2 = 8\pi^2 \approx 79.0,
+#   = 2 \cdot (2\pi)^2 = 8\pi^2,
 # $$
 #
 # whereas for $\cos(2\pi x)\cos(2\pi y)$ the same quantity is zero. A solver that
@@ -433,8 +438,9 @@ if mesh.comm.rank == 0:
 #
 # {py:class}`VTXWriter<dolfinx.io.VTXWriter>`, and
 # {py:meth}`VTKFile.write_function<dolfinx.io.VTKFile.write_function>` for
-# any non-cellwise element, build their output point set from the **function space
-# dofmap**: one output point per degree of freedom, positioned by pushing the reference
+# any non-constant per cell element build their output point set from the
+# {py:meth}`<FunctionSpace dofmap dolfinx.fem.DofMap>`:
+# one output point per degree of freedom, positioned by pushing the reference
 # interpolation points forward cell by cell.
 #
 # On a periodic mesh a seam degree of freedom is shared by cells on *opposite sides of
@@ -455,7 +461,7 @@ if mesh.comm.rank == 0:
 #
 # The geometry of the periodic mesh still has both sides of the seam, so the fix is to
 # put the solution back on the mesh it was built from.
-# {py:func}`scifem.periodic.create_periodic_mesh` preserves cells, so the local
+# {py:func}`scifem.periodic.create_periodic_mesh` preserves cells, so the owned local
 # cell `c` is the same cell in both meshes, with the same geometry dofmap (up to extra
 # ghost cells in the new periodic mesh).
 #
@@ -507,7 +513,12 @@ error_parent = np.sqrt(assemble_scalar(ufl.inner(diff_parent, diff_parent) * ufl
 if mesh.comm.rank == 0:
     print(f"L2 error, periodic mesh = {error_periodic:.3e}")
     print(f"L2 error, parent mesh   = {error_parent:.3e}")
-assert np.isclose(error_periodic, error_parent)
+# The two must agree to round-off: they integrate the same field over the same cells, so a
+# transfer that misplaced a degree of freedom would move one of them.
+assert np.isclose(error_periodic, error_parent, rtol=1e-10), "the transfer changed the field"
+# And the error must actually be small. A seam glued to the wrong partner still gives a
+# well-posed problem and a clean jump, but not this solution.
+assert error_periodic < 1e-3, "the solution is not the manufactured one; check the seam pairing"
 # -
 
 # ### Writing and plotting
