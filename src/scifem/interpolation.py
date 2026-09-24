@@ -178,9 +178,13 @@ def prepare_interpolation_data(
                         interpolated_matrix[c, q :: Q.dofmap.bs, i] = (
                             im @ tmp_array.T[q].flatten()
                         ).flatten()
-    # Apply dof transformation to each column (using Piopla maps)
-    mesh.topology.create_entity_permutations()
+
     if Q.element.needs_dof_transformations:
+        # Apply dof transformation to each column (using Piola maps)
+        if hasattr(mesh.topology, "create_cell_permutations"):
+            mesh.topology.create_cell_permutations()
+        else:
+            mesh.topology.create_entity_permutations()
         cell_perm = mesh.topology.get_cell_permutation_info()[:num_cells]
 
         permuted_matrix = interpolated_matrix.flatten().copy()
@@ -368,8 +372,12 @@ def interpolate_to_surface_submesh(
     mesh.topology.create_connectivity(submesh.topology.dim, mesh.topology.dim)
 
     data = expr.eval(mesh, integration_entities)
-    submesh.topology.create_entity_permutations()
-    mesh.topology.create_entity_permutations()
+    if hasattr(mesh.topology, "create_cell_permutations"):
+        mesh.topology.create_cell_permutations()
+        submesh.topology.create_cell_permutations()
+    else:
+        submesh.topology.create_entity_permutations()
+        mesh.topology.create_entity_permutations()
     ft = V_surf.element.basix_element.cell_type
 
     if Version(dolfinx.__version__) < Version("0.11.0.dev0"):

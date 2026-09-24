@@ -145,9 +145,17 @@ def interpolate_function_onto_facet_dofs(
     )
     is_marked = np.zeros(num_facets_on_process, dtype=np.int8)
     is_marked[facets] = 1
-    domain.topology.create_entity_permutations()
     num_facets_per_cell = dolfinx.cpp.mesh.cell_num_entities(domain.topology.cell_type, fdim)
-    facet_permutations = domain.topology.get_facet_permutations().reshape(-1, num_facets_per_cell)
+    if hasattr(domain.topology, "create_cell_permutations"):
+        domain.topology.create_entity_permutations(fdim)
+        facet_permutations = domain.topology.get_entity_permutations(fdim).reshape(
+            -1, num_facets_per_cell
+        )
+    else:
+        domain.topology.create_entity_permutations()
+        facet_permutations = domain.topology.get_facet_permutations().reshape(
+            -1, num_facets_per_cell
+        )
     for i, cell in enumerate(all_connected_cells):
         values_per_entity[:] = 0.0
         local_facets = c_to_f.links(cell)

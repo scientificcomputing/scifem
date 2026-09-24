@@ -124,8 +124,12 @@ def test_transfer_survives_the_dof_reordering(meshes, degree):
     mesh, periodic_mesh = meshes
     tdim = mesh.topology.dim
     num_cells = mesh.topology.index_map(tdim).size_local
-    mesh.topology.create_entity_permutations()
-    periodic_mesh.topology.create_entity_permutations()
+    if hasattr(mesh.topology, "create_cell_permutations"):
+        mesh.topology.create_cell_permutations()
+        periodic_mesh.topology.create_cell_permutations()
+    else:
+        mesh.topology.create_entity_permutations()
+        periodic_mesh.topology.create_entity_permutations()
     reordered = np.flatnonzero(
         mesh.topology.get_cell_permutation_info()[:num_cells]
         != periodic_mesh.topology.get_cell_permutation_info()[:num_cells]
