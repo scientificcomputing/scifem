@@ -47,7 +47,7 @@ Some features might depend on functionality added to DOLFINx, which means that t
 - Find the extrema of a UFL expression within each cell, or over a whole domain.
 - Project points onto the closest point of a mesh.
 - Build interpolation matrices from any `ufl.core.expr.Expr` into a compatible space.
-- Interpolate from a mesh onto a submesh of its facets, and extend a function on such a submesh back into the mesh, zero away from the facets.
+- Interpolate from a mesh onto a submesh of its facets, and extend a function on such a submesh back into the mesh, zero away from the facets, into Lagrange, H(div) or H(curl) spaces.
 
 ### Output
 

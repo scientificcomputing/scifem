@@ -356,7 +356,8 @@ def test_interpolate_to_interface_submesh(family, degree):
 
 
 def _exterior_facet_submesh(mesh):
-    """The exterior facets as a submesh, its cells and their parent integration entities."""
+    """The exterior facets as a submesh, its cells, their parent integration entities, and the
+    submesh's entity map."""
     fdim = mesh.topology.dim - 1
     mesh.topology.create_connectivity(fdim, fdim + 1)
     facets = dolfinx.mesh.exterior_facet_indices(mesh.topology)
@@ -367,7 +368,7 @@ def _exterior_facet_submesh(mesh):
     entities = scifem.compat.compute_integration_domains(
         dolfinx.fem.IntegralType.exterior_facet, mesh.topology, parent_facets
     ).reshape(-1, 2)
-    return submesh, submesh_facets, entities
+    return submesh, submesh_facets, entities, entity_map
 
 
 _EXTENSION_MESHES = {
@@ -396,7 +397,7 @@ def test_interpolate_from_surface_submesh(cell, degree):
     returns the input. From P3 an edge carries two dofs and a hexahedron's face four, whose order
     depends on the facet's orientation in its cell."""
     mesh = _EXTENSION_MESHES[cell]()
-    submesh, submesh_facets, entities = _exterior_facet_submesh(mesh)
+    submesh, submesh_facets, entities, _ = _exterior_facet_submesh(mesh)
     V_parent = dolfinx.fem.functionspace(mesh, ("Lagrange", degree, (2,)))
     V_submesh = dolfinx.fem.functionspace(submesh, ("Lagrange", degree, (2,)))
     u_submesh = dolfinx.fem.Function(V_submesh)
@@ -430,7 +431,7 @@ def test_interpolate_from_a_coarser_surface_space(cell, degree):
     """A degree P surface function into a degree P+1 volume space gives its interpolant at the
     boundary nodes."""
     mesh = _EXTENSION_MESHES[cell]()
-    submesh, submesh_facets, entities = _exterior_facet_submesh(mesh)
+    submesh, submesh_facets, entities, _ = _exterior_facet_submesh(mesh)
     coarse_element = ("Lagrange", degree, (2,))
     fine_element = ("Lagrange", degree + 1, (2,))
     u_submesh = dolfinx.fem.Function(dolfinx.fem.functionspace(submesh, coarse_element))
@@ -453,7 +454,7 @@ def test_interpolate_from_a_coarser_surface_space(cell, degree):
 def test_interpolate_from_a_discontinuous_surface_space_averages_shared_nodes():
     """At a node shared by facets that disagree, the extension takes the mean of their values."""
     mesh = _EXTENSION_MESHES["triangle"]()
-    submesh, submesh_facets, entities = _exterior_facet_submesh(mesh)
+    submesh, submesh_facets, entities, _ = _exterior_facet_submesh(mesh)
     V_submesh = dolfinx.fem.functionspace(submesh, ("DG", 0))
     u_submesh = dolfinx.fem.Function(V_submesh)
     u_submesh.x.array[:] = np.arange(u_submesh.x.array.size, dtype=u_submesh.x.array.dtype)
@@ -482,13 +483,53 @@ def test_interpolate_from_a_discontinuous_surface_space_averages_shared_nodes():
     assert np.all(u_parent.x.array[~is_written] == 0.0)
 
 
-def test_interpolate_from_surface_submesh_refuses_a_non_nodal_volume_space():
-    """N1curl dofs are moments, not point values, so they cannot be written from point values."""
+def _linear_field(x):
+    """A linear vector field, exactly represented by vector P1 on the submesh."""
+    return np.vstack([1.0 + x[0] - 0.5 * x[1] + (k + 1) * x[k] for k in range(x.shape[0])])
+
+
+_PIOLA_ELEMENTS = [("RT", 1), ("RT", 2), ("N1curl", 1), ("N1curl", 2)]
+
+
+@pytest.mark.skipif(
+    Version(dolfinx.__version__) < Version("0.10.0"), reason="Requires DOLFINx >= 0.10"
+)
+@pytest.mark.parametrize("element", _PIOLA_ELEMENTS, ids=[f"{f}{d}" for f, d in _PIOLA_ELEMENTS])
+@pytest.mark.parametrize("cell", sorted(_EXTENSION_MESHES))
+def test_interpolate_from_surface_submesh_into_a_piola_mapped_space(cell, element):
+    """The extension into an H(div) or H(curl) space gives the dofs that interpolating the same
+    field into that space gives on the facets' closures, and zero everywhere else."""
+    mesh = _EXTENSION_MESHES[cell]()
+    submesh, submesh_facets, entities, entity_map = _exterior_facet_submesh(mesh)
+    gdim = mesh.geometry.dim
+    u_submesh = dolfinx.fem.Function(dolfinx.fem.functionspace(submesh, ("Lagrange", 1, (gdim,))))
+    u_submesh.interpolate(lambda x: _linear_field(x[:gdim]))
+    V_parent = dolfinx.fem.functionspace(mesh, element)
+    u_parent = dolfinx.fem.Function(V_parent)
+    scifem.interpolation.interpolate_from_surface_submesh(
+        u_submesh, u_parent, submesh_facets, entities, entity_maps=[entity_map]
+    )
+
+    # The reference: the same field interpolated into the whole space, kept on the facets' closures
+    u_interpolated = dolfinx.fem.Function(V_parent)
+    u_interpolated.interpolate(lambda x: _linear_field(x[:gdim]))
+    fdim = mesh.topology.dim - 1
+    boundary_dofs = dolfinx.fem.locate_dofs_topological(
+        V_parent, fdim, dolfinx.mesh.exterior_facet_indices(mesh.topology)
+    )
+    u_expected = np.zeros_like(u_parent.x.array)
+    u_expected[boundary_dofs] = u_interpolated.x.array[boundary_dofs]
+    np.testing.assert_allclose(u_parent.x.array, u_expected, atol=1e-12)
+    assert np.abs(u_expected).max() > 0.1
+
+
+def test_interpolate_from_surface_submesh_into_a_piola_mapped_space_needs_the_entity_map():
+    """The surface function is evaluated on the parent mesh's facets, through the entity map."""
     mesh = _EXTENSION_MESHES["triangle"]()
-    submesh, submesh_facets, entities = _exterior_facet_submesh(mesh)
+    submesh, submesh_facets, entities, _ = _exterior_facet_submesh(mesh)
     u_submesh = dolfinx.fem.Function(dolfinx.fem.functionspace(submesh, ("Lagrange", 1, (2,))))
     u_parent = dolfinx.fem.Function(dolfinx.fem.functionspace(mesh, ("N1curl", 1)))
-    with pytest.raises(ValueError, match="interpolation matrix is the identity"):
+    with pytest.raises(ValueError, match="needs entity_maps"):
         scifem.interpolation.interpolate_from_surface_submesh(
             u_submesh, u_parent, submesh_facets, entities
         )
@@ -500,7 +541,7 @@ def test_facet_closure_permutations_match_a_per_facet_loop(cell, degree):
     """Grouping by (cell permutation info, local facet) gives each facet the permutation that
     basix computes for it on its own."""
     mesh = _EXTENSION_MESHES[cell]()
-    _, _, entities = _exterior_facet_submesh(mesh)
+    _, _, entities, _ = _exterior_facet_submesh(mesh)
     V = dolfinx.fem.functionspace(mesh, ("Lagrange", degree))
     fdim = mesh.topology.dim - 1
     permutations = scifem.interpolation.compute_entity_closure_permutations(V, fdim, entities)
@@ -558,7 +599,7 @@ def test_entity_closure_dofs_agree_between_cells(cell, degree):
 def test_surface_submesh_interpolation_is_reusable(cell):
     """One prepared interpolation follows later changes to its coefficients' values."""
     mesh = _EXTENSION_MESHES[cell]()
-    submesh, submesh_facets, entities = _exterior_facet_submesh(mesh)
+    submesh, submesh_facets, entities, _ = _exterior_facet_submesh(mesh)
     V_parent = dolfinx.fem.functionspace(mesh, ("Lagrange", 2, (2,)))
     V_submesh = dolfinx.fem.functionspace(submesh, ("Lagrange", 2, (2,)))
     u_parent = dolfinx.fem.Function(V_parent)

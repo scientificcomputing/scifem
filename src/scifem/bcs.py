@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import basix
 import dolfinx
 import ufl
@@ -5,6 +7,7 @@ import numpy.typing as npt
 import numpy as np
 from packaging.version import Version
 
+from .compat import get_facet_permutations
 from .utils import group_by_key
 from ffcx.ir.elementtables import (
     permute_quadrature_interval,
@@ -55,6 +58,39 @@ def build_quadrature_permutations(facet_type, points):
             raise ValueError(f"Unsupported {facet_type=}")
 
 
+def pull_back_to_reference_facet(
+    cell_type: basix.CellType, points_per_facet: Sequence[npt.NDArray[np.floating]]
+) -> npt.NDArray[np.floating]:
+    """Pull points on the facets of a reference cell back to the reference facet.
+
+    Each facet of a reference cell is an affine image ``x = v_0 + J xi`` of the reference
+    facet, so the pull-back ``xi = J^+ (x - v_0)`` is exact.
+
+    Args:
+        cell_type: The reference cell.
+        points_per_facet: For each local facet, points on it in the cell's reference
+            coordinates, shape ``(num_points, tdim)``.
+
+    Returns:
+        The points in the reference facet's coordinates, shape ``(num_points, tdim - 1)``,
+        which all facets share.
+
+    Raises:
+        NotImplementedError: If the facets' points differ in the reference facet's coordinates.
+    """
+    fdim = len(basix.topology(cell_type)) - 2
+    origins = basix.geometry(cell_type)[[f[0] for f in basix.topology(cell_type)[fdim]]]
+    jacobians = basix.cell.facet_jacobians(cell_type)
+    points = [
+        (x - v0) @ np.linalg.pinv(J).T for x, v0, J in zip(points_per_facet, origins, jacobians)
+    ]
+    if not all(np.allclose(p, points[0]) for p in points):
+        raise NotImplementedError(
+            "The points differ between the facets of the cell, in reference facet coordinates."
+        )
+    return points[0]
+
+
 def interpolate_function_onto_facet_dofs(
     Q: dolfinx.fem.FunctionSpace,
     expr: ufl.core.expr.Expr,
@@ -85,44 +121,12 @@ def interpolate_function_onto_facet_dofs(
     facet_types = set(basix.cell.subentity_types(domain.basix_cell())[fdim])
     assert len(facet_types) == 1, "All facets must have the same topology"
 
-    # Pull back interpolation points from reference coordinate element to facet reference element
-    # We create affine versions of each of them as we are in reference mode.
-    # Then we avoid Newton convergence issues
-    ref_cmap = basix.ufl.element(
-        "Lagrange",
-        domain.basix_cell(),
-        1,
-        shape=(domain.topology.dim,),
-        dtype=np.float64,
-    )
-    ref_top = ref_cmap.reference_topology
-    ref_geom = ref_cmap.reference_geometry
     facet_type = facet_types.pop()
-    facet_cmap = basix.ufl.element(
-        "Lagrange",
-        facet_type,
-        1,
-        shape=(domain.topology.dim,),
-        dtype=np.float64,
+    reference_facet_points = pull_back_to_reference_facet(
+        domain.basix_cell(), interpolation_points[fdim]
     )
-    facet_cel = dolfinx.fem.CoordinateElement(
-        dolfinx.cpp.fem.CoordinateElement_float64(facet_cmap.basix_element._e)
-    )
-    reference_facet_points = None
-    for i, points in enumerate(interpolation_points[fdim]):
-        geom = ref_geom[ref_top[fdim][i]]
-        ref_points = facet_cel.pull_back(points, geom)
-
-        # Assert that interpolation points are all equal on all facets
-        if reference_facet_points is None:
-            reference_facet_points = ref_points
-        else:
-            assert np.allclose(reference_facet_points, ref_points)
-    assert reference_facet_points is not None
     facet_points = build_quadrature_permutations(facet_type, reference_facet_points)
-    expressions = []
-    for i, perm in enumerate(facet_points):
-        expressions.append(dolfinx.fem.Expression(expr, perm))
+    expressions = [dolfinx.fem.Expression(expr, points) for points in facet_points]
     points_per_entity = [sum(ip.shape[0] for ip in ips) for ips in interpolation_points]
     offsets = np.zeros(domain.topology.dim + 2, dtype=np.int32)
     offsets[1:] = np.cumsum(points_per_entity[: domain.topology.dim + 1])
@@ -143,16 +147,7 @@ def interpolate_function_onto_facet_dofs(
     is_marked = np.zeros(num_facets_on_process, dtype=np.int8)
     is_marked[facets] = 1
     num_facets_per_cell = dolfinx.cpp.mesh.cell_num_entities(domain.topology.cell_type, fdim)
-    if hasattr(domain.topology, "create_cell_permutations"):
-        domain.topology.create_entity_permutations(fdim)
-        facet_permutations = domain.topology.get_entity_permutations(fdim).reshape(
-            -1, num_facets_per_cell
-        )
-    else:
-        domain.topology.create_entity_permutations()
-        facet_permutations = domain.topology.get_facet_permutations().reshape(
-            -1, num_facets_per_cell
-        )
+    facet_permutations = get_facet_permutations(domain.topology)
     # One evaluation per facet permutation, over every marked facet with that permutation
     local_facets = np.asarray(c_to_f.array, dtype=np.int32).reshape(-1, num_facets_per_cell)
     rows, slots = np.nonzero(is_marked[local_facets[all_connected_cells]])

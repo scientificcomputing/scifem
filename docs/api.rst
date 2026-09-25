@@ -141,3 +141,6 @@ Compat functions
 
 .. automodule:: scifem.compat
     :members:
+
+.. automodule:: scifem.ufl_compat
+    :members:

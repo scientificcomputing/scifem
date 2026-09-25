@@ -5,7 +5,12 @@ import numpy as np
 import dolfinx
 import inspect
 
-__all__ = ["create_partitioner", "create_cell_permutations", "compute_integration_domains"]
+__all__ = [
+    "create_partitioner",
+    "create_cell_permutations",
+    "compute_integration_domains",
+    "get_facet_permutations",
+]
 
 
 def create_partitioner(
@@ -198,3 +203,26 @@ def compute_integration_domains(
     except TypeError:
         dim = topology.dim if integral_type == dolfinx.fem.IntegralType.cell else topology.dim - 1
         return dolfinx.fem.compute_integration_domains(integral_type, topology, entities, dim)
+
+
+def get_facet_permutations(topology: dolfinx.mesh.Topology) -> npt.NDArray[np.uint8]:
+    """The permutation of every facet of every cell, across DOLFINx versions.
+
+    Each value encodes how a facet is oriented as seen from a cell, relative to a low-to-high
+    ordering of its global vertex indices, as FFCx uses for ``quadrature_permutation``.
+
+    Args:
+        topology: The topology to compute the facet permutations of.
+
+    Returns:
+        The permutations, shape ``(num_cells, num_facets_per_cell)``, ghost cells included.
+    """
+    fdim = topology.dim - 1
+    num_facets_per_cell = dolfinx.cpp.mesh.cell_num_entities(topology.cell_type, fdim)
+    if hasattr(topology, "create_cell_permutations"):
+        topology.create_entity_permutations(fdim)
+        permutations = topology.get_entity_permutations(fdim)
+    else:  # DOLFINx < 0.10
+        topology.create_entity_permutations()  # type: ignore[call-arg]
+        permutations = topology.get_facet_permutations()
+    return np.asarray(permutations).reshape(-1, num_facets_per_cell)
