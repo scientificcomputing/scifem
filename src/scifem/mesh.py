@@ -7,6 +7,7 @@ else:
     from typing_extensions import deprecated
 
 from . import _scifem  # type: ignore
+from .compat import compute_integration_domains
 import collections
 import dolfinx
 import typing
@@ -348,18 +349,9 @@ def compute_subdomain_exterior_facets(
     sub_facets = dolfinx.mesh.exterior_facet_indices(sub_mesh.topology)
 
     # Map exterior facet to (submesh_cell, local_facet_index) tuples
-    try:
-        integration_entities = dolfinx.fem.compute_integration_domains(
-            dolfinx.fem.IntegralType.exterior_facet, sub_mesh.topology, sub_facets
-        )
-    except TypeError:
-        integration_entities = dolfinx.fem.compute_integration_domains(
-            dolfinx.fem.IntegralType.exterior_facet,
-            sub_mesh.topology,
-            sub_facets,
-            sub_mesh.topology.dim - 1,
-        )
-    integration_entities = integration_entities.reshape(-1, 2)
+    integration_entities = compute_integration_domains(
+        dolfinx.fem.IntegralType.exterior_facet, sub_mesh.topology, sub_facets
+    ).reshape(-1, 2)
     submap_array = get_entity_map(cell_map)
     integration_entities[:, 0] = submap_array[integration_entities[:, 0]]
 

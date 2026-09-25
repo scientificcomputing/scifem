@@ -4,6 +4,8 @@ import ufl
 import numpy.typing as npt
 import numpy as np
 from packaging.version import Version
+
+from .utils import group_by_key
 from ffcx.ir.elementtables import (
     permute_quadrature_interval,
     permute_quadrature_triangle,
@@ -124,9 +126,6 @@ def interpolate_function_onto_facet_dofs(
     points_per_entity = [sum(ip.shape[0] for ip in ips) for ips in interpolation_points]
     offsets = np.zeros(domain.topology.dim + 2, dtype=np.int32)
     offsets[1:] = np.cumsum(points_per_entity[: domain.topology.dim + 1])
-    values_per_entity = np.zeros(
-        (offsets[-1], domain.geometry.dim), dtype=dolfinx.default_scalar_type
-    )
 
     # Compute integration entities (cell, local_facet index) for all facets
     all_connected_cells = dolfinx.mesh.compute_incident_entities(
@@ -134,8 +133,6 @@ def interpolate_function_onto_facet_dofs(
     )
     expr_value_size = expressions[0].value_size
 
-    # Update array allocations to use the exact expression value size
-    values_per_entity = np.zeros((offsets[-1], expr_value_size), dtype=dolfinx.default_scalar_type)
     values = np.zeros(len(all_connected_cells) * offsets[-1] * expr_value_size)
 
     domain.topology.create_connectivity(domain.topology.dim, fdim)
@@ -156,26 +153,23 @@ def interpolate_function_onto_facet_dofs(
         facet_permutations = domain.topology.get_facet_permutations().reshape(
             -1, num_facets_per_cell
         )
-    for i, cell in enumerate(all_connected_cells):
-        values_per_entity[:] = 0.0
-        local_facets = c_to_f.links(cell)
-        for j, lf in enumerate(local_facets):
-            if not is_marked[lf]:
-                continue
-            insert_pos = offsets[fdim] + reference_facet_points.shape[0] * j
-            # Backwards compatibility
-            entity = np.array([[cell, j]], dtype=np.int32)
-            perm = facet_permutations[cell, j]
-            try:
-                normal_on_facet = expressions[perm].eval(domain, entity)
-            except (AttributeError, AssertionError):
-                normal_on_facet = expressions[perm].eval(domain, entity.flatten())
-            # NOTE: evaluate within loop to avoid large memory requirements
-            values_per_entity[insert_pos : insert_pos + reference_facet_points.shape[0]] = (
-                normal_on_facet.reshape(-1, expr_value_size)
-            )
-        values[i * offsets[-1] * expr_value_size : (i + 1) * offsets[-1] * expr_value_size] = (
-            values_per_entity.reshape(-1)
+    # One evaluation per facet permutation, over every marked facet with that permutation
+    local_facets = np.asarray(c_to_f.array, dtype=np.int32).reshape(-1, num_facets_per_cell)
+    rows, slots = np.nonzero(is_marked[local_facets[all_connected_cells]])
+    cells = all_connected_cells[rows]
+    permutations = facet_permutations[cells, slots]
+    num_points = reference_facet_points.shape[0]
+    values = values.reshape(len(all_connected_cells), offsets[-1], expr_value_size)
+    for perm, selected in group_by_key(permutations):
+        entities = np.column_stack((cells[selected], slots[selected])).astype(np.int32)
+        # Backwards compatibility
+        try:
+            evaluated = expressions[perm].eval(domain, entities)
+        except (AttributeError, AssertionError):
+            evaluated = expressions[perm].eval(domain, entities.flatten())
+        positions = offsets[fdim] + num_points * slots[selected, None] + np.arange(num_points)
+        values[rows[selected, None], positions] = evaluated.reshape(
+            len(selected), num_points, expr_value_size
         )
 
     qh = dolfinx.fem.Function(Q)

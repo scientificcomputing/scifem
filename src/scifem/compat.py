@@ -5,7 +5,7 @@ import numpy as np
 import dolfinx
 import inspect
 
-__all__ = ["create_partitioner"]
+__all__ = ["create_partitioner", "create_cell_permutations", "compute_integration_domains"]
 
 
 def create_partitioner(
@@ -161,3 +161,40 @@ def ghosting_ranks(index_map, tag: int):
     dest = index_map.index_to_dest_ranks(tag)
     ranks, offsets = (dest.array, dest.offsets) if hasattr(dest, "array") else dest
     return np.asarray(ranks, dtype=np.int32), np.asarray(offsets, dtype=np.int64)
+
+
+def create_cell_permutations(topology: dolfinx.mesh.Topology):
+    """Compute the packed per-cell permutation info, across DOLFINx versions.
+
+    Args:
+        topology: The topology to compute the permutation info of.
+    """
+    if hasattr(topology, "create_cell_permutations"):
+        topology.create_cell_permutations()
+    else:  # DOLFINx < 0.10, where it takes no dimension
+        topology.create_entity_permutations()  # type: ignore[call-arg]
+
+
+def compute_integration_domains(
+    integral_type: dolfinx.fem.IntegralType,
+    topology: dolfinx.mesh.Topology,
+    entities: npt.NDArray[np.int32],
+) -> npt.NDArray[np.int32]:
+    """:py:func:`dolfinx.fem.compute_integration_domains` across DOLFINx versions.
+
+    Older versions also take the dimension of ``entities``, which follows from
+    ``integral_type``: the cells for a cell integral, the facets otherwise.
+
+    Args:
+        integral_type: The type of integral the entities are for.
+        topology: The topology of the mesh the entities belong to.
+        entities: The entities, local to the process.
+
+    Returns:
+        The integration entities, flattened, as returned by DOLFINx.
+    """
+    try:
+        return dolfinx.fem.compute_integration_domains(integral_type, topology, entities)
+    except TypeError:
+        dim = topology.dim if integral_type == dolfinx.fem.IntegralType.cell else topology.dim - 1
+        return dolfinx.fem.compute_integration_domains(integral_type, topology, entities, dim)

@@ -61,6 +61,30 @@ Interpolation
 
 .. autofunction:: petsc_interpolation_matrix
 
+Facet submeshes
+===============
+
+Moving data between a mesh and a submesh of its facets, in both directions. The classes prepare
+the Expression, the connectivities and the facet orientations once, for repeated use; the
+functions are one-off calls to them.
+
+.. autofunction:: scifem.interpolation.interpolate_to_surface_submesh
+
+.. autoclass:: scifem.interpolation.SurfaceSubmeshInterpolation
+    :members:
+
+.. autofunction:: scifem.interpolation.interpolate_from_surface_submesh
+
+.. autoclass:: scifem.interpolation.SurfaceSubmeshExtension
+    :members:
+
+Both directions line up the dofs of a sub-entity as seen from its cell with those of the entity
+taken as a cell of its own, which these compute:
+
+.. autofunction:: scifem.interpolation.compute_entity_closure_permutations
+
+.. autofunction:: scifem.interpolation.compute_entity_closure_dofs
+
 
 Evaluation and geometry
 #######################

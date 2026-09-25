@@ -1,12 +1,23 @@
 from packaging.version import Version
+import basix
 import dolfinx
 import ufl
 import numpy as np
 import numpy.typing as npt
-from .utils import unroll_dofmap
+from .compat import create_cell_permutations
+from .utils import group_by_key, unroll_dofmap
 from .mesh import _EntityMap
 
-__all__ = ["interpolation_matrix", "prepare_interpolation_data", "interpolate_to_surface_submesh"]
+__all__ = [
+    "interpolation_matrix",
+    "prepare_interpolation_data",
+    "interpolate_to_surface_submesh",
+    "interpolate_from_surface_submesh",
+    "SurfaceSubmeshInterpolation",
+    "SurfaceSubmeshExtension",
+    "compute_entity_closure_permutations",
+    "compute_entity_closure_dofs",
+]
 
 if dolfinx.has_petsc4py:
     from petsc4py import PETSc
@@ -181,10 +192,7 @@ def prepare_interpolation_data(
 
     if Q.element.needs_dof_transformations:
         # Apply dof transformation to each column (using Piola maps)
-        if hasattr(mesh.topology, "create_cell_permutations"):
-            mesh.topology.create_cell_permutations()
-        else:
-            mesh.topology.create_entity_permutations()
+        create_cell_permutations(mesh.topology)
         cell_perm = mesh.topology.get_cell_permutation_info()[:num_cells]
 
         permuted_matrix = interpolated_matrix.flatten().copy()
@@ -333,6 +341,196 @@ if dolfinx.has_petsc4py:
         return A
 
 
+def compute_entity_closure_permutations(
+    V: dolfinx.fem.FunctionSpace,
+    dim: int,
+    entities: npt.NDArray[np.int32],
+    size: int | None = None,
+) -> npt.NDArray[np.int32]:
+    """Permutations taking each entity's closure dofs from its cell's orientation to its own.
+
+    Row ``i`` reorders data given at the closure dofs of the local entity ``entities[i, 1]`` of
+    cell ``entities[i, 0]``, in the order of that entity in the cell, into the order of the entity
+    as a cell of its own (as in a submesh), with its vertices ordered by global index:
+    ``data_entity = data_cell[perm[i]]``. Every cell sharing an entity therefore agrees on the
+    order. It is basix's ``permute_subentity_closure_inv`` with the cell's permutation info,
+    computed once per distinct ``(cell permutation info, local entity)`` pair.
+
+    Args:
+        V: Space on the parent mesh whose element defines the permutations.
+        dim: Topological dimension of the entities, below that of the cells.
+        entities: ``(cell, local entity)`` pairs, shape ``(num_entities, 2)``, such as facet
+            integration entities for ``dim = tdim - 1``.
+        size: Length of each permutation. Defaults to the number of closure dofs of an entity.
+
+    Returns:
+        The permutations, shape ``(num_entities, size)``.
+
+    Raises:
+        ValueError: If ``size`` is not given and the entities' closures differ in size, as for the
+            triangular and quadrilateral facets of a prism.
+    """
+    mesh = V.mesh
+    element = V.element.basix_element
+    entity_types = basix.cell.subentity_types(element.cell_type)[dim]
+    create_cell_permutations(mesh.topology)
+    cell_info = mesh.topology.get_cell_permutation_info()
+    entities = np.asarray(entities, dtype=np.int32).reshape(-1, 2)
+    cells, local_entities = entities[:, 0], entities[:, 1]
+    if size is None:
+        layout = V.dofmap.dof_layout
+        sizes = {len(layout.entity_closure_dofs(dim, int(e))) for e in np.unique(local_entities)}
+        if len(sizes) > 1:
+            raise ValueError(f"The entities' closures have different numbers of dofs: {sizes}.")
+        size = sizes.pop() if sizes else 0
+
+    permutations = np.empty((len(entities), size), dtype=np.int32)
+    keys = cell_info[cells].astype(np.int64) * (int(local_entities.max(initial=0)) + 1)
+    keys += local_entities
+    for _, rows in group_by_key(keys):
+        entity = int(local_entities[rows[0]])
+        permutation = np.arange(size, dtype=np.int32)
+        element.permute_subentity_closure_inv(
+            permutation, int(cell_info[cells[rows[0]]]), entity_types[entity], entity
+        )
+        permutations[rows] = permutation
+    return permutations
+
+
+def compute_entity_closure_dofs(
+    V: dolfinx.fem.FunctionSpace, dim: int, entities: npt.NDArray[np.int32]
+) -> npt.NDArray[np.int32]:
+    """The dofs of each entity's closure, from its cell's dofmap, in the entity's own orientation.
+
+    Entry ``[i, j]`` is the dof of ``V`` (a node, for a blocked space) at the ``j``-th closure dof
+    of the local entity ``entities[i, 1]`` of cell ``entities[i, 0]``, taken as a cell of its own.
+    Cells sharing an entity give the same row, and for facets it lines up with the dofs of the same
+    element's trace on a facet submesh. See :py:func:`compute_entity_closure_permutations`.
+
+    Args:
+        V: Space on the parent mesh.
+        dim: Topological dimension of the entities, below that of the cells.
+        entities: ``(cell, local entity)`` pairs, shape ``(num_entities, 2)``.
+
+    Returns:
+        The dofs, shape ``(num_entities, num closure dofs)``.
+    """
+    entities = np.asarray(entities, dtype=np.int32).reshape(-1, 2)
+    layout = V.dofmap.dof_layout
+    local = np.take_along_axis(
+        np.array([layout.entity_closure_dofs(dim, int(e)) for e in entities[:, 1]], dtype=np.int32)
+        if len(entities)
+        else np.zeros((0, 0), dtype=np.int32),
+        compute_entity_closure_permutations(V, dim, entities),
+        axis=1,
+    )
+    return np.take_along_axis(V.dofmap.list[entities[:, 0]], local, axis=1)
+
+
+class SurfaceSubmeshInterpolation:
+    """Interpolation of a volume expression into a space on a facet submesh, prepared once.
+
+    The expression is compiled into a :py:class:`dolfinx.fem.Expression` at the surface element's
+    interpolation points, and the connectivities and permutation info it needs are created, once.
+    :py:meth:`apply` then evaluates the expression on the parent facets, at the current values of
+    its coefficients, and interpolates the result into each submesh cell. For DOLFINx < 0.11
+    the values also have to be reordered from each facet's orientation in its cell to its own
+    (:py:func:`compute_entity_closure_permutations`); that permutation is computed here too.
+
+    Note:
+        Does not work for DG as no dofs are associated with the facets in versions of DOLFINx
+        prior to https://github.com/FEniCS/dolfinx/pull/4140, which is included in version
+        0.11.0 and later.
+
+    Args:
+        expr: Function or expression on the parent mesh to interpolate from
+        V_surface: Space on the facet submesh to interpolate into
+        submesh_facets: Cells in facet mesh
+        integration_entities: Integration entities on the parent mesh
+            corresponding to the facets in `submesh_facets`
+        entity_maps: Entity maps for an expression with coefficients on other meshes
+    """
+
+    def __init__(
+        self,
+        expr: ufl.core.expr.Expr,
+        V_surface: dolfinx.fem.FunctionSpace,
+        submesh_facets: npt.NDArray[np.int32],
+        integration_entities: npt.NDArray[np.int32],
+        entity_maps: list[_EntityMap] | None = None,
+    ):
+        if Version(dolfinx.__version__) < Version("0.10.0"):
+            raise RuntimeError("interpolate_to_submesh requires dolfinx version 0.10.0 or higher")
+        ufl_domains = ufl.domain.extract_domains(expr)
+        max_tdim_pos = np.argmax([domain.ufl_cargo().topology.dim for domain in ufl_domains])
+        self._mesh = dolfinx.mesh.Mesh(
+            ufl_domains[max_tdim_pos].ufl_cargo(), ufl_domains[max_tdim_pos]
+        )
+        self._V_surface = V_surface
+        self._submesh_facets = submesh_facets
+        self._integration_entities = integration_entities
+
+        submesh = V_surface.mesh
+        ip = V_surface.element.interpolation_points
+        try:
+            self._expression = dolfinx.fem.Expression(expr, ip, entity_maps=entity_maps)
+        except TypeError:
+            self._expression = dolfinx.fem.Expression(expr, ip)
+        self._mesh.topology.create_connectivity(self._mesh.topology.dim, submesh.topology.dim)
+        self._mesh.topology.create_connectivity(submesh.topology.dim, self._mesh.topology.dim)
+        create_cell_permutations(self._mesh.topology)
+        create_cell_permutations(submesh.topology)
+        # Before the introduction of https://github.com/FEniCS/dolfinx/pull/4140
+        # one needed to permute the data according to the facet permutations,
+        # one permutation per evaluation point.
+        self._permutations: npt.NDArray[np.int32] | None = None
+        if Version(dolfinx.__version__) < Version("0.11.0.dev0"):
+            V_vol = expr.function_space  # type: ignore[attr-defined]
+            self._permutations = compute_entity_closure_permutations(
+                V_vol, V_vol.mesh.topology.dim - 1, integration_entities, ip.shape[0]
+            )
+
+    @property
+    def V_surface(self) -> dolfinx.fem.FunctionSpace:
+        """The space on the facet submesh interpolated into."""
+        return self._V_surface
+
+    @property
+    def expression(self) -> dolfinx.fem.Expression:
+        """The compiled expression, at the surface element's interpolation points."""
+        return self._expression
+
+    def apply(self, u_surface: dolfinx.fem.Function):
+        """Interpolate the expression, at its coefficients' current values, into ``u_surface``.
+
+        Args:
+            u_surface: Function in :py:attr:`V_surface`, overwritten on the submesh cells, and
+                scattered forward.
+        """
+        data = self._expression.eval(self._mesh, self._integration_entities)
+        if self._permutations is not None:
+            data = data[np.arange(data.shape[0])[:, None], self._permutations]
+
+        if len(data.shape) == 3:
+            # Data is now (num_cells, value_size,num_points)
+            data = data.swapaxes(1, 2)
+            # Data is now (value_size, num_cells, num_points)
+            data = data.swapaxes(0, 1)
+
+        if self._expression.value_size == 1:
+            shaped_data = data.flatten()
+        else:
+            shaped_data = data.reshape(self._expression.value_size, -1)
+
+        if hasattr(u_surface._cpp_object, "interpolate_f"):
+            interpolate_func = u_surface._cpp_object.interpolate_f
+        else:
+            interpolate_func = u_surface._cpp_object.interpolate
+
+        interpolate_func(shaped_data, self._submesh_facets)
+        u_surface.x.scatter_forward()
+
+
 def interpolate_to_surface_submesh(
     u_volume: dolfinx.fem.Function,
     u_surface: dolfinx.fem.Function,
@@ -342,6 +540,10 @@ def interpolate_to_surface_submesh(
 ):
     """
     Interpolate a function `u_volume` into the function `u_surface`.
+
+    See :py:class:`SurfaceSubmeshInterpolation`, which prepares the interpolation once for
+    repeated use.
+
     Note:
         Does not work for DG as no dofs are associated with the facets in versions of DOLFINx
         prior to https://github.com/FEniCS/dolfinx/pull/4140, which is included in version
@@ -353,64 +555,196 @@ def interpolate_to_surface_submesh(
         submesh_facets: Cells in facet mesh
         integration_entities: Integration entities on the parent mesh
             corresponding to the facets in `submesh_facets`
+        entity_maps: Entity maps for an expression with coefficients on other meshes
     """
-    if Version(dolfinx.__version__) < Version("0.10.0"):
-        raise RuntimeError("interpolate_to_submesh requires dolfinx version 0.10.0 or higher")
-    ufl_domains = ufl.domain.extract_domains(u_volume)
-    max_tdim_pos = np.argmax([domain.ufl_cargo().topology.dim for domain in ufl_domains])
-    mesh = dolfinx.mesh.Mesh(ufl_domains[max_tdim_pos].ufl_cargo(), ufl_domains[max_tdim_pos])
+    SurfaceSubmeshInterpolation(
+        u_volume, u_surface.function_space, submesh_facets, integration_entities, entity_maps
+    ).apply(u_surface)
 
-    V_surf = u_surface.function_space
-    submesh = V_surf.mesh
-    ip = V_surf.element.interpolation_points
 
-    try:
-        expr = dolfinx.fem.Expression(u_volume, ip, entity_maps=entity_maps)
-    except TypeError:
-        expr = dolfinx.fem.Expression(u_volume, ip)
-    mesh.topology.create_connectivity(mesh.topology.dim, submesh.topology.dim)
-    mesh.topology.create_connectivity(submesh.topology.dim, mesh.topology.dim)
+class SurfaceSubmeshExtension:
+    """The extension by zero of a function on a facet submesh into a Lagrange space on its parent.
 
-    data = expr.eval(mesh, integration_entities)
-    if hasattr(mesh.topology, "create_cell_permutations"):
-        mesh.topology.create_cell_permutations()
-        submesh.topology.create_cell_permutations()
-    else:
-        submesh.topology.create_entity_permutations()
-        mesh.topology.create_entity_permutations()
-    ft = V_surf.element.basix_element.cell_type
+    The reverse of :py:class:`SurfaceSubmeshInterpolation`, prepared once in the same way so that
+    :py:meth:`apply` only evaluates and writes. The surface function is evaluated at the volume
+    element's interpolation points on each facet: these are the same on every facet, so a single
+    :py:class:`dolfinx.fem.Expression` of the surface basis is evaluated once. The values, in the
+    submesh cell's orientation, are written to the volume dofs of that facet's closure in the same
+    orientation (:py:func:`compute_entity_closure_dofs`). Every other volume dof is zero.
 
-    if Version(dolfinx.__version__) < Version("0.11.0.dev0"):
-        V_vol = u_volume.function_space
-        mesh = V_vol.mesh
-        # Before the introduction of https://github.com/FEniCS/dolfinx/pull/4140
-        # one needed to permute the data according to the facet permutations.
-        cell_info = mesh.topology.get_cell_permutation_info()
-        for i in range(integration_entities.shape[0]):
-            perm = np.arange(data.shape[1], dtype=np.int32)
-            V_vol.element.basix_element.permute_subentity_closure_inv(
-                perm,
-                cell_info[integration_entities[i, 0]],
-                ft,
-                int(integration_entities[i, 1]),
+    A volume dof shared by several facets, on this or other processes, is written by each of them.
+    Every write is scaled by one over the number of writes and the contributions are summed onto
+    the owner. For a continuous surface function the writes agree, so the dof gets its value; for
+    a discontinuous one, or any space whose facets disagree at shared nodes, it gets their average.
+    Choosing a compatible space is up to the caller. Either way the map is linear,
+    ``u[volume_dofs] += weights * (basis @ u_surface[surface_dofs])``, which is all a transpose
+    needs.
+
+    The values are written to the closure dofs as they are, which requires the volume element's
+    interpolation matrix to be the identity (continuous Lagrange). They are written directly rather
+    than with :py:meth:`dolfinx.fem.Function.interpolate` on the parent cells, which would set
+    every dof of those cells: a boundary node not on the cell's own facet, such as the fourth
+    vertex of a tetrahedron touching the boundary elsewhere, would be overwritten with zero.
+
+    For a surface space that is the trace of the volume space, this is the right inverse of
+    :py:func:`interpolate_to_surface_submesh`. For a coarser one, say P1 into P2, it gives the
+    interpolant at the volume's boundary nodes.
+
+    Args:
+        V_surface: A space on the facet submesh, with as many components as ``V_volume``.
+        V_volume: A continuous Lagrange space on the parent mesh.
+        submesh_facets: Cells of the submesh to extend from.
+        integration_entities: ``(cell, local facet)`` on the parent mesh of each of
+            ``submesh_facets``, as for :py:func:`interpolate_to_surface_submesh`.
+
+    Raises:
+        ValueError: If ``V_volume`` is not continuous Lagrange or the value sizes differ.
+    """
+
+    _V_surface: dolfinx.fem.FunctionSpace
+    _V_volume: dolfinx.fem.FunctionSpace
+    _basis: npt.NDArray[np.floating]
+    _surface_dofs: npt.NDArray[np.int32]
+    _volume_dofs: npt.NDArray[np.int32]
+    _weights: npt.NDArray[np.floating]
+
+    def __init__(
+        self,
+        V_surface: dolfinx.fem.FunctionSpace,
+        V_volume: dolfinx.fem.FunctionSpace,
+        submesh_facets: npt.NDArray[np.int32],
+        integration_entities: npt.NDArray[np.int32],
+    ):
+        element = V_volume.element.basix_element
+        bs = V_volume.dofmap.index_map_bs
+        value_size = int(np.prod(V_surface.value_shape, dtype=int))
+        # Point values are written straight into dofs, so the interpolation matrix must be the
+        # identity, and the trace element on the facet is built from the same Lagrange family.
+        if (
+            element.family != basix.ElementFamily.P
+            or element.discontinuous
+            or not element.interpolation_is_identity
+        ):
+            raise ValueError(
+                "The volume space must be continuous Lagrange, whose interpolation matrix is the "
+                "identity, so that its dofs are the point values written here."
             )
-            data[i] = data[i][perm]
+        if value_size != bs:
+            raise ValueError(
+                f"The surface space has {value_size} components, the volume space {bs}."
+            )
+        self._V_surface, self._V_volume = V_surface, V_volume
 
-    if len(data.shape) == 3:
-        # Data is now (num_cells, value_size,num_points)
-        data = data.swapaxes(1, 2)
-        # Data is now (value_size, num_cells, num_points)
-        data = data.swapaxes(0, 1)
+        submesh = V_surface.mesh
+        submesh_facets = np.asarray(submesh_facets, dtype=np.int32)
 
-    if expr.value_size == 1:
-        shaped_data = data.flatten()
-    else:
-        shaped_data = data.reshape(expr.value_size, -1)
+        # The volume element's points on the reference facet, in the facet's closure order, and
+        # the volume dofs at them, in the orientation of each submesh cell
+        facet_type = V_surface.element.basix_element.cell_type
+        trace = basix.create_element(
+            element.family, facet_type, element.degree, element.lagrange_variant
+        )
+        points = trace.points
+        nodes = compute_entity_closure_dofs(
+            V_volume, V_volume.mesh.topology.dim - 1, integration_entities
+        )
+        assert nodes.shape[1] == len(points), "The facet trace does not match the closure dofs"
+        self._volume_dofs = nodes[:, :, None] * bs + np.arange(bs)  # (facets, points, bs)
 
-    if hasattr(u_surface._cpp_object, "interpolate_f"):
-        interpolate_func = u_surface._cpp_object.interpolate_f
-    else:
-        interpolate_func = u_surface._cpp_object.interpolate
+        # Surface basis at those points: (facets, points, bs, surface dofs per cell)
+        u = ufl.TestFunction(V_surface)
+        basis = dolfinx.fem.Expression(u, points).eval(submesh, submesh_facets)
+        self._basis = basis.reshape(len(submesh_facets), len(points), bs, -1)
+        s_bs = V_surface.dofmap.bs
+        cell_dofs = V_surface.dofmap.list[submesh_facets]
+        self._surface_dofs = (cell_dofs[:, :, None] * s_bs + np.arange(s_bs)).reshape(
+            len(submesh_facets), -1
+        )
 
-    interpolate_func(shaped_data, submesh_facets)
-    u_surface.x.scatter_forward()
+        # Number of writes to each volume dof, over all facets and processes
+        count = dolfinx.fem.Function(V_volume)
+        count.x.array[:] = 0.0
+        np.add.at(count.x.array, self._volume_dofs.reshape(-1), 1.0)
+        count.x.scatter_reverse(dolfinx.la.InsertMode.add)
+        count.x.scatter_forward()
+        self._weights = 1.0 / count.x.array[self._volume_dofs]
+
+    @property
+    def V_surface(self) -> dolfinx.fem.FunctionSpace:
+        """The surface space."""
+        return self._V_surface
+
+    @property
+    def V_volume(self) -> dolfinx.fem.FunctionSpace:
+        """The volume space."""
+        return self._V_volume
+
+    @property
+    def basis(self) -> npt.NDArray[np.floating]:
+        """The surface basis at each facet's points, ``(facets, points, bs, cell dofs)``, with
+        the cell dofs unrolled by block."""
+        return self._basis
+
+    @property
+    def surface_dofs(self) -> npt.NDArray[np.int32]:
+        """The unrolled surface dofs of each facet, ``(facets, cell dofs)``."""
+        return self._surface_dofs
+
+    @property
+    def volume_dofs(self) -> npt.NDArray[np.int32]:
+        """The unrolled volume dof each point writes to, local to the process,
+        ``(facets, points, bs)``."""
+        return self._volume_dofs
+
+    @property
+    def weights(self) -> npt.NDArray[np.floating]:
+        """One over the number of writes to each of :py:attr:`volume_dofs`, over all facets and
+        processes, with the same shape."""
+        return self._weights
+
+    def apply(self, u_surface: dolfinx.fem.Function, u_volume: dolfinx.fem.Function):
+        """Set ``u_volume`` to the extension of ``u_surface``.
+
+        Unlike :py:func:`interpolate_to_surface_submesh` and
+        :py:func:`scifem.interpolate_function_onto_facet_dofs`, this does not call
+        :py:meth:`dolfinx.fem.Function.interpolate`, which would set every dof of each parent cell
+        and zero boundary nodes that lie on none of that cell's facets. The values are instead
+        added straight into the volume dofs of each facet's closure, scaled by :py:attr:`weights`,
+        then summed onto their owners with a reverse scatter. Each boundary dof thus gets the
+        mean of its writes: its value for a compatible (continuous) surface space, and an average
+        of the facets' values where they disagree.
+
+        Args:
+            u_surface: Function in :py:attr:`V_surface`, with consistent ghosts.
+            u_volume: Function in :py:attr:`V_volume`, overwritten, ghosts included.
+        """
+        values = np.einsum("fpvd,fd->fpv", self._basis, u_surface.x.array[self._surface_dofs])
+        u_volume.x.array[:] = 0.0
+        np.add.at(u_volume.x.array, self._volume_dofs.reshape(-1), (values * self._weights).ravel())
+        u_volume.x.scatter_reverse(dolfinx.la.InsertMode.add)
+        u_volume.x.scatter_forward()
+
+
+def interpolate_from_surface_submesh(
+    u_surface: dolfinx.fem.Function,
+    u_volume: dolfinx.fem.Function,
+    submesh_facets: npt.NDArray[np.int32],
+    integration_entities: npt.NDArray[np.int32],
+):
+    """
+    Extend a function ``u_surface`` on a facet submesh by zero into the function ``u_volume``.
+
+    The reverse of :py:func:`interpolate_to_surface_submesh`: ``u_volume`` takes the values of
+    ``u_surface`` at its nodes on the facets and is zero at every other node. See
+    :py:class:`SurfaceSubmeshExtension`, which can be reused across calls.
+
+    Args:
+        u_surface: Function on the facet submesh to extend
+        u_volume: Continuous Lagrange function on the parent mesh to extend into
+        submesh_facets: Cells in facet mesh
+        integration_entities: Integration entities on the parent mesh
+            corresponding to the facets in `submesh_facets`
+    """
+    SurfaceSubmeshExtension(
+        u_surface.function_space, u_volume.function_space, submesh_facets, integration_entities
+    ).apply(u_surface, u_volume)
