@@ -524,7 +524,8 @@ def test_interpolate_from_surface_submesh_into_a_piola_mapped_space(cell, elemen
 
 
 @pytest.mark.skipif(
-    Version(dolfinx.__version__) < Version("0.10.0"), reason="Requires DOLFINx >= 0.10"
+    not hasattr(dolfinx.fem.FiniteElement, "physical_base_value_size"),
+    reason="Requires fixes to interpolation on manifolds, ref FEniCS/DOLFINx#4511.",
 )
 @pytest.mark.xfail(
     strict=True,
