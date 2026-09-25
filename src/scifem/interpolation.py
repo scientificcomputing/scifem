@@ -595,17 +595,17 @@ class SurfaceSubmeshExtension:
     Raises:
         ValueError: If ``V_volume`` is discontinuous, the value sizes do not fit, or
             ``entity_maps`` is missing where it is needed.
-        NotImplementedError: If the volume element's pullback cannot be inverted, or its
-            interpolation points differ between the facets of a cell.
+        NotImplementedError: If ``V_surface`` needs dof transformations, the volume element's
+            pullback cannot be inverted, or its interpolation points differ between the facets
+            of a cell.
     """
 
     _V_surface: dolfinx.fem.FunctionSpace
     _V_volume: dolfinx.fem.FunctionSpace
-    _basis: npt.NDArray[np.floating] | None
-    _surface_dofs: npt.NDArray[np.int32] | None
+    _basis: npt.NDArray[np.floating]
+    _surface_dofs: npt.NDArray[np.int32]
     _volume_dofs: npt.NDArray[np.int32]
     _weights: npt.NDArray[np.floating]
-    _piola: bool
 
     def __init__(
         self,
@@ -619,15 +619,27 @@ class SurfaceSubmeshExtension:
         element = V_volume.element.basix_element
         if element.discontinuous:
             raise ValueError("The volume space must be continuous.")
+        if V_surface.element.needs_dof_transformations:
+            raise NotImplementedError(
+                "Surface spaces that need dof transformations are not supported."
+            )
+        submesh_facets = np.asarray(submesh_facets, dtype=np.int32)
         if element.family == basix.ElementFamily.P and element.interpolation_is_identity:
-            self._setup_nodal(submesh_facets, integration_entities)
+            self._basis, self._volume_dofs = self._setup_nodal(submesh_facets, integration_entities)
         else:
-            self._setup_piola(integration_entities, entity_maps)
+            self._basis, self._volume_dofs = self._setup_piola(integration_entities, entity_maps)
+        s_bs = V_surface.dofmap.bs
+        cell_dofs = V_surface.dofmap.list[submesh_facets]
+        self._surface_dofs = (cell_dofs[:, :, None] * s_bs + np.arange(s_bs)).reshape(
+            len(submesh_facets), -1
+        )
+        self._weights = self._inverse_write_counts(self._volume_dofs)
 
     def _setup_nodal(
         self, submesh_facets: npt.NDArray[np.int32], integration_entities: npt.NDArray[np.int32]
-    ):
-        """Point values written straight into the Lagrange dofs of each facet's closure."""
+    ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.int32]]:
+        """The surface basis at the Lagrange nodes of each facet's closure, and those nodes'
+        volume dofs, unrolled by block."""
         V_surface, V_volume = self._V_surface, self._V_volume
         element = V_volume.element.basix_element
         bs = V_volume.dofmap.index_map_bs
@@ -636,10 +648,6 @@ class SurfaceSubmeshExtension:
             raise ValueError(
                 f"The surface space has {value_size} components, the volume space {bs}."
             )
-        self._piola = False
-
-        submesh = V_surface.mesh
-        submesh_facets = np.asarray(submesh_facets, dtype=np.int32)
 
         # The volume element's points on the reference facet, in the facet's closure order, and
         # the volume dofs at them, in the orientation of each submesh cell
@@ -652,19 +660,12 @@ class SurfaceSubmeshExtension:
             V_volume, V_volume.mesh.topology.dim - 1, integration_entities
         )
         assert nodes.shape[1] == len(points), "The facet trace does not match the closure dofs"
-        self._volume_dofs = nodes[:, :, None] * bs + np.arange(bs)  # (facets, points, bs)
+        volume_dofs = (nodes[:, :, None] * bs + np.arange(bs)).reshape(len(nodes), -1)
 
-        # Surface basis at those points: (facets, points, bs, surface dofs per cell)
+        # Surface basis at those points, (facets, points * bs, surface dofs per cell)
         u = ufl.TestFunction(V_surface)
-        basis = dolfinx.fem.Expression(u, points).eval(submesh, submesh_facets)
-        self._basis = basis.reshape(len(submesh_facets), len(points), bs, -1)
-        s_bs = V_surface.dofmap.bs
-        cell_dofs = V_surface.dofmap.list[submesh_facets]
-        self._surface_dofs = (cell_dofs[:, :, None] * s_bs + np.arange(s_bs)).reshape(
-            len(submesh_facets), -1
-        )
-
-        self._weights = self._inverse_write_counts(self._volume_dofs)
+        basis = dolfinx.fem.Expression(u, points).eval(V_surface.mesh, submesh_facets)
+        return basis.reshape(len(submesh_facets), len(points) * bs, -1), volume_dofs
 
     def _inverse_write_counts(self, volume_dofs: npt.NDArray[np.int32]) -> npt.NDArray[np.floating]:
         """One over the number of writes to each of ``volume_dofs``, over all facets and
@@ -680,14 +681,14 @@ class SurfaceSubmeshExtension:
         self,
         integration_entities: npt.NDArray[np.int32],
         entity_maps: list[_EntityMap] | None,
-    ):
-        """Moments of the pulled-back surface function, for a Piola-mapped volume space.
+    ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.int32]]:
+        """The map from the surface dofs to the volume dofs of each facet's closure, for a
+        Piola-mapped volume space, and those volume dofs.
 
-        The surface function is evaluated at the volume element's interpolation points on the
-        closure of each facet, on the parent ``(cell, local facet)`` entities through
-        ``entity_maps``, and pulled back with the parent cell's Jacobian. The interpolation
-        matrix, restricted to the closure (it is block-diagonal by entity), turns those values
-        into the cell's reference dofs, and the dof transformations into the global ones.
+        The pulled-back surface basis is evaluated at the volume element's interpolation points
+        on the closure, on the parent ``(cell, local facet)`` entities through ``entity_maps``.
+        The interpolation matrix, restricted to the closure (it is block-diagonal by entity),
+        turns it into the cell's reference dofs, and the dof transformations into global ones.
         """
         V_surface, V_volume = self._V_surface, self._V_volume
         mesh = V_volume.mesh
@@ -716,8 +717,7 @@ class SurfaceSubmeshExtension:
         entity_matrices = typing.cast(list[list[npt.NDArray[np.floating]]], element.M)
         if any(m.shape[-1] != 1 for matrices in entity_matrices for m in matrices):
             raise NotImplementedError("Elements whose dofs involve derivatives are not supported.")
-        closure_dofs, closure_points = [], []
-        self._piola_matrices = []
+        closure_dofs, closure_points, matrices = [], [], []
         num_facets_per_cell = dolfinx.cpp.mesh.cell_num_entities(mesh.topology.cell_type, fdim)
         for facet in range(num_facets_per_cell):
             closure = [(d, e) for d in range(fdim + 1) for e in connectivity[fdim][facet][d]]
@@ -728,49 +728,50 @@ class SurfaceSubmeshExtension:
             # entities' blocks on its diagonal, as (dofs, points * components)
             blocks = [entity_matrices[d][e][..., 0].transpose(0, 2, 1) for d, e in closure]
             blocks = [b.reshape(b.shape[0], b.shape[1] * b.shape[2]) for b in blocks]
-            self._piola_matrices.append(scipy.linalg.block_diag(*blocks))
+            matrices.append(scipy.linalg.block_diag(*blocks))
             closure_points.append(np.vstack([entity_points[d][e] for d, e in closure]))
         # One Expression per facet permutation needs the same facet points for every facet
         reference_points = pull_back_to_reference_facet(element.cell_type, closure_points)
-        self._closure_dofs_per_facet = closure_dofs
 
         entities = np.asarray(integration_entities, dtype=np.int32).reshape(-1, 2)
         cells, local_facets = entities.T
         create_cell_permutations(mesh.topology)
-        self._cell_info = mesh.topology.get_cell_permutation_info()[cells]
+        cell_info = mesh.topology.get_cell_permutation_info()[cells]
         permutations = get_facet_permutations(mesh.topology)[cells, local_facets]
         groups = group_by_key(permutations.astype(np.int64) * num_facets_per_cell + local_facets)
-        self._piola_groups = [
-            (int(key) // num_facets_per_cell, int(key) % num_facets_per_cell, rows)
-            for key, rows in groups
-        ]
 
-        # The surface function is copied into this coefficient before each evaluation
-        self._coefficient = dolfinx.fem.Function(V_surface)
-        expr = apply_pullback_inverse(
-            V_volume.ufl_element().pullback, self._coefficient, mesh.ufl_domain()
-        )
+        v = ufl.TestFunction(V_surface)
+        expr = apply_pullback_inverse(V_volume.ufl_element().pullback, v, mesh.ufl_domain())
         point_sets = build_quadrature_permutations(facet_type, reference_points)
         # Compiled on each process for its own permutations only
-        self._expressions = {
+        expressions = {
             perm: dolfinx.fem.Expression(
                 expr,
                 point_sets[perm],
                 comm=MPI.COMM_SELF,
                 entity_maps=entity_maps,  # type: ignore[arg-type]
             )
-            for perm in {perm for perm, _, _ in self._piola_groups}
+            for perm in {int(key) // num_facets_per_cell for key, _ in groups}
         }
-        self._entities = entities
-        self._piola = True
 
+        num_surface_dofs = V_surface.dofmap.dof_layout.num_dofs * V_surface.dofmap.bs
         cell_dofs = V_volume.dofmap.list[cells]
-        self._volume_dofs = np.empty((len(entities), len(closure_dofs[0])), dtype=np.int32)
-        for _, facet, rows in self._piola_groups:
-            self._volume_dofs[rows] = cell_dofs[rows][:, closure_dofs[facet]]
-        self._weights = self._inverse_write_counts(self._volume_dofs)
-        self._basis = None
-        self._surface_dofs = None
+        shape = (len(entities), len(closure_dofs[0]))
+        basis = np.empty((*shape, num_surface_dofs), dtype=dolfinx.default_scalar_type)
+        volume_dofs = np.empty(shape, dtype=np.int32)
+        for key, rows in groups:
+            perm, facet = divmod(int(key), num_facets_per_cell)
+            values = expressions[perm].eval(mesh, entities[rows])
+            values = values.reshape(len(rows), -1, num_surface_dofs)
+            # To the global orientation, on full cell arrays: the transformations are
+            # block-diagonal by entity, so the other dofs stay zero.
+            cell_values = np.zeros((len(rows), element.dim, num_surface_dofs), dtype=basis.dtype)
+            cell_values[:, closure_dofs[facet]] = np.einsum("cq,rqd->rcd", matrices[facet], values)
+            flat = cell_values.reshape(-1)
+            V_volume.element.Tt_inv_apply(flat, cell_info[rows], num_surface_dofs)
+            basis[rows] = flat.reshape(cell_values.shape)[:, closure_dofs[facet]]
+            volume_dofs[rows] = cell_dofs[rows][:, closure_dofs[facet]]
+        return basis, volume_dofs
 
     @property
     def V_surface(self) -> dolfinx.fem.FunctionSpace:
@@ -783,22 +784,21 @@ class SurfaceSubmeshExtension:
         return self._V_volume
 
     @property
-    def basis(self) -> npt.NDArray[np.floating] | None:
-        """The surface basis at each facet's points, ``(facets, points, bs, cell dofs)``, with
-        the cell dofs unrolled by block. ``None`` for a Piola-mapped volume space."""
+    def basis(self) -> npt.NDArray[np.floating]:
+        """The map from each facet's :py:attr:`surface_dofs` to its :py:attr:`volume_dofs`,
+        ``(facets, volume dofs, surface dofs)``."""
         return self._basis
 
     @property
-    def surface_dofs(self) -> npt.NDArray[np.int32] | None:
-        """The unrolled surface dofs of each facet, ``(facets, cell dofs)``. ``None`` for a
-        Piola-mapped volume space."""
+    def surface_dofs(self) -> npt.NDArray[np.int32]:
+        """The surface dofs of each facet's submesh cell, unrolled by block, ``(facets, surface
+        dofs)``."""
         return self._surface_dofs
 
     @property
     def volume_dofs(self) -> npt.NDArray[np.int32]:
-        """The volume dofs each facet writes to, local to the process: ``(facets, points, bs)``,
-        unrolled by block, for a Lagrange volume space, and ``(facets, closure dofs)`` for a
-        Piola-mapped one."""
+        """The volume dofs of each facet's closure, local to the process and unrolled by block,
+        ``(facets, volume dofs)``."""
         return self._volume_dofs
 
     @property
@@ -815,7 +815,9 @@ class SurfaceSubmeshExtension:
         :py:meth:`dolfinx.fem.Function.interpolate`, which would set every dof of each parent cell
         and zero boundary nodes that lie on none of that cell's facets. The values are instead
         added straight into the volume dofs of each facet's closure, scaled by :py:attr:`weights`,
-        then summed onto their owners with a reverse scatter. Each boundary dof thus gets the
+        then summed onto their owners with a reverse scatter, i.e.
+        ``u_volume[volume_dofs] += weights * (basis @ u_surface[surface_dofs])``. Each boundary
+        dof thus gets the
         mean of its writes: its value for a compatible (continuous) surface space, and an average
         of the facets' values where they disagree.
 
@@ -823,34 +825,11 @@ class SurfaceSubmeshExtension:
             u_surface: Function in :py:attr:`V_surface`, with consistent ghosts.
             u_volume: Function in :py:attr:`V_volume`, overwritten, ghosts included.
         """
-        if not self._piola:
-            assert self._basis is not None and self._surface_dofs is not None
-            values = np.einsum("fpvd,fd->fpv", self._basis, u_surface.x.array[self._surface_dofs])
-        else:
-            values = self._piola_dofs(u_surface)
+        values = np.einsum("fnd,fd->fn", self._basis, u_surface.x.array[self._surface_dofs])
         u_volume.x.array[:] = 0.0
         np.add.at(u_volume.x.array, self._volume_dofs.reshape(-1), (values * self._weights).ravel())
         u_volume.x.scatter_reverse(dolfinx.la.InsertMode.add)
         u_volume.x.scatter_forward()
-
-    def _piola_dofs(self, u_surface: dolfinx.fem.Function) -> npt.NDArray[np.floating]:
-        """The global-orientation dofs of each facet's closure, ``(facets, closure dofs)``."""
-        assert self._piola
-        self._coefficient.x.array[:] = u_surface.x.array
-        element = self._V_volume.element
-        num_cell_dofs = element.basix_element.dim
-        dofs = np.empty(self._volume_dofs.shape, dtype=self._coefficient.x.array.dtype)
-        for perm, facet, rows in self._piola_groups:
-            values = self._expressions[perm].eval(self._V_volume.mesh, self._entities[rows])
-            reference_dofs = values.reshape(len(rows), -1) @ self._piola_matrices[facet].T
-            # To the global orientation, on a full cell array: the transformations are
-            # block-diagonal by entity, so the other dofs stay zero.
-            cell_values = np.zeros((len(rows), num_cell_dofs), dtype=dofs.dtype)
-            cell_values[:, self._closure_dofs_per_facet[facet]] = reference_dofs
-            flat = cell_values.reshape(-1)
-            element.Tt_inv_apply(flat, self._cell_info[rows], 1)
-            dofs[rows] = flat.reshape(len(rows), -1)[:, self._closure_dofs_per_facet[facet]]
-        return dofs
 
 
 def interpolate_from_surface_submesh(

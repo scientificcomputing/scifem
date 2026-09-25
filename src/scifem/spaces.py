@@ -5,6 +5,7 @@ import dolfinx
 import basix
 import numpy as np
 from . import _scifem  # type: ignore
+from .compat import create_cpp_finite_element
 from collections.abc import Sequence
 from packaging.version import Version
 
@@ -146,8 +147,11 @@ def create_space_of_simple_functions(
 
     # Create function space
     try:
-        cpp_el = dolfinx.cpp.fem.FiniteElement_float64(
-            el.basix_element._e, block_shape=value_shape, symmetric=False
+        cpp_el = create_cpp_finite_element(
+            dolfinx.cpp.fem.FiniteElement_float64,
+            el.basix_element._e,
+            mesh.geometry.dim,
+            value_shape,
         )
         cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(mesh._cpp_object, cpp_el, cpp_dofmap)
     except TypeError:

@@ -10,6 +10,7 @@ __all__ = [
     "create_cell_permutations",
     "compute_integration_domains",
     "get_facet_permutations",
+    "create_cpp_finite_element",
 ]
 
 
@@ -226,3 +227,21 @@ def get_facet_permutations(topology: dolfinx.mesh.Topology) -> npt.NDArray[np.ui
         topology.create_entity_permutations()  # type: ignore[call-arg]
         permutations = topology.get_facet_permutations()
     return np.asarray(permutations).reshape(-1, num_facets_per_cell)
+
+
+def create_cpp_finite_element(constructor, element, gdim: int, block_shape: tuple[int, ...]):
+    """Create a blocked C++ finite element across the supported DOLFINx versions.
+
+    FEniCS/dolfinx#4511 added the geometric dimension to the constructor. Versions from before
+    ``block_shape`` existed raise ``TypeError``, for the caller to fall back on ``block_size``.
+
+    Args:
+        constructor: ``dolfinx.cpp.fem.FiniteElement_float32`` or ``_float64``.
+        element: The C++ Basix element.
+        gdim: Geometric dimension of the mesh.
+        block_shape: Block shape of the element.
+    """
+    try:
+        return constructor(element, gdim=gdim, block_shape=block_shape, symmetric=False)
+    except TypeError:
+        return constructor(element, block_shape=block_shape, symmetric=False)

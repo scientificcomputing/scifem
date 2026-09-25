@@ -523,6 +523,41 @@ def test_interpolate_from_surface_submesh_into_a_piola_mapped_space(cell, elemen
     assert np.abs(u_expected).max() > 0.1
 
 
+@pytest.mark.skipif(
+    Version(dolfinx.__version__) < Version("0.10.0"), reason="Requires DOLFINx >= 0.10"
+)
+@pytest.mark.xfail(
+    strict=True,
+    raises=(ValueError, NotImplementedError),
+    reason="Needs manifold elements (FEniCS/dolfinx#4511), DOLFINx transforming a submesh "
+    "Argument with its own cells, and scifem's support for such surface spaces",
+)
+@pytest.mark.parametrize("volume_degree", [1, 2])
+@pytest.mark.parametrize("cell", ["tetrahedron", "hexahedron"])
+def test_interpolate_from_a_surface_space_with_dof_transformations(cell, volume_degree):
+    """An N1curl surface field extended into N1curl gives the volume interpolant's dofs on the
+    facets' closures, since both only carry the field's tangential trace."""
+    mesh = _EXTENSION_MESHES[cell]()
+    submesh, submesh_facets, entities, entity_map = _exterior_facet_submesh(mesh)
+    # N1curl of degree 2 holds the tangential part of a linear field exactly
+    u_submesh = dolfinx.fem.Function(dolfinx.fem.functionspace(submesh, ("N1curl", 2)))
+    u_submesh.interpolate(_linear_field)
+    V_parent = dolfinx.fem.functionspace(mesh, ("N1curl", volume_degree))
+    u_parent = dolfinx.fem.Function(V_parent)
+    scifem.interpolation.interpolate_from_surface_submesh(
+        u_submesh, u_parent, submesh_facets, entities, entity_maps=[entity_map]
+    )
+
+    u_interpolated = dolfinx.fem.Function(V_parent)
+    u_interpolated.interpolate(_linear_field)
+    boundary_dofs = dolfinx.fem.locate_dofs_topological(
+        V_parent, mesh.topology.dim - 1, dolfinx.mesh.exterior_facet_indices(mesh.topology)
+    )
+    u_expected = np.zeros_like(u_parent.x.array)
+    u_expected[boundary_dofs] = u_interpolated.x.array[boundary_dofs]
+    np.testing.assert_allclose(u_parent.x.array, u_expected, atol=1e-12)
+
+
 def test_interpolate_from_surface_submesh_into_a_piola_mapped_space_needs_the_entity_map():
     """The surface function is evaluated on the parent mesh's facets, through the entity map."""
     mesh = _EXTENSION_MESHES["triangle"]()

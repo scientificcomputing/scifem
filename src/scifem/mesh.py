@@ -7,7 +7,7 @@ else:
     from typing_extensions import deprecated
 
 from . import _scifem  # type: ignore
-from .compat import compute_integration_domains
+from .compat import compute_integration_domains, create_cpp_finite_element
 import collections
 import dolfinx
 import typing
@@ -486,7 +486,9 @@ def create_geometry_function_space(
     else:
         raise RuntimeError(f"Unsupported type {ufl_el.dtype}")
     try:
-        cpp_el = _fe_constructor(ufl_el.basix_element._e, block_shape=value_shape, symmetric=False)
+        cpp_el = create_cpp_finite_element(
+            _fe_constructor, ufl_el.basix_element._e, mesh.geometry.dim, value_shape
+        )
     except TypeError:
         cpp_el = _fe_constructor(ufl_el.basix_element._e, block_size=N, symmetric=False)
     dof_layout = dolfinx.cpp.fem.create_element_dof_layout(cpp_el, [])
