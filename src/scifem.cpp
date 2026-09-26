@@ -24,6 +24,7 @@
 #include <nanobind/stl/vector.h>
 #include <numeric>
 #include <thread>
+#include <type_traits>
 
 namespace md = MDSPAN_IMPL_STANDARD_NAMESPACE;
 
@@ -502,9 +503,21 @@ create_real_functionspace(std::shared_ptr<const dolfinx::mesh::Mesh<T>> mesh,
                                                      index_map_bs, dofmap, bs);
 
 #if DOLFINX_VERSION_MINOR > 9
-  std::shared_ptr<const dolfinx::fem::FiniteElement<T>> d_el
-      = std::make_shared<const dolfinx::fem::FiniteElement<T>>(e_v, value_shape,
-                                                               false);
+  std::shared_ptr<const dolfinx::fem::FiniteElement<T>> d_el;
+  // FEniCS/dolfinx#4511 added the geometric dimension without a version bump
+  if constexpr (std::is_constructible_v<dolfinx::fem::FiniteElement<T>,
+                                        const basix::FiniteElement<T>&,
+                                        std::size_t,
+                                        const std::vector<std::size_t>&, bool>)
+  {
+    d_el = std::make_shared<const dolfinx::fem::FiniteElement<T>>(
+        e_v, mesh->geometry().dim(), value_shape, false);
+  }
+  else
+  {
+    d_el = std::make_shared<const dolfinx::fem::FiniteElement<T>>(
+        e_v, value_shape, false);
+  }
   return dolfinx::fem::FunctionSpace<T>(mesh, d_el, real_dofmap);
 
 #else

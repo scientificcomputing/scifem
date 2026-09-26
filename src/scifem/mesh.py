@@ -7,6 +7,7 @@ else:
     from typing_extensions import deprecated
 
 from . import _scifem  # type: ignore
+from .compat import compute_integration_domains, create_cpp_finite_element
 import collections
 import dolfinx
 import typing
@@ -348,18 +349,9 @@ def compute_subdomain_exterior_facets(
     sub_facets = dolfinx.mesh.exterior_facet_indices(sub_mesh.topology)
 
     # Map exterior facet to (submesh_cell, local_facet_index) tuples
-    try:
-        integration_entities = dolfinx.fem.compute_integration_domains(
-            dolfinx.fem.IntegralType.exterior_facet, sub_mesh.topology, sub_facets
-        )
-    except TypeError:
-        integration_entities = dolfinx.fem.compute_integration_domains(
-            dolfinx.fem.IntegralType.exterior_facet,
-            sub_mesh.topology,
-            sub_facets,
-            sub_mesh.topology.dim - 1,
-        )
-    integration_entities = integration_entities.reshape(-1, 2)
+    integration_entities = compute_integration_domains(
+        dolfinx.fem.IntegralType.exterior_facet, sub_mesh.topology, sub_facets
+    ).reshape(-1, 2)
     submap_array = get_entity_map(cell_map)
     integration_entities[:, 0] = submap_array[integration_entities[:, 0]]
 
@@ -494,7 +486,9 @@ def create_geometry_function_space(
     else:
         raise RuntimeError(f"Unsupported type {ufl_el.dtype}")
     try:
-        cpp_el = _fe_constructor(ufl_el.basix_element._e, block_shape=value_shape, symmetric=False)
+        cpp_el = create_cpp_finite_element(
+            _fe_constructor, ufl_el.basix_element._e, mesh.geometry.dim, value_shape
+        )
     except TypeError:
         cpp_el = _fe_constructor(ufl_el.basix_element._e, block_size=N, symmetric=False)
     dof_layout = dolfinx.cpp.fem.create_element_dof_layout(cpp_el, [])

@@ -4,6 +4,10 @@ import pytest
 import ufl
 import scifem
 import numpy as np
+import basix
+from ffcx.element_interface import map_facet_points
+
+from scifem.bcs import pull_back_to_reference_facet
 
 
 def right_facets(x):
@@ -84,3 +88,27 @@ def test_tangent_enforcement(cell_type: dolfinx.mesh.CellType):
         )
     )
     assert np.isclose(error, 0.0)
+
+
+@pytest.mark.parametrize(
+    "cell_type",
+    [
+        basix.CellType.triangle,
+        basix.CellType.quadrilateral,
+        basix.CellType.tetrahedron,
+        basix.CellType.hexahedron,
+    ],
+)
+def test_pull_back_to_reference_facet(cell_type: basix.CellType):
+    """The pull-back inverts FFCx's map from the reference facet to each facet of the cell."""
+    facet_type = basix.cell.subentity_types(cell_type)[-2][0]
+    points, _ = basix.make_quadrature(facet_type, 4)
+    num_facets = len(basix.topology(cell_type)[-2])
+    on_facets = [map_facet_points(points, f, cell_type.name) for f in range(num_facets)]
+    pulled_back = pull_back_to_reference_facet(cell_type, on_facets)
+    np.testing.assert_allclose(pulled_back, points, atol=1e-14)
+
+    # Points that differ between the facets have no shared facet point set
+    on_facets[1] = map_facet_points(points[::-1], 1, cell_type.name)
+    with pytest.raises(NotImplementedError, match="differ between the facets"):
+        pull_back_to_reference_facet(cell_type, on_facets)
