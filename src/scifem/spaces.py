@@ -151,7 +151,7 @@ def create_space_of_simple_functions(
             dolfinx.cpp.fem.FiniteElement_float64,
             el.basix_element._e,
             mesh.geometry.dim,
-            value_shape,
+            value_shape,  # type: ignore
         )
         cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(mesh._cpp_object, cpp_el, cpp_dofmap)
     except TypeError:
