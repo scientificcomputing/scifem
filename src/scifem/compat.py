@@ -173,7 +173,7 @@ def index_to_dest_ranks(
     else:
         raise RuntimeError(
             f"Unexpected signature for index_to_dest_ranks: {signature_inputs}. "
-            "Please report this to the io4dolfinx developers."
+            "Please report this to the scifem developers."
         )
 
 
