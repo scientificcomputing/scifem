@@ -149,6 +149,29 @@ def topology(comm, cell_type, tdim, vertex_map, cell_map, c_to_v, v_to_v, origin
         return dolfinx.cpp.mesh.Topology(*args)
 
 
+def index_to_dest_ranks(
+    imap: dolfinx.common.IndexMap | dolfinx.cpp.common.IndexMap, tag: int
+) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]:
+    """Get the destination ranks for each index in an index map, across DOLFINx versions.
+
+    Args:
+        imap: The index map to query.
+        tag: MPI tag for the consensus exchange, the same on every process and not in use
+            by another exchange in flight.
+
+    Returns:
+        (Sharing-rank data, offsets). Ranks sharing local
+        index `i` occupy `[offsets[i], offsets[i + 1])`. For an owned
+        index, these are the ranks that ghost it; for a ghost index, its
+        owner and the other ranks that ghost it. The caller is excluded.
+    """
+    signature_inputs = inspect.signature(imap.index_to_dest_ranks).parameters
+    if "tag" in signature_inputs:
+        return imap.index_to_dest_ranks(tag)  # type: ignore[call-arg]
+    else:
+        return imap.index_to_dest_ranks()
+
+
 def ghosting_ranks(index_map, tag: int):
     """The ranks that ghost each owned index of `index_map`, flat and with offsets.
 
@@ -164,7 +187,7 @@ def ghosting_ranks(index_map, tag: int):
         ``(ranks, offsets)``: the ghosting ranks of owned index ``i`` are
         ``ranks[offsets[i]:offsets[i + 1]]``. Collective.
     """
-    dest = index_map.index_to_dest_ranks(tag)
+    dest = index_to_dest_ranks(index_map, tag)
     ranks, offsets = (dest.array, dest.offsets) if hasattr(dest, "array") else dest
     return np.asarray(ranks, dtype=np.int32), np.asarray(offsets, dtype=np.int64)
 
