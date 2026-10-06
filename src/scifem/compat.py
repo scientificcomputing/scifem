@@ -193,7 +193,10 @@ def ghosting_ranks(index_map, tag: int):
         ``ranks[offsets[i]:offsets[i + 1]]``. Collective.
     """
     dest = index_to_dest_ranks(index_map, tag)
-    ranks, offsets = (dest.array, dest.offsets) if hasattr(dest, "array") else dest
+    if isinstance(dest, tuple):
+        ranks, offsets = dest
+    else:
+        ranks, offsets = (dest.array, dest.offsets)  # type: ignore
     return np.asarray(ranks, dtype=np.int32), np.asarray(offsets, dtype=np.int64)
 
 
