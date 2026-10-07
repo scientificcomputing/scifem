@@ -143,5 +143,5 @@ plotter = pyvista.Plotter()
 plotter.add_mesh(grid, style="wireframe", color="k")
 plotter.add_mesh(glyphs)
 plotter.view_xy()
-if not pyvista.OFF_SCREEN:
-    plotter.show()
+plotter.export_vtksz("point_source.vtksz")
+plotter.show(screenshot="point_source.png")

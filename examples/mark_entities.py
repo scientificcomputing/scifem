@@ -53,8 +53,8 @@ grid.cell_data["Marker"] = cell_tag.values
 plotter = pyvista.Plotter()
 plotter.add_mesh(grid)
 plotter.view_xy()
-if not pyvista.OFF_SCREEN:
-    plotter.show()
+plotter.export_vtksz("mark_entities.vtksz")
+plotter.show(screenshot="mark_entities.png")
 
 
 # We can also mark lower order entities, such as facets

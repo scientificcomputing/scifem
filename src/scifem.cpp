@@ -637,11 +637,10 @@ transfer_meshtags_to_submesh(
       = sub_entity_map->size_local() + sub_entity_map->num_ghosts();
   std::vector<std::int32_t> sub_entity_to_parent(num_sum_entities, -1);
 
-  // Initialize submesh values with numerical min
-  std::vector<T> submesh_values(num_sum_entities,
-                                std::numeric_limits<T>::min());
-  std::vector<std::int32_t> submesh_indices(num_sum_entities);
-  std::iota(submesh_indices.begin(), submesh_indices.end(), 0);
+  // Mapped entities are tracked with a flag, not a sentinel value, as any
+  // value of T is a valid tag
+  std::vector<T> submesh_values(num_sum_entities);
+  std::vector<std::int8_t> submesh_value_found(num_sum_entities, 0);
 
   // Map tag indices to global index
   std::span<const std::int32_t> tag_indices = tags.indices();
@@ -659,8 +658,8 @@ transfer_meshtags_to_submesh(
   std::ranges::fill(indices, -1);
   for (std::size_t i = 0; i < global_tag_indices.size(); ++i)
     indices[tag_indices[i]] = global_tag_indices[i];
-  index_mapper.scatter_rev([](std::int32_t a, std::int32_t b)
-                           { return std::max<std::int32_t>(a, b); });
+  index_mapper.scatter_rev([](std::int64_t a, std::int64_t b)
+                           { return std::max<std::int64_t>(a, b); });
   index_mapper.scatter_fwd();
 
   // Map tag values in a similar way (Allowing negative values)
@@ -731,6 +730,7 @@ transfer_meshtags_to_submesh(
             // Found entity in submesh with the same vertices as in the
             // parent mesh
             submesh_values[sub_entity] = parent_value;
+            submesh_value_found[sub_entity] = 1;
             entity_found = true;
             sub_entity_to_parent[sub_entity] = parent_entity;
           }
@@ -738,9 +738,23 @@ transfer_meshtags_to_submesh(
       }
     }
   }
+  // Keep only mapped entities
+  std::vector<std::int32_t> filtered_indices;
+  std::vector<T> filtered_values;
+  std::vector<std::int32_t> filtered_to_parent;
+  for (std::size_t i = 0; i < num_sum_entities; ++i)
+  {
+    if (submesh_value_found[i])
+    {
+      filtered_indices.push_back(i);
+      filtered_values.push_back(submesh_values[i]);
+      filtered_to_parent.push_back(sub_entity_to_parent[i]);
+    }
+  }
+
   dolfinx::mesh::MeshTags<T> new_meshtag(submesh_topology, tag_dim,
-                                         submesh_indices, submesh_values);
-  return std::make_tuple(new_meshtag, sub_entity_to_parent);
+                                         filtered_indices, filtered_values);
+  return std::make_tuple(new_meshtag, filtered_to_parent);
 }
 
 } // namespace scifem
