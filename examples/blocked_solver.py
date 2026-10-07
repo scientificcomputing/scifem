@@ -3,9 +3,10 @@
 # Author: Henrik N. T. Finsberg
 #
 # SPDX-License-Identifier: MIT
-
-# In this example we will solve a nonlinear elasticity problem using a blocked Newton solver.
-# We consider a unit cube domain $\Omega = [0, 1]^3$ with Dirichlet boundary conditions on the left face and traction force on the right face, and we seek a displacement field $\mathbf{u}: \Omega \to \mathbb{R}^3$ that solves the momentum balance equation
+#
+# In this example we will solve a nonlinear elasticity problem with a non-linear Lagrange multiplier.
+#
+#  We consider a unit cube domain $\Omega = [0, 1]^3$ with Dirichlet boundary conditions on the left face and traction force on the right face, and we seek a displacement field $\mathbf{u}: \Omega \to \mathbb{R}^3$ that solves the momentum balance equation
 #
 # $$
 # \begin{align}
@@ -61,11 +62,13 @@
 #
 #
 
+from pathlib import Path
 import logging
 from mpi4py import MPI
 import numpy as np
 import ufl
 import dolfinx
+import dolfinx.fem.petsc
 import scifem
 
 # Initialize logging and set log level to info
@@ -79,17 +82,15 @@ mesh = dolfinx.mesh.create_unit_cube(
 )
 V = dolfinx.fem.functionspace(mesh, ("Lagrange", 2, (3,)))
 Q = dolfinx.fem.functionspace(mesh, ("DPC", 1,))
+W = ufl.MixedFunctionSpace(V, Q)
 
 # And the test and trial functions
 #
 
-v = ufl.TestFunction(V)
-q = ufl.TestFunction(Q)
-du = ufl.TrialFunction(V)
-dp = ufl.TrialFunction(Q)
+v, q = ufl.TestFunctions(W)
+du, dp = ufl.TrialFunctions(W)
 u = dolfinx.fem.Function(V)
 p = dolfinx.fem.Function(Q)
-
 
 # Next we create the facet tags for the left and right faces
 
@@ -129,64 +130,91 @@ t = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(10.0))
 N = ufl.FacetNormal(mesh)
 
 # Material parameters and strain energy density
-mu = dolfinx.fem.Constant(mesh, 10.0)
+mu = dolfinx.fem.Constant(mesh, dolfinx.default_scalar_type(10.0))
 psi = (mu / 2)*(I1 - 3)
 
 # We for the total Lagrangian
 
-L = psi*ufl.dx - ufl.inner(t * N, u)*ufl.ds(subdomain_data=facet_tags, subdomain_id=2)  + p * (J - 1) * ufl.dx
+L = psi*ufl.dx - ufl.inner(u, t * N)*ufl.ds(subdomain_data=facet_tags, subdomain_id=2)  + p * (J - 1) * ufl.dx
 
 # and take the first variation of the total Lagrangian to obtain the residual
 
-r_u = ufl.derivative(L, u, v)
-r_p = ufl.derivative(L, p, q)
-R = [r_u, r_p]
+R = ufl.derivative(L, [u, p], [v, q])
+if np.issubdtype(dolfinx.default_scalar_type, np.complexfloating):
+    # The derivative direction must be an Argument, so conjugate the test functions afterwards
+    R = ufl.replace(R, {v: ufl.conj(v), q: ufl.conj(q)})
+R_blocked = ufl.extract_blocks(R)
 
 # We do the same for the second variation to obtain the Jacobian
 
-K = [
-    [ufl.derivative(r_u, u, du), ufl.derivative(r_u, p, dp)],
-    [ufl.derivative(r_p, u, du), ufl.derivative(r_p, p, dp)],
-]
-
+K = ufl.derivative(R, [u, p], [du, dp])
+K_blocked = ufl.extract_blocks(K)
 
 # Now we can create the Newton solver and solve the problem
 
-petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"}
-solver = scifem.NewtonSolver(R, K, [u, p], max_iterations=25, bcs=[bc], petsc_options=petsc_options)
+petsc_options = {"ksp_type": "preonly", "pc_type": "lu", "pc_factor_mat_solver_type": "mumps", "ksp_error_if_not_converged": True,
+                 "snes_error_if_not_converged": True, "snes_monitor": None}
+problem = dolfinx.fem.petsc.NonlinearProblem(R_blocked, [u, p], bcs=[bc], J=K_blocked, petsc_options=petsc_options,
+                                             petsc_options_prefix="elasticity_")
 
-# We can also set a callback function that is called before and after the solve, which takes the solver object as input
-
-
-def pre_solve(solver: scifem.NewtonSolver):
-    print(f"Starting solve with {solver.max_iterations} iterations")
-
-
-def post_solve(solver: scifem.NewtonSolver):
-    print(f"Solve completed in with correction norm {solver.dx.norm(0)}")
+# The underlying PETSc SNES solver is accessible through `problem.solver`, which we can inspect
+# before and after the solve
 
 
-solver.set_pre_solve_callback(pre_solve)
-solver.set_post_solve_callback(post_solve)
+def pre_solve(problem: dolfinx.fem.petsc.NonlinearProblem):
+    max_iterations = problem.solver.getTolerances()[3]
+    print(f"Starting solve with at most {max_iterations} iterations")
 
-solver.solve()
+
+def post_solve(problem: dolfinx.fem.petsc.NonlinearProblem):
+    num_iterations = problem.solver.getIterationNumber()
+    dx_norm = problem.solver.getSolutionUpdate().norm()
+    print(f"Solve completed in {num_iterations} iterations with correction norm {dx_norm}")
+
+
+pre_solve(problem)
+problem.solve()
+post_solve(problem)
 
 # Finally, we can visualize the solution using `pyvista`
+# We first generate the grids locally on each MPI rank, before we gather the results
+# on rank `root` for visualization.
 
 import pyvista
-p = pyvista.Plotter()
-topology, cell_types, geometry = dolfinx.plot.vtk_mesh(V)
+pyvista.global_theme.allow_empty_mesh= True
+root = 0
+tdim = mesh.topology.dim
+cell_map = mesh.topology.index_map(tdim)
+num_owned_cells = cell_map.size_local
+owned_cells = np.arange(num_owned_cells, dtype=np.int32)
+topology, cell_types, geometry = dolfinx.plot.vtk_mesh(V, owned_cells)
 grid = pyvista.UnstructuredGrid(topology, cell_types, geometry)
-linear_grid = pyvista.UnstructuredGrid(*dolfinx.plot.vtk_mesh(mesh))
-grid["u"] = u.x.array.reshape((geometry.shape[0], 3))
-p.add_mesh(linear_grid, style="wireframe", color="k")
-warped = grid.warp_by_vector("u", factor=1.5)
-p.add_mesh(warped, show_edges=False)
-p.show_axes()
-if not pyvista.OFF_SCREEN:
-    p.show()
-else:
-    figure_as_array = p.screenshot("displacement.png")
+linear_topology, linear_cell_types, linear_geometry = dolfinx.plot.vtk_mesh(mesh, tdim, owned_cells)
+
+if mesh.geometry.cmaps[0].degree == 1:
+    _dx_to_pv_lin = {dolfinx.mesh.CellType.hexahedron: pyvista.CellType.HEXAHEDRON,
+                     dolfinx.mesh.CellType.tetrahedron: pyvista.CellType.TETRA,
+                     dolfinx.mesh.CellType.triangle: pyvista.CellType.TRIANGLE,
+                     dolfinx.mesh.CellType.quadrilateral: pyvista.CellType.QUAD}
+    pv_ct = _dx_to_pv_lin[mesh.topology.cell_type]
+    linear_cell_types = np.full_like(linear_cell_types, pv_ct)
+    linear_grid = pyvista.UnstructuredGrid(linear_topology, linear_cell_types, linear_geometry)
+grid["u"] = u.x.array.real.reshape((geometry.shape[0], 3))
+gathered_grid = mesh.comm.gather(grid, root=root)
+gathered_linear_grid = mesh.comm.gather(linear_grid, root=root)
+if gathered_grid is not None:
+    p = pyvista.Plotter()
+    merged_grid = pyvista.merge(gathered_grid)
+    merged_linear_grid = pyvista.merge(gathered_linear_grid)
+    p.add_mesh(merged_linear_grid, style="wireframe", color="k")
+    warped = merged_grid.warp_by_vector("u", factor=1.5)
+    p.add_mesh(warped, show_edges=False)
+    p.show_axes()
+    figure = Path("blocked_solver.png")
+    if not pyvista.OFF_SCREEN:
+        p.show(screenshot=figure)
+    else:
+        _figure_as_array = p.screenshot(figure)
 
 
 # # References
