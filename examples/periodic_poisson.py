@@ -573,6 +573,6 @@ if grid is not None:
     # Looking down on the square, tilted just enough for the warp to read as height.
     plotter.camera_position = [(0.5, -2.0, 1.3), (0.5, 0.5, 0.0), (0.0, 0.0, 1.0)]
     plotter.camera.zoom(1.05)
-    plotter.export_html("periodic_poisson.html")
+    plotter.export_vtksz("periodic_poisson.vtksz")
     plotter.show(screenshot="periodic_poisson.png")
 # -

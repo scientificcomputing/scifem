@@ -53,7 +53,7 @@ grid.cell_data["Marker"] = cell_tag.values
 plotter = pyvista.Plotter()
 plotter.add_mesh(grid)
 plotter.view_xy()
-plotter.export_html("mark_entities.html")
+plotter.export_vtksz("mark_entities.vtksz")
 plotter.show(screenshot="mark_entities.png")
 
 

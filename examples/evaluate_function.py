@@ -71,5 +71,5 @@ plotter.add_point_labels(
     always_visible=True,
 )
 plotter.view_xy()
-plotter.export_html("evaluate_function.html")
+plotter.export_vtksz("evaluate_function.vtksz")
 plotter.show(screenshot="evaluate_function.png")

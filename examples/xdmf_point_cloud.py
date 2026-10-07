@@ -49,7 +49,7 @@ plotter.add_points(
     point_size=20,
     show_scalar_bar=False,
 )
-plotter.export_html("xdmf_point_cloud.html")
+plotter.export_vtksz("xdmf_point_cloud.vtksz")
 plotter.show(screenshot="xdmf_point_cloud.png")
 
 

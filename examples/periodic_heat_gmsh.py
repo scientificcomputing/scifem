@@ -278,6 +278,6 @@ if pieces is not None:
     plotter.add_mesh(grid, style="wireframe", color="gray", opacity=0.25)
     plotter.camera_position = [(0.5, -2.1, 1.9), (0.5, 0.5, 0.15), (0.0, 0.0, 1.0)]
     plotter.camera.zoom(1.15)
-    plotter.export_html("periodic_heat_gmsh.html")
+    plotter.export_vtksz("periodic_heat_gmsh.vtksz")
     plotter.show(screenshot="periodic_heat_gmsh.png")
 # -

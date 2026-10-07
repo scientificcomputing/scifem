@@ -98,7 +98,7 @@ def plot_mesh(mesh: dolfinx.mesh.Mesh, values=None, figure=None):
     plotter.show_axes()
     plotter.view_xy()
     if figure is not None:
-        plotter.export_html(f"{figure}.html")
+        plotter.export_vtksz(f"{figure}.vtksz")
     plotter.show(screenshot=False if figure is None else f"{figure}.png")
 
 

@@ -206,7 +206,7 @@ if gathered_grid is not None:
     p.add_mesh(warped, show_edges=False)
     p.show_axes()
     figure = Path("blocked_solver.png")
-    p.export_html(figure.with_suffix(".html"))
+    p.export_vtksz(figure.with_suffix(".vtksz"))
     p.show(screenshot=figure)
 
 # # References
