@@ -179,4 +179,4 @@ _probe*.py
 *.png
 
 # Interactive scenes the examples export for the gallery
-examples/*.html
+examples/*.vtksz
