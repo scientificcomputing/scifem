@@ -57,18 +57,31 @@ STATIC = Path(__file__).parent / "static"
 GALLERY = "_static/gallery"
 SCENES = "_static/scenes"
 VIEWER = "viewer.html"
-# Added to the viewer: load the script of the scene named by ?scene=, and show it
+# Added to the viewer: show the scene named by ?scene=, from its script next to the viewer. The
+# script is written into the page rather than requested, so that it also loads from file://, and
+# before the viewer runs, as a module that only runs once the page is read. Like trame_vtk's own
+# export, the scene is then shown by loadDataSet, which the viewer calls once it is ready; an
+# older viewer, without that call, is ready already.
 LOADER = """<script>
 (function () {
   const scene = new URLSearchParams(window.location.search).get("scene");
-  if (scene === null || !/^[\\w-]+$/.test(scene)) {
-    return;
+  if (scene !== null && /^[\\w-]+$/.test(scene)) {
+    document.write(`<script src="${scene}.vtksz.js"><\\/script>`);
   }
-  const script = document.createElement("script");
-  script.src = `${scene}.vtksz.js`;
-  script.onload = () =>
-    OfflineLocalView.load(document.querySelector(".content"), { base64Str: window.vtkszBase64 });
-  document.body.appendChild(script);
+})();
+</script>
+<script>
+(function () {
+  let shown = false;
+  window.loadDataSet = function () {
+    if (shown || window.vtkszBase64 === undefined || window.OfflineLocalView === undefined) {
+      return;
+    }
+    shown = true;
+    const container = document.querySelector(".content") || document.querySelector("body");
+    OfflineLocalView.load(container, { base64Str: window.vtkszBase64 });
+  };
+  window.loadDataSet();
 })();
 </script>
 """
@@ -78,7 +91,10 @@ WIDGET_STATE = re.compile(
 )
 # A plot of the html backend: the viewer with the scene, in base64, as the source of a frame
 EMBEDDED = re.compile(r'^<iframe srcdoc="[^"]*"(?P<attributes>[^>]*)></iframe>\s*$', re.DOTALL)
-EMBEDDED_SCENE = re.compile(r"var base64Str = &quot;(?P<scene>[A-Za-z0-9+/=]+)&quot;;")
+# Declared with var by trame_vtk before its viewer called loadDataSet, and with const since
+EMBEDDED_SCENE = re.compile(
+    r"(?:var|let|const) base64Str = &quot;(?P<scene>[A-Za-z0-9+/=]+)&quot;;"
+)
 
 
 def _title(demo: Path) -> str:
