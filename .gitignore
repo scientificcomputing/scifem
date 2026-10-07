@@ -177,3 +177,6 @@ _probe*.py
 *.vtu
 *.pvd
 *.png
+
+# Interactive scenes the examples export for the gallery
+examples/*.html

@@ -63,17 +63,12 @@
 #
 
 from pathlib import Path
-import logging
 from mpi4py import MPI
 import numpy as np
 import ufl
 import dolfinx
 import dolfinx.fem.petsc
 import scifem
-
-# Initialize logging and set log level to info
-
-logging.basicConfig(level=logging.INFO)
 
 # We create the mesh and the function spaces
 
@@ -211,11 +206,8 @@ if gathered_grid is not None:
     p.add_mesh(warped, show_edges=False)
     p.show_axes()
     figure = Path("blocked_solver.png")
-    if not pyvista.OFF_SCREEN:
-        p.show(screenshot=figure)
-    else:
-        _figure_as_array = p.screenshot(figure)
-
+    p.export_html(figure.with_suffix(".html"))
+    p.show(screenshot=figure)
 
 # # References
 # ```{bibliography}

@@ -74,10 +74,10 @@ else:
 # + tags=["hide-input"]
 
 
-def plot_mesh(mesh: dolfinx.mesh.Mesh, values=None):
+def plot_mesh(mesh: dolfinx.mesh.Mesh, values=None, figure=None):
     """
     Given a DOLFINx mesh, create a `pyvista.UnstructuredGrid`,
-    and plot it and the mesh nodes
+    and plot it and the mesh nodes, optionally saving it as `figure`.png and `figure`.html
     """
     plotter = pyvista.Plotter()
     V_linear = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
@@ -97,7 +97,9 @@ def plot_mesh(mesh: dolfinx.mesh.Mesh, values=None):
         plotter.add_mesh(linear_grid, show_edges=True)
     plotter.show_axes()
     plotter.view_xy()
-    plotter.show()
+    if figure is not None:
+        plotter.export_html(f"{figure}.html")
+    plotter.show(screenshot=False if figure is None else f"{figure}.png")
 
 
 plot_mesh(circular_mesh, cell_marker.values)
@@ -116,5 +118,5 @@ sub_cell_marker, sub_cell_map = transfer_meshtags_to_submesh(
 # and visualize it
 
 # + tags=["hide-input"]
-plot_mesh(submesh, sub_cell_marker.values)
+plot_mesh(submesh, sub_cell_marker.values, figure="transfer_tags_to_submesh")
 # -

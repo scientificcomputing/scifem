@@ -49,3 +49,27 @@ print(exact)
 
 u_values = evaluate_function(u, points)
 print(u_values)
+
+# Finally, we plot the function, and label each point with the value we evaluated there
+
+import pyvista
+
+grid = pyvista.UnstructuredGrid(*dolfinx.plot.vtk_mesh(V))
+grid.point_data["u"] = u.x.array.real
+points_3d = np.zeros((points.shape[0], 3))
+points_3d[:, :2] = points
+
+plotter = pyvista.Plotter()
+plotter.add_mesh(grid, scalars="u", show_edges=True, cmap="viridis")
+plotter.add_point_labels(
+    points_3d,
+    [f"{value:.2f}" for value in np.asarray(u_values).real.flatten()],
+    point_size=14,
+    point_color="red",
+    render_points_as_spheres=True,
+    font_size=16,
+    always_visible=True,
+)
+plotter.view_xy()
+plotter.export_html("evaluate_function.html")
+plotter.show(screenshot="evaluate_function.png")

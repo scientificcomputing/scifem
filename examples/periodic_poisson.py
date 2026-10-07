@@ -573,8 +573,6 @@ if grid is not None:
     # Looking down on the square, tilted just enough for the warp to read as height.
     plotter.camera_position = [(0.5, -2.0, 1.3), (0.5, 0.5, 0.0), (0.0, 0.0, 1.0)]
     plotter.camera.zoom(1.05)
-    if not pyvista.OFF_SCREEN:
-        plotter.show()
-    else:
-        plotter.screenshot("periodic_poisson_solution.png")
+    plotter.export_html("periodic_poisson.html")
+    plotter.show(screenshot="periodic_poisson.png")
 # -

@@ -2,8 +2,12 @@
 # Learn more at https://jupyterbook.org/customize/toc.html
 
 format: jb-book
-root: README
+root: index
 parts:
+  - caption: Getting started
+    chapters:
+      - file: "docs/installation"
+      - file: "docs/compatibility"
 
   - caption: Periodic meshes
     chapters:

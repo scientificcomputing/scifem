@@ -49,8 +49,8 @@ plotter.add_points(
     point_size=20,
     show_scalar_bar=False,
 )
-if not pyvista.OFF_SCREEN:
-    plotter.show()
+plotter.export_html("xdmf_point_cloud.html")
+plotter.show(screenshot="xdmf_point_cloud.png")
 
 
 # Using `scifem`, we can write the point cloud data to an XDMFFile that can be opened with Paraview.

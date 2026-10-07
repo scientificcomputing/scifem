@@ -307,6 +307,6 @@ warped = grid.warp_by_scalar("u", factor=1)
 plotter = pyvista.Plotter()
 plotter.add_mesh(grid, style="wireframe")
 plotter.add_mesh(warped)
-if not pyvista.OFF_SCREEN:
-    plotter.show()
+plotter.export_html("real_function_space.html")
+plotter.show(screenshot="real_function_space.png")
 # -
