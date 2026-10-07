@@ -31,6 +31,8 @@ docs = [
     "jupyter-book<2.0",
     "jupytext",
     "pyvista[all]>=0.45.0",
+    # The documentation's shared vtk.js viewer depends on the viewer and plots of trame-vtk
+    "trame-vtk>=2.11.16",
     "sphinxcontrib-bibtex",
     "sphinx-codeautolink",
     "scifem[gmsh]",
