@@ -115,7 +115,9 @@ def create_entity_markers(
     # Create marker function
     e_map = domain.topology.index_map(dim)
     num_entities_local = e_map.size_local + e_map.num_ghosts
-    markers = np.full(num_entities_local, -1, dtype=np.int32)
+    markers = np.zeros(num_entities_local, dtype=np.int32)
+    # Explicit flag rather than a sentinel tag value, as any int32 is a valid tag
+    is_marked = np.zeros(num_entities_local, dtype=np.bool_)
 
     locate_entities = lambda on_boundary: (
         dolfinx.mesh.locate_entities_boundary if on_boundary else dolfinx.mesh.locate_entities
@@ -126,9 +128,10 @@ def create_entity_markers(
         on_boundary = False if len(tagged_entity) == 2 else tagged_entity[2]
         entities = locate_entities(on_boundary)(domain, dim, tagged_entity[1])
         markers[entities] = tagged_entity[0]
+        is_marked[entities] = True
 
-    facets = np.flatnonzero(markers != -1).astype(np.int32)
-    return dolfinx.mesh.meshtags(domain, dim, facets, markers[facets])
+    marked_entities = np.flatnonzero(is_marked).astype(np.int32)
+    return dolfinx.mesh.meshtags(domain, dim, marked_entities, markers[marked_entities])
 
 
 @deprecated(
