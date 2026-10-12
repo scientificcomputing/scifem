@@ -63,6 +63,8 @@ We aim to support the last two stable releases of DOLFINx. Sometimes features ar
 
 Some features might depend on functionality added to DOLFINx, which means that they won't be backwards compatible.
 
+Workarounds for API differences between DOLFINx versions live in [`fenicsx-compat`](https://github.com/scientificcomputing/fenicsx-compat), which `scifem` depends on. It requires DOLFINx 0.10 or newer and Python 3.12 or newer.
+
 # Installation
 
 The package is partly written in C++ and relies on `dolfinx`. Users are encouraged to install `scifem` with `pip` in an environment where `dolfinx` is already installed or with `conda`.

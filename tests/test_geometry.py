@@ -3,7 +3,8 @@ import dolfinx
 import numpy as np
 import numpy.typing as npt
 from scipy.optimize import minimize
-from scifem import closest_point_projection, compat
+import fenicsx_compat
+from scifem import closest_point_projection
 from scifem.geometry import project_onto_simplex, _closest_point_projection
 import ufl
 import basix.ufl
@@ -35,7 +36,7 @@ def scipy_project_point_to_element(
     element = mesh.ufl_domain().ufl_coordinate_element().sub_elements[0]
 
     # Get the coordinates of the nodes for the specified cell
-    node_coords = mesh.geometry.x[compat.dofmap(mesh)[cells]][:, :, : mesh.geometry.dim]
+    node_coords = mesh.geometry.x[fenicsx_compat.dofmap(mesh)[cells]][:, :, : mesh.geometry.dim]
     target_points = target_points.reshape(-1, mesh.geometry.dim)
     # cmap = mesh.geometry.cmap
 
