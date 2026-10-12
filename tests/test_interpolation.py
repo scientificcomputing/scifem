@@ -133,16 +133,23 @@ def test_discrete_gradient(degree, use_petsc, cell_type):
 
     G_ref = dolfinx.fem.discrete_gradient(V, W)
 
-    # Built in matrices has to use a special input vector, with additional ghosts.
-    try:
-        _x = dolfinx.la.vector(G_ref.index_map(1), G_ref.block_size[1])
-    except AttributeError:
-        # Bug in DOLFINx 0.9.0
-        _x = dolfinx.la.vector(G_ref.index_map(1), G_ref.bs[1])
-
     num_owned_dofs = V.dofmap.index_map.size_local * V.dofmap.index_map_bs
-    _x.array[:num_owned_dofs] = u.x.array[:num_owned_dofs]
-    _x.scatter_forward()
+
+    def input_vector(matrix):
+        """`u` on the column index map of `matrix`, which `MatrixCSR.mult` indexes into.
+
+        The column map can have more ghosts than `V`'s, and two matrices on `V` need not
+        share one: on DOLFINx nightly, `discrete_gradient` uses `V`'s map while
+        `create_matrix` adds ghosts. A vector on another matrix's map is read out of bounds.
+        """
+        try:
+            x = dolfinx.la.vector(matrix.index_map(1), matrix.block_size[1])
+        except AttributeError:
+            # Bug in DOLFINx 0.9.0
+            x = dolfinx.la.vector(matrix.index_map(1), matrix.bs[1])
+        x.array[:num_owned_dofs] = u.x.array[:num_owned_dofs]
+        x.scatter_forward()
+        return x
 
     if use_petsc:
         A = scifem.interpolation.petsc_interpolation_matrix(expr, W)
@@ -152,7 +159,7 @@ def test_discrete_gradient(degree, use_petsc, cell_type):
         if not hasattr(dolfinx.la.MatrixCSR, "mult"):
             pytest.skip("MatrixCSR has no mult method")
         A = scifem.interpolation.interpolation_matrix(expr, W)
-        A.mult(_x, w.x)
+        A.mult(input_vector(A), w.x)
     w.x.scatter_forward()
 
     w_ref = dolfinx.fem.Function(W)
@@ -165,7 +172,7 @@ def test_discrete_gradient(degree, use_petsc, cell_type):
         G_ref.assemble()
         G_ref.mult(u.x.petsc_vec, w_ref.x.petsc_vec)
     else:
-        G_ref.mult(_x, w_ref.x)
+        G_ref.mult(input_vector(G_ref), w_ref.x)
     w_ref.x.scatter_forward()
 
     np.testing.assert_allclose(w.x.array, w_ref.x.array, rtol=1e-11, atol=1e-12)
