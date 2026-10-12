@@ -11,6 +11,7 @@ import functools
 import warnings
 
 from mpi4py import MPI
+import fenicsx_compat
 import numpy as np
 import numpy.typing as npt
 import dolfinx
@@ -243,10 +244,7 @@ def write_hdf5_adios(
     """
     import adios2
 
-    def resolve_adios_scope(adios2):
-        return adios2 if not hasattr(adios2, "bindings") else adios2.bindings
-
-    adios2 = resolve_adios_scope(adios2)
+    adios2 = fenicsx_compat.resolve_adios_scope(adios2)
 
     if len(functions) == 0:
         return
@@ -481,10 +479,7 @@ class BaseXDMFFile(abc.ABC):
         logger.debug("Initializing ADIOS2")
         import adios2
 
-        def resolve_adios_scope(adios2):
-            return adios2 if not hasattr(adios2, "bindings") else adios2.bindings
-
-        adios2 = resolve_adios_scope(adios2)
+        adios2 = fenicsx_compat.resolve_adios_scope(adios2)
 
         # Create ADIOS2 reader
         self._adios = adios2.ADIOS(self._data.comm)

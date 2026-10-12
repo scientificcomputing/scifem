@@ -2,6 +2,7 @@ from mpi4py import MPI
 import numpy as np
 import numpy.typing as npt
 import dolfinx
+import fenicsx_compat
 
 mpi_dtype = {
     np.float64: MPI.DOUBLE,
@@ -199,14 +200,10 @@ def broadcast_marked_entities(mesh, dim, entities):
 def local_range(comm, num_indices):
     """The block of ``range(num_indices)`` this process is the post office for.
 
-    Uses ``dolfinx.common.local_range`` where it exists, so that the blocks match what the
-    rest of DOLFINx means by the same words; the fallback reproduces it.
+    The same blocks as ``dolfinx.common.local_range``, so that they match what the rest of
+    DOLFINx means by the same words.
     """
-    if hasattr(dolfinx.common, "local_range"):
-        return tuple(dolfinx.common.local_range(comm.rank, int(num_indices), comm.size))
-    per_rank, remainder = divmod(int(num_indices), comm.size)
-    low = comm.rank * per_rank + min(comm.rank, remainder)
-    return low, low + per_rank + (1 if comm.rank < remainder else 0)
+    return fenicsx_compat.local_range(comm.rank, int(num_indices), comm.size)
 
 
 def index_owner(comm, indices, num_indices):

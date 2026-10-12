@@ -5,7 +5,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from packaging.version import Version
 from mpi4py import MPI
 
 if TYPE_CHECKING:
@@ -19,11 +18,11 @@ except ImportError:
     _HAS_PETSC = False
 
 import dolfinx
+import fenicsx_compat
 import numpy as np
 import numpy.typing as npt
 import ufl
 
-from . import compat
 from .utils import unroll_dofmap
 
 __all__ = ["PointSource"]
@@ -56,10 +55,6 @@ class PointSource:
             If the point source is outside the mesh, a ``ValueError`` will be raised.
         """
         self._function_space = V
-        if V.dofmap.bs > 1 and dolfinx.__version__ == "0.8.0":
-            raise NotImplementedError(
-                "Block function spaces are not supported in dolfinx 0.8.0. Please upgrade dolfinx"
-            )
         if points.ndim == 1:
             points = points.reshape(1, -3)
         elif points.ndim == 2 and points.shape[1] != 3:
@@ -92,28 +87,12 @@ class PointSource:
         # Determine what process owns a point and what cells it lies within
         mesh = self._function_space.mesh
         tol = self._tol if tol is None else tol
-        if dolfinx.__version__ == "0.8.0":
-            src_ranks, _, self._points, self._cells = (
-                dolfinx.cpp.geometry.determine_point_ownership(
-                    mesh._cpp_object, self._input_points, tol
-                )
-            )
-            self._points = np.array(self._points).reshape(-1, 3)
-        elif Version(dolfinx.__version__) >= Version("0.9.0.0"):
-            try:
-                collision_data = dolfinx.cpp.geometry.determine_point_ownership(
-                    mesh._cpp_object, self._input_points, tol
-                )
-            except TypeError:
-                collision_data = dolfinx.geometry.determine_point_ownership(
-                    mesh, self._input_points, padding=tol
-                )
-
-            self._points = collision_data.dest_points
-            self._cells = collision_data.dest_cells
-            src_ranks = collision_data.src_owner
-        else:
-            raise NotImplementedError(f"Unsupported version of dolfinx: {dolfinx.__version__}")
+        collision_data = dolfinx.geometry.determine_point_ownership(
+            mesh, self._input_points, padding=tol
+        )
+        self._points = collision_data.dest_points
+        self._cells = collision_data.dest_cells
+        src_ranks = collision_data.src_owner
         if -1 in src_ranks:
             raise ValueError("Point source is outside the mesh.")
 
@@ -122,11 +101,11 @@ class PointSource:
         mesh = self._function_space.mesh
         # Pull owning points back to reference cell
         mesh_nodes = mesh.geometry.x
-        cmap = compat.cmap(mesh)
+        cmap = fenicsx_compat.cmap(mesh)
 
         ref_x = np.zeros((len(self._cells), mesh.topology.dim), dtype=mesh.geometry.x.dtype)
         for i, (point, cell) in enumerate(zip(self._points, self._cells)):
-            geom_dofs = compat.dofmap(mesh)[cell]
+            geom_dofs = fenicsx_compat.dofmap(mesh)[cell]
             ref_x[i] = cmap.pull_back(point.reshape(-1, 3), mesh_nodes[geom_dofs])
 
         # Create expression evaluating a trial function (i.e. just the basis function)
@@ -140,29 +119,15 @@ class PointSource:
             expr = dolfinx.fem.Expression(u, ref_x, comm=MPI.COMM_SELF)
             all_values = expr.eval(mesh, self._cells)
             # Diagonalize values (num_cells, num_points, num_dofs, bs) -> (num_cells, num_dofs)
-            if Version(dolfinx.__version__) <= Version("0.9.0"):
-                basis_values = np.empty((len(self._cells), num_dofs), dtype=all_values.dtype)
+            basis_values = np.zeros((len(self._cells), num_dofs), dtype=dolfinx.default_scalar_type)
+            if bs == 1:
+                # Values have shape (num_cells, num_points, num_dofs)
                 for i in range(len(self._cells)):
-                    basis_values[i] = sum(
-                        [
-                            all_values[i, i * num_dofs * bs : (i + 1) * num_dofs * bs][
-                                j * num_dofs : (j + 1) * num_dofs
-                            ]
-                            for j in range(bs)
-                        ]
-                    )
+                    basis_values[i] = all_values[i, i, :]
             else:
-                basis_values = np.zeros(
-                    (len(self._cells), num_dofs), dtype=dolfinx.default_scalar_type
-                )
-                if bs == 1:
-                    # Values have shape (num_cells, num_points, num_dofs)
-                    for i in range(len(self._cells)):
-                        basis_values[i] = all_values[i, i, :]
-                else:
-                    # Values have shape (num_cells, num_points, bs, num_dofs*bs)
-                    for i in range(len(self._cells)):
-                        basis_values[i] = sum(all_values[i, i, j, :] for j in range(bs))
+                # Values have shape (num_cells, num_points, bs, num_dofs*bs)
+                for i in range(len(self._cells)):
+                    basis_values[i] = sum(all_values[i, i, j, :] for j in range(bs))
         else:
             basis_values = np.zeros((0, num_dofs), dtype=dolfinx.default_scalar_type)
         self._basis_values = basis_values

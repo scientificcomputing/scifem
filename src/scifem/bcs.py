@@ -5,57 +5,11 @@ import dolfinx
 import ufl
 import numpy.typing as npt
 import numpy as np
-from packaging.version import Version
+import fenicsx_compat
 
-from .compat import get_facet_permutations
 from .utils import group_by_key
-from ffcx.ir.elementtables import (
-    permute_quadrature_interval,
-    permute_quadrature_triangle,
-    permute_quadrature_quadrilateral,
-)
 
 __all__ = ["interpolate_function_onto_facet_dofs"]
-
-
-def build_quadrature_permutations(facet_type, points):
-    if Version(dolfinx.__version__) < Version("0.11.0.dev0"):
-        # In older versions of dolfinx, the permutation is handled internally
-        # in the C++ code, so we can just return the original points
-        if facet_type == basix.CellType.interval:
-            num_permutations = 2
-        elif facet_type == basix.CellType.triangle:
-            num_permutations = 6
-        elif facet_type == basix.CellType.quadrilateral:
-            num_permutations = 8
-        else:
-            raise ValueError(f"Unsupported {facet_type=}")
-        return [points for _ in range(num_permutations)]
-    else:
-        if facet_type == basix.CellType.interval:
-            return [permute_quadrature_interval(points, ref) for ref in range(2)]
-        elif facet_type == basix.CellType.triangle:
-            perms = []
-            # FFCx order: rot is outer loop, ref is inner loop
-            for rot in range(3):
-                for ref in range(2):
-                    # Counteract the mapping with the inverse permutation
-                    rot_inv = (3 - rot) % 3 if ref == 0 else rot
-                    perms.append(permute_quadrature_triangle(points, ref, rot_inv))
-            return perms
-
-        elif facet_type == basix.CellType.quadrilateral:
-            perms = []
-            # FFCx order: rot is outer loop, ref is inner loop
-            for rot in range(4):
-                for ref in range(2):
-                    # Counteract the mapping with the inverse permutation
-                    rot_inv = (4 - rot) % 4 if ref == 0 else rot
-                    perms.append(permute_quadrature_quadrilateral(points, ref, rot_inv))
-            return perms
-
-        else:
-            raise ValueError(f"Unsupported {facet_type=}")
 
 
 def pull_back_to_reference_facet(
@@ -125,7 +79,7 @@ def interpolate_function_onto_facet_dofs(
     reference_facet_points = pull_back_to_reference_facet(
         domain.basix_cell(), interpolation_points[fdim]
     )
-    facet_points = build_quadrature_permutations(facet_type, reference_facet_points)
+    facet_points = fenicsx_compat.permute_facet_quadrature(facet_type, reference_facet_points)
     expressions = [dolfinx.fem.Expression(expr, points) for points in facet_points]
     points_per_entity = [sum(ip.shape[0] for ip in ips) for ips in interpolation_points]
     offsets = np.zeros(domain.topology.dim + 2, dtype=np.int32)
@@ -147,7 +101,7 @@ def interpolate_function_onto_facet_dofs(
     is_marked = np.zeros(num_facets_on_process, dtype=np.int8)
     is_marked[facets] = 1
     num_facets_per_cell = dolfinx.cpp.mesh.cell_num_entities(domain.topology.cell_type, fdim)
-    facet_permutations = get_facet_permutations(domain.topology)
+    facet_permutations = fenicsx_compat.facet_permutations(domain.topology)
     # One evaluation per facet permutation, over every marked facet with that permutation
     local_facets = np.asarray(c_to_f.array, dtype=np.int32).reshape(-1, num_facets_per_cell)
     rows, slots = np.nonzero(is_marked[local_facets[all_connected_cells]])
@@ -157,21 +111,15 @@ def interpolate_function_onto_facet_dofs(
     values = values.reshape(len(all_connected_cells), offsets[-1], expr_value_size)
     for perm, selected in group_by_key(permutations):
         entities = np.column_stack((cells[selected], slots[selected])).astype(np.int32)
-        # Backwards compatibility
-        try:
-            evaluated = expressions[perm].eval(domain, entities)
-        except (AttributeError, AssertionError):
-            evaluated = expressions[perm].eval(domain, entities.flatten())
+        evaluated = fenicsx_compat.expression_eval(expressions[perm], domain, entities)
         positions = offsets[fdim] + num_points * slots[selected, None] + np.arange(num_points)
         values[rows[selected, None], positions] = evaluated.reshape(
             len(selected), num_points, expr_value_size
         )
 
     qh = dolfinx.fem.Function(Q)
-    if hasattr(qh._cpp_object, "interpolate_f"):
-        interpolate_func = qh._cpp_object.interpolate_f
-    else:
-        interpolate_func = qh._cpp_object.interpolate
-    interpolate_func(values.reshape(-1, expr_value_size).T.copy(), all_connected_cells)
+    fenicsx_compat.interpolate(
+        qh._cpp_object, values.reshape(-1, expr_value_size).T.copy(), all_connected_cells
+    )
     qh.x.scatter_forward()
     return qh

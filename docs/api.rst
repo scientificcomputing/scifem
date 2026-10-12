@@ -134,13 +134,3 @@ XDMF output
 
 .. automodule:: scifem.xdmf
     :members:
-
-
-Compat functions
-################
-
-.. automodule:: scifem.compat
-    :members:
-
-.. automodule:: scifem.ufl_compat
-    :members:

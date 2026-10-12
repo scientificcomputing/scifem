@@ -12,7 +12,8 @@
 import os
 import sys
 import pyvista
-from scifem import transfer_meshtags_to_submesh, compat
+import fenicsx_compat
+from scifem import transfer_meshtags_to_submesh
 from mpi4py import MPI
 import gmsh
 import dolfinx
@@ -82,7 +83,7 @@ def plot_mesh(mesh: dolfinx.mesh.Mesh, values=None, figure=None):
     plotter = pyvista.Plotter()
     V_linear = dolfinx.fem.functionspace(mesh, ("Lagrange", 1))
     linear_grid = pyvista.UnstructuredGrid(*dolfinx.plot.vtk_mesh(V_linear))
-    if compat.cmap(mesh).degree > 1:
+    if fenicsx_compat.cmap(mesh).degree > 1:
         ugrid = pyvista.UnstructuredGrid(*dolfinx.plot.vtk_mesh(mesh))
         if values is not None:
             ugrid.cell_data["Marker"] = values

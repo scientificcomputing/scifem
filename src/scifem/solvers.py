@@ -9,14 +9,10 @@ if sys.version_info >= (3, 13):
 else:
     from typing_extensions import deprecated
 
-
-from packaging.version import parse as _v
-
 import numpy as np
 import ufl
 import dolfinx
-
-from . import compat
+import fenicsx_compat
 
 __all__ = ["NewtonSolver"]
 
@@ -24,12 +20,6 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
     logger = logging.getLogger(__name__)
     from petsc4py import PETSc
     import dolfinx.fem.petsc
-
-    # assemble_vector_block(scale=...) is renamed assemble_vector_block(alpha=...)
-    # in 0.9
-    _alpha_kw: str = "alpha"
-    if _v(dolfinx.__version__) < _v("0.9"):
-        _alpha_kw = "scale"
 
     @deprecated("NewtonSolver is deprecated in favor of `dolfinx.fem.petsc.NonlinearProblem`.")
     class NewtonSolver:
@@ -81,24 +71,18 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
             self.w = w
 
             # Create PETSc objects for block assembly
-            try:
-                self.b = dolfinx.fem.petsc.create_vector_block(self._F)
-                self.A = dolfinx.fem.petsc.create_matrix_block(self._J)
-                self.dx = dolfinx.fem.petsc.create_vector_block(self._F)
-                self.x = dolfinx.fem.petsc.create_vector_block(self._F)
-            except AttributeError:
-                self.b = dolfinx.fem.petsc.create_vector(
-                    dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
-                )
-                self.A = dolfinx.fem.petsc.create_matrix(self._J, kind="mpi")
-                self.dx = dolfinx.fem.petsc.create_vector(
-                    dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
-                )
-                self.x = dolfinx.fem.petsc.create_vector(
-                    dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
-                )
+            self.b = dolfinx.fem.petsc.create_vector(
+                dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
+            )
+            self.A = dolfinx.fem.petsc.create_matrix(self._J, kind="mpi")
+            self.dx = dolfinx.fem.petsc.create_vector(
+                dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
+            )
+            self.x = dolfinx.fem.petsc.create_vector(
+                dolfinx.fem.extract_function_spaces(self._F), kind="mpi"
+            )
 
-                self._maps = [compat.form_map(form) for form in self._F]
+            self._maps = [fenicsx_compat.form_map(form) for form in self._F]
 
             # Set PETSc options
             opts = PETSc.Options()
@@ -144,52 +128,22 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                     self._pre_solve_callback(self)
 
                 # Pack constants and coefficients
-                try:
-                    constants_L = dolfinx.fem.pack_constants(self._F)
-                    coeffs_L = dolfinx.fem.pack_coefficients(self._F)
-                    constants_a = [
-                        dolfinx.fem.pack_constants(form)
-                        if form is not None
-                        else np.array([], dtype=self.x.array.dtype)
-                        for form in self._J
-                    ]
-                    coeffs_a = [
-                        {} if form is None else dolfinx.fem.pack_coefficients(form)
-                        for form in self._J
-                    ]
-                except AttributeError:
-                    # NOTE: DOLFINx 0.9 compatibility
-                    # Pack constants and coefficients
-                    constants_L = [
-                        form and dolfinx.cpp.fem.pack_constants(form._cpp_object)
-                        for form in self._F
-                    ]
-                    coeffs_L = [
-                        dolfinx.cpp.fem.pack_coefficients(form._cpp_object) for form in self._F
-                    ]
-                    constants_a = [
-                        [
-                            dolfinx.cpp.fem.pack_constants(form._cpp_object)
-                            if form is not None
-                            else np.array([], dtype=self.x.array.dtype)
-                            for form in forms
-                        ]
-                        for forms in self._J
-                    ]
-                    coeffs_a = [
-                        [
-                            {}
-                            if form is None
-                            else dolfinx.cpp.fem.pack_coefficients(form._cpp_object)
-                            for form in forms
-                        ]
-                        for forms in self._J
-                    ]
+                constants_L = dolfinx.fem.pack_constants(self._F)
+                coeffs_L = dolfinx.fem.pack_coefficients(self._F)
+                constants_a = [
+                    dolfinx.fem.pack_constants(form)
+                    if form is not None
+                    else np.array([], dtype=self.x.array.dtype)
+                    for form in self._J
+                ]
+                coeffs_a = [
+                    {} if form is None else dolfinx.fem.pack_coefficients(form) for form in self._J
+                ]
                 # Scatter previous solution `w` to `self.x`, the blocked version used for lifting
-                if hasattr(dolfinx.common, "index_map"):
-                    _imaps = [s.function_space.dofmap.index_map._cpp_object for s in self.w]
-                else:
-                    _imaps = [s.function_space.dofmap.index_map for s in self.w]
+                _imaps = [
+                    fenicsx_compat.unwrap_index_map(s.function_space.dofmap.index_map)
+                    for s in self.w
+                ]
                 dolfinx.cpp.la.petsc.scatter_local_vectors(
                     self.x,
                     [si.x.petsc_vec.array_r for si in self.w],
@@ -206,62 +160,37 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                 # Assemble F(u_{i-1}) - J(u_D - u_{i-1}) and set du|_bc= u_D - u_{i-1}
                 with self.b.localForm() as b_local:
                     b_local.set(0.0)
-                try:
-                    dolfinx.fem.petsc.assemble_vector_block(
-                        self.b,
-                        self._F,
-                        self._J,
-                        bcs=self.bcs,
-                        x0=self.x,
-                        coeffs_a=coeffs_a,
-                        constants_a=constants_a,
-                        coeffs_L=coeffs_L,
-                        constants_L=constants_L,
-                        # dolfinx 0.8 compatibility
-                        # this is called 'scale' in 0.8, 'alpha' in 0.9
-                        **{_alpha_kw: -1.0},
-                    )
-                except AttributeError:
-                    dolfinx.fem.petsc.assemble_vector(
-                        self.b, self._F, coeffs=coeffs_L, constants=constants_L
-                    )
-                    bcs1 = dolfinx.fem.bcs_by_block(
-                        dolfinx.fem.extract_function_spaces(self._J, 1), self.bcs
-                    )
-                    dolfinx.fem.petsc.apply_lifting(
-                        self.b,
-                        self._J,
-                        bcs=bcs1,
-                        x0=self.x,
-                        coeffs=coeffs_a,
-                        constants=constants_a,
-                        alpha=-1.0,
-                    )
-                    self.b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
-                    bcs0 = dolfinx.fem.bcs_by_block(
-                        dolfinx.fem.extract_function_spaces(self._F), self.bcs
-                    )
-                    dolfinx.fem.petsc.set_bc(self.b, bcs0, x0=self.x, alpha=-1.0)
-                    self.b.ghostUpdate(PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
+                dolfinx.fem.petsc.assemble_vector(
+                    self.b, self._F, coeffs=coeffs_L, constants=constants_L
+                )
+                bcs1 = fenicsx_compat.bcs_by_block(
+                    dolfinx.fem.extract_function_spaces(self._J, 1), self.bcs
+                )
+                dolfinx.fem.petsc.apply_lifting(
+                    self.b,
+                    self._J,
+                    bcs=bcs1,
+                    x0=self.x,
+                    coeffs=coeffs_a,
+                    constants=constants_a,
+                    alpha=-1.0,
+                )
+                self.b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
+                bcs0 = fenicsx_compat.bcs_by_block(
+                    dolfinx.fem.extract_function_spaces(self._F), self.bcs
+                )
+                dolfinx.fem.petsc.set_bc(self.b, bcs0, x0=self.x, alpha=-1.0)
+                self.b.ghostUpdate(PETSc.InsertMode.INSERT_VALUES, PETSc.ScatterMode.FORWARD)
 
                 # Assemble Jacobian
                 self.A.zeroEntries()
-                try:
-                    dolfinx.fem.petsc.assemble_matrix_block(
-                        self.A,
-                        self._J,
-                        bcs=self.bcs,
-                        constants=constants_a,
-                        coeffs=coeffs_a,
-                    )
-                except AttributeError:
-                    dolfinx.fem.petsc.assemble_matrix(
-                        self.A,
-                        self._J,
-                        self.bcs,
-                        coeffs=coeffs_a,
-                        constants=constants_a,
-                    )
+                dolfinx.fem.petsc.assemble_matrix(
+                    self.A,
+                    self._J,
+                    self.bcs,
+                    coeffs=coeffs_a,
+                    constants=constants_a,
+                )
                 self.A.assemble()
 
                 self._solver.solve(self.b, self.dx)

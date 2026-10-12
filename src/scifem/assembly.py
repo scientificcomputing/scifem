@@ -20,11 +20,7 @@ def _extract_dtype(expr: ufl.form.Form | ufl.core.expr.Expr | dolfinx.fem.Form) 
     try:
         return expr.dtype
     except AttributeError:
-        try:
-            geom_type = ufl.domain.extract_domains(expr)[0].ufl_cargo().geometry.x.dtype
-        except AttributeError:
-            # Legacy support
-            geom_type = expr.ufl_domain().ufl_cargo().geometry.x.dtype
+        geom_type = ufl.domain.extract_domains(expr)[0].ufl_cargo().geometry.x.dtype
         coefficients = expr.coefficients()
         constants = expr.constants()
         if (not coefficients) and (not constants):

@@ -13,13 +13,19 @@ name = "scifem"
 version = "0.27.0.dev0"
 description = "Scientific tools for finite element methods"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "MIT"
 authors = [
     { email = "dokken@simula.no", name = "Jørgen S. Dokken" },
     { email = "henriknf@simula.no", name = "Henrik N.T. Finsberg" },
 ]
-dependencies = ["fenics-dolfinx", "numpy", "packaging", "scipy", "typing-extensions"]
+dependencies = [
+    "fenics-dolfinx>=0.10.0",
+    "fenicsx-compat>=0.2.0",
+    "numpy",
+    "scipy",
+    "typing-extensions",
+]
 
 [project.urls]
 repository = "https://github.com/scientificcomputing/scifem.git"
@@ -38,7 +44,7 @@ docs = [
     "scifem[gmsh]",
 ]
 dev = ["ruff", "mypy", "bump-my-version", "pre-commit"]
-test = ["pytest", "petsc4py", "h5py", "scifem[biomed]"]
+test = ["pytest", "petsc4py", "h5py", "packaging", "scifem[biomed]"]
 biomed = ["nibabel"]
 gmsh = ["gmsh"]
 all = ["scifem[docs,dev,test,adios2,h5py,biomed,gmsh]"]
@@ -98,8 +104,8 @@ exclude = [
 # Same as Black.
 line-length = 100
 
-# Assume Python 3.10.
-target-version = "py310"
+# Assume Python 3.12.
+target-version = "py312"
 
 [tool.ruff.lint]
 # Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.

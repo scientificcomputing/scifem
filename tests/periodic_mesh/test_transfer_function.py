@@ -24,12 +24,10 @@ import numpy as np
 import pytest
 
 import dolfinx
-import inspect
-from scifem.periodic.gmsh import extract_gmsh_periodic_nodes
+from scifem.periodic.gmsh import extract_gmsh_periodic_nodes, model_to_mesh
 from scifem.periodic.mesh import create_periodic_mesh_from_igi
 from scifem.periodic.transfer import transfer_function_to_parent_mesh
 from scifem.periodic.utils import PeriodicNodes
-from scifem.compat import create_partitioner
 
 
 def _periodic_scalar(x):
@@ -75,20 +73,13 @@ def meshes():
         else:
             pairs = PeriodicNodes(num_nodes_global=0)
         # The rebuild needs a ghost layer across every interprocess facet, which
-        # `model_to_mesh` does not give by default.
-        gmodel_to_mesh = inspect.signature(dolfinx.io.gmsh.model_to_mesh)
-        kwargs = {}
-        ghost_mode = dolfinx.mesh.GhostMode.shared_facet
-        if "ghost_mode" in gmodel_to_mesh.parameters:
-            kwargs["ghost_mode"] = ghost_mode
-        partitioner = create_partitioner(ghost_mode)
-        mesh_data = dolfinx.io.gmsh.model_to_mesh(
-            gmsh.model, comm, 0, gdim=2, partitioner=partitioner, **kwargs
+        # `dolfinx.io.gmsh.model_to_mesh` does not give by default.
+        mesh = model_to_mesh(
+            gmsh.model, comm, 0, gdim=2, ghost_mode=dolfinx.mesh.GhostMode.shared_facet
         )
     finally:
         gmsh.finalize()
 
-    mesh = getattr(mesh_data, "mesh", mesh_data)
     periodic_mesh, _, _ = create_periodic_mesh_from_igi(
         mesh, pairs.replaced, pairs.partner, pairs.num_nodes_global, root=0
     )

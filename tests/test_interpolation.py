@@ -1,7 +1,6 @@
 from mpi4py import MPI
 from packaging.version import Version
 import dolfinx
-import scifem.compat
 import scifem.interpolation
 import scifem.mesh
 import pytest
@@ -365,7 +364,7 @@ def _exterior_facet_submesh(mesh):
     num_facets = submesh.topology.index_map(fdim).size_local
     submesh_facets = np.arange(num_facets, dtype=np.int32)
     parent_facets = scifem.mesh.get_entity_map(entity_map)[:num_facets]
-    entities = scifem.compat.compute_integration_domains(
+    entities = dolfinx.fem.compute_integration_domains(
         dolfinx.fem.IntegralType.exterior_facet, mesh.topology, parent_facets
     ).reshape(-1, 2)
     return submesh, submesh_facets, entities, entity_map
