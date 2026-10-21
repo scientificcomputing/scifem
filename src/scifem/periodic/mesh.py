@@ -127,7 +127,9 @@ def _reduced_vertex_map(mesh, indicator_vertices):
     keep_vertices[removed] = False
     reduced_vertices = np.flatnonzero(keep_vertices).astype(np.int32)
     # Vertex ownership must not change; this raises on every process if it would.
-    sub_map, sub_to_parent = create_sub_index_map(vertex_map, reduced_vertices, allow_owner_change=False)
+    sub_map, sub_to_parent = create_sub_index_map(
+        vertex_map, reduced_vertices, allow_owner_change=False
+    )
 
     parent_to_sub = np.full(num_vertices_local, -1, dtype=np.int32)
     parent_to_sub[sub_to_parent] = np.arange(sub_to_parent.size, dtype=np.int32)
