@@ -162,7 +162,7 @@ def _closest_point_projection(
     element = mesh.ufl_domain().ufl_coordinate_element().sub_elements[0]
     tdim = mesh.topology.dim
     # Get the coordinates of the nodes for the specified cell
-    sub_xdofs = fenicsx_compat.dofmap(mesh)[cells] 
+    sub_xdofs = fenicsx_compat.dofmap(mesh)[cells]
     node_coords = mesh.geometry.x[sub_xdofs][:, :, : mesh.geometry.dim]
     target_points = target_points.reshape(-1, mesh.geometry.dim)
 
