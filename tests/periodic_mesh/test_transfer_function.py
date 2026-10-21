@@ -24,7 +24,8 @@ import numpy as np
 import pytest
 
 import dolfinx
-from scifem.periodic.gmsh import extract_gmsh_periodic_nodes, model_to_mesh
+import fenicsx_compat
+from scifem.periodic.gmsh import extract_gmsh_periodic_nodes
 from scifem.periodic.mesh import create_periodic_mesh_from_igi
 from scifem.periodic.transfer import transfer_function_to_parent_mesh
 from scifem.periodic.utils import PeriodicNodes
@@ -74,9 +75,9 @@ def meshes():
             pairs = PeriodicNodes(num_nodes_global=0)
         # The rebuild needs a ghost layer across every interprocess facet, which
         # `dolfinx.io.gmsh.model_to_mesh` does not give by default.
-        mesh = model_to_mesh(
+        mesh = fenicsx_compat.model_to_mesh(
             gmsh.model, comm, 0, gdim=2, ghost_mode=dolfinx.mesh.GhostMode.shared_facet
-        )
+        ).mesh
     finally:
         gmsh.finalize()
 

@@ -27,7 +27,7 @@ from scifem.periodic import (
     PeriodicNodes,
     read_periodic_mesh_from_msh,
 )
-from scifem.periodic.gmsh import model_to_mesh
+import fenicsx_compat
 
 
 @pytest.fixture
@@ -308,7 +308,7 @@ def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_replaced=Fa
     else:
         pairs = PeriodicNodes()
 
-    mesh = model_to_mesh(gmsh.model, comm, rank=0, gdim=2)
+    mesh = fenicsx_compat.model_to_mesh(gmsh.model, comm, 0, gdim=2).mesh
     if started_here:
         gmsh.finalize()
     return mesh, pairs
@@ -614,7 +614,7 @@ def periodic_box(comm, res=1.0 / 4, low_is_replaced=True, order=1):
     else:
         pairs = PeriodicNodes()
 
-    mesh = model_to_mesh(gmsh.model, comm, rank=0, gdim=3)
+    mesh = fenicsx_compat.model_to_mesh(gmsh.model, comm, 0, gdim=3).mesh
     if started_here:
         gmsh.finalize()
     return mesh, pairs
