@@ -381,8 +381,6 @@ def _holders_of_partner_vertices(mesh, partner_vertex, dest_owner, tag: int):
     # --- from the owner to every holder. `index_to_dest_ranks` lists the ranks that ghost
     # each owned index; the owner holds it as well, and is appended as itself.
     ghosting_ranks, ghosting_offsets = index_to_dest_ranks(vertex_map, tag)
-    ghosting_ranks = np.asarray(ghosting_ranks, dtype=np.int32)
-    ghosting_offsets = np.asarray(ghosting_offsets, dtype=np.int64)
     local = vertex_map.global_to_local(np.ascontiguousarray(at_owner[:, 0]))
     assert (local != -1).all(), "A vertex was reported to a rank that does not own it"
     # Flatten the ragged per-vertex rank lists. Equivalent to:
