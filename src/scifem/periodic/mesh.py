@@ -1053,8 +1053,8 @@ def _build_periodic_mesh(
     lost_geom_igi = mesh.geometry.input_global_indices[org_geom_dm_cells_losing_vertex]
 
     # Compute insertion position based on cell ownership
-    lost_src_ranks, num_send_lost_cells = np.unique(lost_dest_ranks, return_counts=True)
-    num_send_lost_cells = num_send_lost_cells.astype(np.int32)
+    lost_src_ranks, lost_counts = np.unique(lost_dest_ranks, return_counts=True)
+    num_send_lost_cells = lost_counts.astype(np.int32)
     lost_cell_insert_pos = compute_insert_position(
         lost_dest_ranks, lost_src_ranks, num_send_lost_cells
     )
@@ -1098,8 +1098,8 @@ def _build_periodic_mesh(
     lost_cells_to_gainer_comm = comm.Create_dist_graph(
         [comm.rank], [len(lost_src_ranks)], lost_src_ranks.tolist(), reorder=False
     )
-    recv_lost_cells_ranks, sent_to_ranks, _ = lost_cells_to_gainer_comm.Get_dist_neighbors()
-    recv_lost_cells_ranks = np.asarray(recv_lost_cells_ranks, dtype=np.int32)
+    recv_ranks, sent_to_ranks, _ = lost_cells_to_gainer_comm.Get_dist_neighbors()
+    recv_lost_cells_ranks = np.asarray(recv_ranks, dtype=np.int32)
     assert np.array_equal(np.asarray(sent_to_ranks, dtype=np.int32), lost_src_ranks)
     num_recv_lost_cells = np.zeros(len(recv_lost_cells_ranks), dtype=np.int32)
     all_to_all(lost_cells_to_gainer_comm, num_send_lost_cells, num_recv_lost_cells)
@@ -1327,7 +1327,10 @@ def _build_periodic_mesh(
         new_c_to_v._cpp_object,  # type: ignore[arg-type]
         all_cell_oci,
     )
-    c_el = dolfinx.fem.coordinate_element(mesh._ufl_domain.ufl_coordinate_element().basix_element)
+    # `coordinate_element` is a singledispatch; the basix-element overload takes no degree
+    c_el = dolfinx.fem.coordinate_element(  # type: ignore[call-arg]
+        mesh._ufl_domain.ufl_coordinate_element().basix_element
+    )
 
     assert (
         (all_ghosts < tmp_vertex_map.local_range[0]) | (tmp_vertex_map.local_range[1] <= all_ghosts)
@@ -1370,10 +1373,12 @@ def _build_periodic_mesh(
     geometry = dolfinx.mesh.create_geometry(
         new_node_im, extended_dofmap, c_el, extended_coords, extended_igi
     )
+    # The geometry dtype matches the mesh class chosen at runtime
+    cpp_mesh: dolfinx.cpp.mesh.Mesh_float32 | dolfinx.cpp.mesh.Mesh_float64
     if mesh.geometry.x.dtype == np.float64:
-        cpp_mesh = dolfinx.cpp.mesh.Mesh_float64(comm, topology, geometry._cpp_object)
+        cpp_mesh = dolfinx.cpp.mesh.Mesh_float64(comm, topology, geometry._cpp_object)  # type: ignore[arg-type]
     elif mesh.geometry.x.dtype == np.float32:
-        cpp_mesh = dolfinx.cpp.mesh.Mesh_float32(comm, topology, geometry._cpp_object)
+        cpp_mesh = dolfinx.cpp.mesh.Mesh_float32(comm, topology, geometry._cpp_object)  # type: ignore[arg-type]
     else:
         raise RuntimeError(f"Unsupported dtype for mesh {mesh.geometry.x.dtype}")
 

@@ -27,8 +27,8 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
         _bcs: list[dolfinx.fem.DirichletBC]
         A: PETSc.Mat
         b: PETSc.Vec
-        _J: dolfinx.fem.Form | ufl.form.Form
-        _F: dolfinx.fem.Form | ufl.form.Form
+        _J: list[list[dolfinx.fem.Form | None]]
+        _F: list[dolfinx.fem.Form]
         _dx: PETSc.Vec
         _error_on_convergence: bool
         _pre_solve_callback: Callable[["NewtonSolver"], None] | None
@@ -36,8 +36,8 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
 
         def __init__(
             self,
-            F: list[dolfinx.fem.Form],
-            J: list[list[dolfinx.fem.Form]],
+            F: list[ufl.Form | dolfinx.fem.Form],
+            J: list[list[ufl.Form | dolfinx.fem.Form | None]],
             w: list[dolfinx.fem.Function],
             bcs: list[dolfinx.fem.DirichletBC] | None = None,
             max_iterations: int = 5,
@@ -58,9 +58,11 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                 error_on_nonconvergence: Raise an error if the linear solver
                     does not converge or Newton solver doesn't converge
             """
-            # Compile forms if not compiled. Will throw error it requires entity maps
-            self._F = dolfinx.fem.form(F)
-            self._J = dolfinx.fem.form(J)
+            # Compile forms if not compiled. Will throw error it requires entity maps.
+            # `dolfinx.fem.form` passes compiled forms through, but is typed for UFL
+            # forms only, and as if every residual block could compile to `None`.
+            self._F = dolfinx.fem.form(F)  # type: ignore[arg-type, assignment]
+            self._J = dolfinx.fem.form(J)  # type: ignore[arg-type, assignment]
 
             # Store solution and accessible/modifiable properties
             self._pre_solve_callback = None
@@ -91,7 +93,7 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                     opts[k] = v
 
             # Define KSP solver
-            self._solver = PETSc.KSP().create(self.b.getComm().tompi4py())
+            self._solver = PETSc.KSP().create(self.b.getComm())
             self._solver.setOperators(self.A)
             self._solver.setFromOptions()
 
@@ -146,7 +148,8 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                 ]
                 dolfinx.cpp.la.petsc.scatter_local_vectors(
                     self.x,
-                    [si.x.petsc_vec.array_r for si in self.w],
+                    # The binding is typed for the one scalar type PETSc was built with.
+                    [si.x.petsc_vec.array_r for si in self.w],  # type: ignore[misc]
                     [
                         (
                             _imaps[i],
@@ -170,9 +173,13 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                     self.b,
                     self._J,
                     bcs=bcs1,
-                    x0=self.x,
+                    # A blocked `x0` is the single block vector, which dolfinx's own
+                    # lifting reads, although typed as one vector per block.
+                    x0=self.x,  # type: ignore[arg-type]
                     coeffs=coeffs_a,
-                    constants=constants_a,
+                    # `pack_constants` is typed to return `None` blocks, which
+                    # `apply_lifting` and `assemble_matrix` are typed to refuse.
+                    constants=constants_a,  # type: ignore[arg-type]
                     alpha=-1.0,
                 )
                 self.b.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
@@ -189,13 +196,14 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                     self._J,
                     self.bcs,
                     coeffs=coeffs_a,
-                    constants=constants_a,
+                    constants=constants_a,  # type: ignore[arg-type]
                 )
                 self.A.assemble()
 
                 self._solver.solve(self.b, self.dx)
                 if self._error_on_convergence:
-                    if (status := self._solver.getConvergedReason()) <= 0:
+                    # petsc4py types the reason as its enum class; it is an `int`.
+                    if (status := self._solver.getConvergedReason()) <= 0:  # type: ignore[operator]
                         raise RuntimeError(f"Linear solver did not converge, got reason: {status}")
 
                 # Update solution
@@ -205,7 +213,9 @@ if dolfinx.has_petsc4py and dolfinx.has_petsc:
                         s.function_space.dofmap.index_map.size_local
                         * s.function_space.dofmap.index_map_bs
                     )
-                    s.x.petsc_vec.array_w[:num_sub_dofs] -= (
+                    # numpy's in-place operators reject the real-or-complex union petsc4py
+                    # types its arrays with; at runtime both are the one PETSc scalar type.
+                    s.x.petsc_vec.array_w[:num_sub_dofs] -= (  # type: ignore[misc]
                         beta * self.dx.array_r[offset_start : offset_start + num_sub_dofs]
                     )
                     s.x.petsc_vec.ghostUpdate(

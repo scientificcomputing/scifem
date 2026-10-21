@@ -33,7 +33,9 @@ def scipy_project_point_to_element(
     """
 
     # Extract scalar element of mesh
-    element = mesh.ufl_domain().ufl_coordinate_element().sub_elements[0]
+    ufl_domain = mesh.ufl_domain()
+    assert ufl_domain is not None
+    element = ufl_domain.ufl_coordinate_element().sub_elements[0]
 
     # Get the coordinates of the nodes for the specified cell
     node_coords = mesh.geometry.x[fenicsx_compat.dofmap(mesh)[cells]][:, :, : mesh.geometry.dim]

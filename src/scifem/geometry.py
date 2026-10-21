@@ -159,10 +159,13 @@ def _closest_point_projection(
     roundoff_tol = 100 * eps
 
     # Extract scalar element of mesh
-    element = mesh.ufl_domain().ufl_coordinate_element().sub_elements[0]
+    ufl_domain = mesh.ufl_domain()
+    assert ufl_domain is not None
+    element = ufl_domain.ufl_coordinate_element().sub_elements[0]
     tdim = mesh.topology.dim
     # Get the coordinates of the nodes for the specified cell
     sub_xdofs = fenicsx_compat.dofmap(mesh)[cells]
+    # Output form is (num_cells, num_xnodes_per_cell, gdim)
     node_coords = mesh.geometry.x[sub_xdofs][:, :, : mesh.geometry.dim]
     target_points = target_points.reshape(-1, mesh.geometry.dim)
 
@@ -220,7 +223,8 @@ def _closest_point_projection(
             # for stretching of the reference space
             jac_norm = np.linalg.norm(tangents)
 
-            scaled_tol_grad = tol_grad * max(jac_norm, 1.0)
+            # mypy infers max(np.floating, float) as a comparison protocol, not a number
+            scaled_tol_grad = tol_grad * max(jac_norm, 1.0)  # type: ignore[operator]
             if np.linalg.norm(g) < scaled_tol_grad:
                 break
 

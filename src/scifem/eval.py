@@ -121,7 +121,7 @@ def find_cell_extrema(
     jit_options: dict | None = None,
     method: str | None = None,
     options: dict | None = None,
-    tol: float | None = None,
+    tol: float | np.floating | None = None,
 ) -> tuple[npt.NDArray[np.floating], np.floating]:
     """
     Find the extrema of a :py:class:`ufl.core.expr.Expr` within a cell.
@@ -148,7 +148,7 @@ def find_cell_extrema(
     uds = ufl.domain.extract_domains(u)
     if uds is None or len(uds) != 1:
         raise ValueError(f"Expression {u:s} must be defined on a single domain")
-    ud = uds[0]
+    ud = typing.cast(ufl.Mesh, uds[0])
     mesh = dolfinx.mesh.Mesh(ud.ufl_cargo(), ud)
 
     if x0 is None:
@@ -312,7 +312,7 @@ def compute_extrema(
     uds = ufl.domain.extract_domains(u)
     if uds is None or len(uds) != 1:
         raise ValueError(f"Expression {u:s} must be defined on a single domain")
-    ud = uds[0]
+    ud = typing.cast(ufl.Mesh, uds[0])
     mesh = dolfinx.mesh.Mesh(ud.ufl_cargo(), ud)
 
     if kind is builtins.max:
@@ -348,7 +348,7 @@ def compute_extrema(
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=False, delete=True) as cache_dir:
         jit_options["cache_dir"] = cache_dir
         # Find local extrema
-        local_min = np.inf
+        local_min: float | np.floating = np.inf
         local_X = None
         for cell in candidate_cells:
             X_c, extrema = find_cell_extrema(

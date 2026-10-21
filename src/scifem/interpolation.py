@@ -126,7 +126,7 @@ def prepare_interpolation_data(
     except (RuntimeError, ValueError):
         Q_vs = 1  # If we do not have a basix element, assume value size is 1
         assert isinstance(Q.ufl_element().pullback, ufl.pullback.IdentityPullback)
-        pull_back = lambda x: None
+        pull_back = lambda x: None  # type: ignore[assignment]  # Unused for identity pullback
         assert Q.element.interpolation_ident
         im = None
 
@@ -150,8 +150,13 @@ def prepare_interpolation_data(
 
         for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
             for q in range(Q.dofmap.bs):
+                # The scalar type of a dolfinx.fem.Expression is not inferred statically,
+                # so its evaluations are typed float32 regardless of the element's type
                 new_array[:, q * Q_vs : (q + 1) * Q_vs, i] = pull_back(
-                    array_evaluated[:, :, q * Q_vs : (q + 1) * Q_vs, i], jacs, detJs, Ks
+                    array_evaluated[:, :, q * Q_vs : (q + 1) * Q_vs, i],  # type: ignore[arg-type]
+                    jacs,  # type: ignore[arg-type]
+                    detJs,  # type: ignore[arg-type]
+                    Ks,  # type: ignore[arg-type]
                 ).reshape(num_cells * num_points, Q_vs)
         new_array = new_array.reshape(
             num_cells, num_points, Q.dofmap.bs * Q_vs, V.dofmap.bs * V.dofmap.dof_layout.num_dofs
@@ -190,6 +195,7 @@ def prepare_interpolation_data(
         for c in range(num_cells):
             for i in range(V.dofmap.bs * V.dofmap.dof_layout.num_dofs):
                 tmp_array = np.zeros((int(num_points), Q.dofmap.bs * Q_vs), dtype=np.float64)
+                assert im is not None  # Only None for an identity interpolation
                 for p in range(num_points):
                     tmp_array[p] = new_array[c, p, :, i]
                 if Q.dofmap.bs == 1:
@@ -249,7 +255,7 @@ def interpolation_matrix(
     def scatter(
         A: dolfinx.la.MatrixCSR,
         num_cells: int,
-        dofs_visited: npt.NDArray[np.int32],
+        dofs_visited: npt.NDArray[np.int8],
         num_rows_local: int,
         array_evaluated: npt.NDArray[np.inexact],
         dofmap0: npt.NDArray[np.int32],
@@ -319,7 +325,7 @@ if dolfinx.has_petsc4py:
         def scatter(
             A: PETSc.Mat,
             num_cells: int,
-            dofs_visited: npt.NDArray[np.int32],
+            dofs_visited: npt.NDArray[np.int8],
             num_rows_local: int,
             array_evaluated: npt.NDArray[np.inexact],
             dofmap0: npt.NDArray[np.int32],
@@ -332,7 +338,13 @@ if dolfinx.has_petsc4py:
                 A_local = array_evaluated[i].reshape(len(rows), len(cols))
                 row_filter = (dofs_visited[rows] == 1) | (rows >= num_rows_local)
                 A_local[row_filter] = 0
-                A.setValuesLocal(rows, cols, A_local, addv=PETSc.InsertMode.ADD_VALUES)
+                # petsc4py annotates the indices as Sequence[int], numpy arrays are accepted
+                A.setValuesLocal(
+                    rows,  # type: ignore[arg-type]
+                    cols,  # type: ignore[arg-type]
+                    A_local,
+                    addv=PETSc.InsertMode.ADD_VALUES,
+                )
                 dofs_visited[rows] = 1
 
         row_dofmap = unroll_dofmap(Q.dofmap.list, Q.dofmap.bs)  # (num_cells, num_rows)
@@ -467,7 +479,7 @@ class SurfaceSubmeshInterpolation:
         integration_entities: npt.NDArray[np.int32],
         entity_maps: list[_EntityMap] | None = None,
     ):
-        ufl_domains = ufl.domain.extract_domains(expr)
+        ufl_domains = typing.cast(tuple[ufl.Mesh, ...], ufl.domain.extract_domains(expr))
         max_tdim_pos = np.argmax([domain.ufl_cargo().topology.dim for domain in ufl_domains])
         self._mesh = dolfinx.mesh.Mesh(
             ufl_domains[max_tdim_pos].ufl_cargo(), ufl_domains[max_tdim_pos]
@@ -478,7 +490,8 @@ class SurfaceSubmeshInterpolation:
 
         submesh = V_surface.mesh
         ip = V_surface.element.interpolation_points
-        self._expression = interpolate_to_submesh_entity_maps(expr, ip, entity_maps)
+        # fenicsx_compat annotates the first argument as a Function, but any expression is accepted
+        self._expression = interpolate_to_submesh_entity_maps(expr, ip, entity_maps)  # type: ignore[arg-type]
         self._mesh.topology.create_connectivity(self._mesh.topology.dim, submesh.topology.dim)
         self._mesh.topology.create_connectivity(submesh.topology.dim, self._mesh.topology.dim)
         cell_permutation_info(self._mesh.topology)
@@ -521,7 +534,7 @@ class SurfaceSubmeshInterpolation:
             data = data.swapaxes(0, 1)
 
         if self._expression.value_size == 1:
-            shaped_data = data.flatten()
+            shaped_data: npt.NDArray[np.inexact] = data.flatten()
         else:
             shaped_data = data.reshape(self._expression.value_size, -1)
 

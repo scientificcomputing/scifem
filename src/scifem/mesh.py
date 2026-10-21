@@ -45,9 +45,12 @@ if typing.TYPE_CHECKING:
 class _EntityMap(Protocol):
     """Protocol for EntityMap-like objects."""
 
-    sub_topology: dolfinx.mesh.Topology
-    dim: int
-    _cpp_object: object
+    @property
+    def sub_topology(self) -> dolfinx.mesh.Topology: ...
+    @property
+    def dim(self) -> int: ...
+    @property
+    def _cpp_object(self) -> object: ...
 
     def sub_topology_to_topology(
         self, entities: npt.NDArray[np.int32], inverse: bool
@@ -70,13 +73,15 @@ def get_entity_map(
         Mapped indices of entities.
     """
     try:
-        sub_top = entity_map.sub_topology
+        em = typing.cast(_EntityMap, entity_map)
+        sub_top = em.sub_topology
         assert isinstance(sub_top, dolfinx.mesh.Topology)
-        sub_map = sub_top.index_map(entity_map.dim)
+        sub_map = sub_top.index_map(em.dim)
         indices = np.arange(sub_map.size_local + sub_map.num_ghosts, dtype=np.int32)
-        return entity_map.sub_topology_to_topology(indices, inverse=False)
+        return em.sub_topology_to_topology(indices, inverse=False)
     except AttributeError:
-        return entity_map
+        # Deprecated array-based entity map (older DOLFINx)
+        return typing.cast(npt.NDArray[np.int32], entity_map)
 
 
 def create_entity_markers(
@@ -459,6 +464,12 @@ def create_geometry_function_space(
         ufl_el = basix.ufl.blocked_element(sub_el, shape=(N,))
         value_shape = (N,)
 
+    _fe_constructor: (
+        type[dolfinx.cpp.fem.FiniteElement_float32] | type[dolfinx.cpp.fem.FiniteElement_float64]
+    )
+    _fem_constructor: (
+        type[dolfinx.cpp.fem.FunctionSpace_float32] | type[dolfinx.cpp.fem.FunctionSpace_float64]
+    )
     if ufl_el.dtype == np.float32:
         _fe_constructor = dolfinx.cpp.fem.FiniteElement_float32
         _fem_constructor = dolfinx.cpp.fem.FunctionSpace_float32
@@ -478,8 +489,9 @@ def create_geometry_function_space(
         dof_layout, fenicsx_compat.unwrap_index_map(geom_imap), N, adj_list, N
     )
 
-    # Create function space
-    cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap)
+    # Create function space. The constructor matches the mesh dtype at runtime,
+    # which the float32/float64 stubs cannot express.
+    cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap)  # type: ignore[arg-type]
 
     return dolfinx.fem.FunctionSpace(mesh, ufl_el, cpp_space)
 
@@ -525,9 +537,13 @@ def copy(mesh: dolfinx.mesh.Mesh) -> dolfinx.mesh.Mesh:
         The new mesh
     """
 
-    # Initialize C++ mesh
+    # Initialize C++ mesh (geometry dtype matches the mesh class at runtime)
     cpp_mesh = type(mesh._cpp_object)(
-        mesh.comm, mesh.topology._cpp_object, mesh.geometry._cpp_object
+        mesh.comm,
+        mesh.topology._cpp_object,
+        mesh.geometry._cpp_object,  # type: ignore[arg-type]
     )
     # Initialize Python wrapper with new symbolic numbering in the `ufl.Mesh`
-    return dolfinx.mesh.Mesh(cpp_mesh, ufl.Mesh(mesh.ufl_domain().ufl_coordinate_element()))
+    ufl_domain = mesh.ufl_domain()
+    assert ufl_domain is not None
+    return dolfinx.mesh.Mesh(cpp_mesh, ufl.Mesh(ufl_domain.ufl_coordinate_element()))

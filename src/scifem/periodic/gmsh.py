@@ -160,7 +160,7 @@ def read_periodic_mesh_from_msh(
             gmsh.merge(str(filename))
             pairs = extract_gmsh_periodic_nodes(gmsh.model)
         else:
-            pairs = PeriodicNodes(0)
+            pairs = PeriodicNodes()
         mesh_data = fenicsx_compat.model_to_mesh(
             gmsh.model, comm, rank, gdim=gdim, partitioner=partitioner, **kwargs
         )

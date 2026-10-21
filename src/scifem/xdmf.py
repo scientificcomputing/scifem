@@ -311,7 +311,8 @@ def create_function_space_data(V: dolfinx.fem.FunctionSpace) -> FunctionSpaceDat
     points = V.tabulate_dof_coordinates()
     bs = V.dofmap.index_map_bs
     index_map = V.dofmap.index_map
-    comm = V.mesh.comm
+    # dolfinx annotates Mesh.comm as MPI.Comm, but a mesh communicator is an intracommunicator
+    comm = typing.cast(MPI.Intracomm, V.mesh.comm)
 
     return FunctionSpaceData(
         points=points,

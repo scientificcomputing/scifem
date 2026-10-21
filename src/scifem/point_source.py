@@ -87,7 +87,8 @@ class PointSource:
         # Determine what process owns a point and what cells it lies within
         mesh = self._function_space.mesh
         tol = self._tol if tol is None else tol
-        collision_data = dolfinx.geometry.determine_point_ownership(
+        # Points are float32 or float64; the constrained TypeVar cannot take the union
+        collision_data = dolfinx.geometry.determine_point_ownership(  # type: ignore[type-var]
             mesh, self._input_points, padding=tol
         )
         self._points = collision_data.dest_points

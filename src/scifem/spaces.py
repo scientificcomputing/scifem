@@ -51,7 +51,7 @@ def create_space_of_simple_functions(
     mesh: dolfinx.mesh.Mesh,
     cell_tag: dolfinx.mesh.MeshTags,
     tags: Sequence[int | np.int32 | np.int64],
-    value_shape: tuple[()] | tuple[int | tuple[int]] | None = None,
+    value_shape: tuple[int, ...] | None = None,
 ) -> dolfinx.fem.FunctionSpace:
     """Create a space of simple functions.
 
@@ -86,7 +86,8 @@ def create_space_of_simple_functions(
     # Sanity check cell tags
     if cell_map.size_local + cell_map.num_ghosts != len(cell_tag.indices):
         raise ValueError("Every cell in the cell tag must have a value assigned to it.")
-    if not np.isin(cell_tag.values, tags).all():
+    # numpy stubs reject a sequence mixing Python and numpy integers
+    if not np.isin(cell_tag.values, tags).all():  # type: ignore[arg-type]
         raise ValueError("All values in the cell tag must be in the input tags.")
 
     # Determine the owner of the material degrees of freedom.
@@ -116,11 +117,14 @@ def create_space_of_simple_functions(
     # Create dofmap mapping local dofs to position in `tags` input.
     adj_flattened = np.zeros_like(cell_tag.values)
     for i, tag in enumerate(tags):
-        adj_flattened[cell_tag.find(tag)] = i
+        # numpy integer tags are accepted at runtime; the stub only admits int | float
+        adj_flattened[cell_tag.find(tag)] = i  # type: ignore[arg-type]
 
     # Create dofmap
+    # Cell tag values are int32 at runtime; the stub admits any MeshTags value dtype
     dofmap_adj = dolfinx.cpp.graph.AdjacencyList_int32(
-        adj_flattened, np.arange(len(cell_tag.values) + 1, dtype=np.int32)
+        adj_flattened,  # type: ignore[arg-type]
+        np.arange(len(cell_tag.values) + 1, dtype=np.int32),
     )
     cpp_dofmap = dolfinx.cpp.fem.DofMap(
         e_layout, fenicsx_compat.unwrap_index_map(dof_imap), index_map_bs, dofmap_adj, bs
@@ -131,9 +135,14 @@ def create_space_of_simple_functions(
         dolfinx.cpp.fem.FiniteElement_float64,
         el.basix_element._e,
         gdim=mesh.geometry.dim,
-        value_shape=value_shape,  # type: ignore[arg-type]
+        value_shape=value_shape,
     )
-    cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(mesh._cpp_object, cpp_el, cpp_dofmap)
+    # Only float64 meshes are supported here
+    cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(
+        mesh._cpp_object,  # type: ignore[arg-type]
+        cpp_el,
+        cpp_dofmap,
+    )
 
     _el = basix.ufl.element("P", mesh.basix_cell(), 0, shape=value_shape, discontinuous=True)
     V = dolfinx.fem.FunctionSpace(mesh, _el, cpp_space)
