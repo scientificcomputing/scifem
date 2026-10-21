@@ -52,9 +52,7 @@ def model_to_mesh(
 
     The ghost mode reaches the mesh through :py:func:`fenicsx_compat.model_to_mesh`, which
     passes it to ``model_to_mesh`` where that takes it, and otherwise builds a partitioner
-    with it unless the caller supplied one. Getting this wrong does not fail here -- it
-    fails much later, when an interior facet integral finds an interprocess facet with only
-    one cell.
+    with it unless the caller supplied one.
 
     Args:
         model: An initialised, meshed ``gmsh.model``.
