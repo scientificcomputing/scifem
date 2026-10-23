@@ -86,3 +86,26 @@ def test_material_space(value_shape: tuple[int], cell_type: str):
         diff = ufl.inner(f - f_ex, f - f_ex) * dx_restricted
         error = assemble_scalar(diff)
         np.testing.assert_allclose(error, 0.0)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("tag_dtype", [np.int32, np.int64])
+def test_material_space_dtypes(dtype, tag_dtype):
+    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 8, 8, dtype=dtype)
+    cell_map = mesh.topology.index_map(mesh.topology.dim)
+    all_cells = np.arange(cell_map.size_local + cell_map.num_ghosts, dtype=np.int32)
+    tags = [2, 7]
+    values = np.full(len(all_cells), tags[0], dtype=tag_dtype)
+    values[dolfinx.mesh.locate_entities(mesh, mesh.topology.dim, lambda x: x[0] <= 0.5)] = tags[1]
+    ct = dolfinx.mesh.meshtags(mesh, mesh.topology.dim, all_cells, values)
+
+    V = create_space_of_simple_functions(mesh, ct, tags)
+    assert V.mesh.geometry.x.dtype == dtype
+    for i, tag in enumerate(tags):
+        np.testing.assert_allclose(V.dofmap.list[ct.indices[ct.values == tag]].flatten(), i)
+
+    # The left half carries tags[1], so the integral of f is 3 * 0.5 + 5 * 0.5
+    f = dolfinx.fem.Function(V, dtype=dtype)
+    f.x.array[:] = [3, 5]
+    integral = assemble_scalar(dolfinx.fem.form(f * ufl.dx, dtype=dtype))
+    np.testing.assert_allclose(integral, 4.0, rtol=10 * np.finfo(dtype).eps)

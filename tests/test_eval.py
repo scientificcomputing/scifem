@@ -156,3 +156,17 @@ def test_extrema_func(cell_type, extrema, dtype, degree: int):
 
     assert np.isclose(u_ufl_ex, -sign * 0.8, atol=tol)
     np.testing.assert_allclose(_X_ufl_ex, x_p, atol=tol)
+
+
+def test_extrema_requires_kind():
+    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 2, 2)
+    x = ufl.SpatialCoordinate(mesh)
+    with pytest.raises(TypeError, match="kind"):
+        compute_extrema(x[0])
+
+
+def test_extrema_unknown_kind():
+    mesh = dolfinx.mesh.create_unit_square(MPI.COMM_WORLD, 2, 2)
+    x = ufl.SpatialCoordinate(mesh)
+    with pytest.raises(ValueError, match=f"Unknown extrema {sum}"):
+        compute_extrema(x[0], sum)
