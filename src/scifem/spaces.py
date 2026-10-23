@@ -94,8 +94,24 @@ def create_space_of_simple_functions(
     # It will be the process that owns the cell with global index 0
     is_owner = cell_map.local_range[0] == 0 and cell_map.size_local > 0
 
+    _fe_constructor: (
+        type[dolfinx.cpp.fem.FiniteElement_float32] | type[dolfinx.cpp.fem.FiniteElement_float64]
+    )
+    _fem_constructor: (
+        type[dolfinx.cpp.fem.FunctionSpace_float32] | type[dolfinx.cpp.fem.FunctionSpace_float64]
+    )
+    dtype = mesh.geometry.x.dtype
+    if dtype == np.float64:
+        _fe_constructor = dolfinx.cpp.fem.FiniteElement_float64
+        _fem_constructor = dolfinx.cpp.fem.FunctionSpace_float64
+    elif dtype == np.float32:
+        _fe_constructor = dolfinx.cpp.fem.FiniteElement_float32
+        _fem_constructor = dolfinx.cpp.fem.FunctionSpace_float32
+    else:
+        raise ValueError(f"Unsupported dtype: {dtype}")
+
     # Determine number of dofs and ghosts on each process
-    el = basix.ufl.element("P", mesh.basix_cell(), 0, shape=(), discontinuous=True)
+    el = basix.ufl.element("P", mesh.basix_cell(), 0, shape=(), discontinuous=True, dtype=dtype)
     num_dofs = len(tags) * is_owner
     num_ghosts = len(tags) * (not is_owner)
     (_, ghost_owner_rank) = mesh.comm.allreduce((is_owner, mesh.comm.rank), op=MPI.MAXLOC)
@@ -115,16 +131,14 @@ def create_space_of_simple_functions(
     )
 
     # Create dofmap mapping local dofs to position in `tags` input.
-    adj_flattened = np.zeros_like(cell_tag.values)
+    adj_flattened = np.zeros(len(cell_tag.values), dtype=np.int32)
     for i, tag in enumerate(tags):
         # numpy integer tags are accepted at runtime; the stub only admits int | float
         adj_flattened[cell_tag.find(tag)] = i  # type: ignore[arg-type]
 
     # Create dofmap
-    # Cell tag values are int32 at runtime; the stub admits any MeshTags value dtype
     dofmap_adj = dolfinx.cpp.graph.AdjacencyList_int32(
-        adj_flattened,  # type: ignore[arg-type]
-        np.arange(len(cell_tag.values) + 1, dtype=np.int32),
+        adj_flattened, np.arange(len(cell_tag.values) + 1, dtype=np.int32)
     )
     cpp_dofmap = dolfinx.cpp.fem.DofMap(
         e_layout, fenicsx_compat.unwrap_index_map(dof_imap), index_map_bs, dofmap_adj, bs
@@ -132,18 +146,16 @@ def create_space_of_simple_functions(
 
     # Create function space
     cpp_el = fenicsx_compat.finite_element_ctor_kwargs(
-        dolfinx.cpp.fem.FiniteElement_float64,
+        _fe_constructor,
         el.basix_element._e,
         gdim=mesh.geometry.dim,
         value_shape=value_shape,
     )
-    # Only float64 meshes are supported here
-    cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(
-        mesh._cpp_object,  # type: ignore[arg-type]
-        cpp_el,
-        cpp_dofmap,
-    )
+    # The constructor matches the mesh dtype at runtime, which the stubs cannot express
+    cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap)  # type: ignore[arg-type]
 
-    _el = basix.ufl.element("P", mesh.basix_cell(), 0, shape=value_shape, discontinuous=True)
+    _el = basix.ufl.element(
+        "P", mesh.basix_cell(), 0, shape=value_shape, discontinuous=True, dtype=dtype
+    )
     V = dolfinx.fem.FunctionSpace(mesh, _el, cpp_space)
     return V

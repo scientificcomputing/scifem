@@ -9,8 +9,8 @@ import numpy.typing as npt
 import typing
 
 
-def _extract_dtype(expr: ufl.form.Form | ufl.core.expr.Expr | dolfinx.fem.Form) -> npt.DTypeLike:
-    """Given a ufl form, expression or a compiled DOLFINx form extract the data type that should
+def _extract_dtype(form: ufl.form.Form | dolfinx.fem.Form) -> npt.DTypeLike:
+    """Given a ufl form or a compiled DOLFINx form extract the data type that should
     be used in form compilation.
 
     Args:
@@ -18,10 +18,10 @@ def _extract_dtype(expr: ufl.form.Form | ufl.core.expr.Expr | dolfinx.fem.Form) 
 
     """
     try:
-        # Compiled forms, as well as Functions and Constants, carry a dtype
-        return expr.dtype  # type: ignore[union-attr]
+        # Compiled forms carry a dtype
+        return form.dtype  # type: ignore[union-attr]
     except AttributeError:
-        form = typing.cast(ufl.form.Form, expr)
+        form = typing.cast(ufl.form.Form, form)
         domain = typing.cast(ufl.Mesh, ufl.domain.extract_domains(form)[0])
         geom_type = domain.ufl_cargo().geometry.x.dtype
         coefficients = form.coefficients()

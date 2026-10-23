@@ -281,7 +281,7 @@ def compute_LP_average(
 
 def compute_extrema(
     u: ufl.core.expr.Expr,
-    kind=MinMaxFunc,
+    kind: MinMaxFunc,
     p: int = 1,
     num_candidates: int = 3,
     x0: npt.NDArray[np.floating] | None = None,
@@ -320,7 +320,7 @@ def compute_extrema(
     elif kind is builtins.min:
         sign = 1
     else:
-        raise ValueError("Unknown extrema {kind}, supports min and max only.")
+        raise ValueError(f"Unknown extrema {kind}, supports min and max only.")
 
     # Compute cell candidates
     local_avg = compute_LP_average(u, p, mesh)
