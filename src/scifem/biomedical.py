@@ -112,7 +112,7 @@ def read_mri_data_to_function(
     cells: npt.NDArray[np.int32] | None = None,
     vox2ras_transform: npt.NDArray[np.floating] | None = None,
     degree: int = 0,
-    dtype: np.inexact = dolfinx.default_scalar_type,
+    dtype: type[np.inexact] = dolfinx.default_scalar_type,
     use_tkr: bool = False,
 ) -> dolfinx.fem.Function:
     """Read in MRI data over a set of cells in the mesh and attach it to an appropriate function.
@@ -143,7 +143,9 @@ def read_mri_data_to_function(
         raise ValueError("Degree must be a non-negative integer")
 
     if degree == 0:
-        el = basix.ufl.element("Lagrange", mesh.basix_cell(), 0, discontinuous=True)
+        el: basix.ufl._ElementBase = basix.ufl.element(
+            "Lagrange", mesh.basix_cell(), 0, discontinuous=True
+        )
     else:
         el = basix.ufl.quadrature_element(scheme="default", degree=degree, cell=mesh.basix_cell())
 

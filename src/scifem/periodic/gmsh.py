@@ -20,75 +20,15 @@ what a reader of the gmsh documentation will see.
 
 from __future__ import annotations
 
-import typing
-from mpi4py import MPI as _MPI
-import dolfinx
+import fenicsx_compat
 import numpy as np
 from .mesh import create_periodic_mesh_from_igi, DEFAULT_TAG_BASE
 from .utils import PeriodicNodes, resolve_to_roots
-import inspect
-from ..compat import create_partitioner
 
 __all__ = [
     "extract_gmsh_periodic_nodes",
     "read_periodic_mesh_from_msh",
-    "model_to_mesh",
 ]
-
-
-def model_to_mesh(
-    model,
-    comm,
-    rank: int = 0,
-    gdim: int = 3,
-    max_facet_to_cell_links: int = 2,
-    ghost_mode: dolfinx.mesh.GhostMode = dolfinx.mesh.GhostMode.shared_facet,
-    partitioner: typing.Callable[
-        [_MPI.Comm, int, int, dolfinx.cpp.graph.AdjacencyList_int32],
-        dolfinx.cpp.graph.AdjacencyList_int32,
-    ]
-    | None = None,
-):
-    """``model_to_mesh`` with shared-facet ghosting, wherever the version wants it told.
-
-    On 0.12.0.dev0, ``model_to_mesh`` takes `ghost_mode` directly and threads it into whatever
-    partitioner is used -- the caller's, or its own default if `partitioner` is `None` --
-    at call time. On 0.11 there is no such keyword, so `ghost_mode` can only reach the
-    mesh through a partitioner already built with it, which is constructed here unless
-    the caller supplied one. Getting this wrong does not fail here -- it fails much
-    later, when an interior facet integral finds an interprocess facet with only one
-    cell.
-
-    Args:
-        model: An initialised, meshed ``gmsh.model``.
-        comm: The communicator to distribute the mesh over.
-        rank: The rank that reads the model.
-        gdim: Geometric dimension of the mesh.
-        max_facet_to_cell_links: Passed to `model_to_mesh` where it takes it directly,
-            and to the partitioner constructed here otherwise.
-        ghost_mode: The ghost mode the mesh must be built with; see
-            :py:func:`scifem.periodic.mesh.check_facet_ghosting` for why the rebuild
-            needs `shared_facet`.
-        partitioner: A caller-supplied partitioner, which takes priority over the one
-            built here from `ghost_mode`. On 0.11, supplying one means `ghost_mode` and
-            `max_facet_to_cell_links` are not applied, since there both only take effect
-            through the partitioner.
-
-    Returns:
-        The mesh.
-    """
-    params = inspect.signature(dolfinx.io.gmsh.model_to_mesh).parameters
-    kwargs: dict[str, typing.Any] = {"partitioner": partitioner}
-    if "ghost_mode" in params:
-        kwargs["ghost_mode"] = ghost_mode
-        if "max_facet_to_cell_links" in params:
-            kwargs["max_facet_to_cell_links"] = max_facet_to_cell_links
-    elif partitioner is None:
-        kwargs["partitioner"] = create_partitioner(
-            ghost_mode, max_facet_to_cell_links=max_facet_to_cell_links
-        )
-    mesh_data = dolfinx.io.gmsh.model_to_mesh(model, comm, rank=rank, gdim=gdim, **kwargs)
-    return getattr(mesh_data, "mesh", mesh_data)
 
 
 def extract_gmsh_periodic_nodes(
@@ -192,10 +132,12 @@ def read_periodic_mesh_from_msh(
         comm: The communicator to distribute the mesh over.
         rank: The rank that reads the file.
         gdim: Geometric dimension of the mesh.
-        partitioner: Cell partitioner, passed through to ``model_to_mesh``.
+        partitioner: Cell partitioner, passed through to
+            :py:func:`fenicsx_compat.model_to_mesh`.
         tag_base: Passed through to :py:func:`create_periodic_mesh_from_igi`.
-        kwargs: Further arguments for ``model_to_mesh``, such as ``ghost_mode`` where the
-            installed DOLFINx takes it there.
+        kwargs: Further arguments for :py:func:`fenicsx_compat.model_to_mesh`, such as
+            ``ghost_mode``. Its default, ``shared_facet``, is what the rebuild needs; see
+            :py:func:`scifem.periodic.mesh.check_facet_ghosting`.
 
     Returns:
         ``(periodic_mesh, replaced_vertices, replacement_map)``, as
@@ -218,17 +160,16 @@ def read_periodic_mesh_from_msh(
             gmsh.merge(str(filename))
             pairs = extract_gmsh_periodic_nodes(gmsh.model)
         else:
-            pairs = PeriodicNodes(0)
-        mesh_data = model_to_mesh(
-            gmsh.model, comm, rank=rank, gdim=gdim, partitioner=partitioner, **kwargs
+            pairs = PeriodicNodes()
+        mesh_data = fenicsx_compat.model_to_mesh(
+            gmsh.model, comm, rank, gdim=gdim, partitioner=partitioner, **kwargs
         )
     finally:
         if started_here and gmsh.isInitialized():
             gmsh.finalize()
 
-    mesh = getattr(mesh_data, "mesh", mesh_data)
     return create_periodic_mesh_from_igi(
-        mesh,
+        mesh_data.mesh,
         pairs.replaced,
         pairs.partner,
         pairs.num_nodes_global,

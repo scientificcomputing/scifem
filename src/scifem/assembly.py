@@ -18,15 +18,14 @@ def _extract_dtype(expr: ufl.form.Form | ufl.core.expr.Expr | dolfinx.fem.Form) 
 
     """
     try:
-        return expr.dtype
+        # Compiled forms, as well as Functions and Constants, carry a dtype
+        return expr.dtype  # type: ignore[union-attr]
     except AttributeError:
-        try:
-            geom_type = ufl.domain.extract_domains(expr)[0].ufl_cargo().geometry.x.dtype
-        except AttributeError:
-            # Legacy support
-            geom_type = expr.ufl_domain().ufl_cargo().geometry.x.dtype
-        coefficients = expr.coefficients()
-        constants = expr.constants()
+        form = typing.cast(ufl.form.Form, expr)
+        domain = typing.cast(ufl.Mesh, ufl.domain.extract_domains(form)[0])
+        geom_type = domain.ufl_cargo().geometry.x.dtype
+        coefficients = form.coefficients()
+        constants = form.constants()
         if (not coefficients) and (not constants):
             return geom_type
         else:
@@ -44,7 +43,7 @@ def _extract_dtype(expr: ufl.form.Form | ufl.core.expr.Expr | dolfinx.fem.Form) 
 
 def assemble_scalar(
     J: ufl.form.Form | dolfinx.fem.Form,
-    entity_maps: typing.Optional[dict[dolfinx.mesh.Mesh, npt.NDArray[np.int32]]] = None,
+    entity_maps: typing.Sequence[dolfinx.mesh.EntityMap] | None = None,
 ) -> np.floating | np.complexfloating:
     """Assemble a scalar form and gather result across processes
 
@@ -56,7 +55,8 @@ def assemble_scalar(
         The accumulated value of the assembled form.
     """
     dtype = _extract_dtype(J)
-    compiled_form = dolfinx.fem.form(J, entity_maps=entity_maps, dtype=dtype)
+    # dolfinx.fem.form passes an already compiled form through unchanged
+    compiled_form = dolfinx.fem.form(J, entity_maps=entity_maps, dtype=dtype)  # type: ignore[arg-type]
 
     if (rank := compiled_form.rank) != 0:
         raise ValueError(f"Form must be a scalar form, got for of arity {rank}")
@@ -67,7 +67,7 @@ def assemble_scalar(
 def norm(
     expr: ufl.core.expr.Expr,
     norm_type: Literal["L2", "H1", "H10"],
-    entity_maps: typing.Optional[dict[dolfinx.mesh.Mesh, npt.NDArray[np.int32]]] = None,
+    entity_maps: typing.Sequence[dolfinx.mesh.EntityMap] | None = None,
 ) -> dolfinx.fem.Form:
     """
     Compile the norm of an UFL expression into a DOLFINx form.

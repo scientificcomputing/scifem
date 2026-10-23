@@ -7,18 +7,15 @@ else:
     from typing_extensions import deprecated
 
 from . import _scifem  # type: ignore
-from .compat import compute_integration_domains, create_cpp_finite_element
 import collections
 import dolfinx
 import typing
 import numpy as np
 import numpy.typing as npt
 from typing import Protocol
-from packaging.version import Version
 import basix
+import fenicsx_compat
 import ufl
-
-from . import compat
 
 __all__ = [
     "create_entity_markers",
@@ -48,9 +45,12 @@ if typing.TYPE_CHECKING:
 class _EntityMap(Protocol):
     """Protocol for EntityMap-like objects."""
 
-    sub_topology: dolfinx.mesh.Topology
-    dim: int
-    _cpp_object: object
+    @property
+    def sub_topology(self) -> dolfinx.mesh.Topology: ...
+    @property
+    def dim(self) -> int: ...
+    @property
+    def _cpp_object(self) -> object: ...
 
     def sub_topology_to_topology(
         self, entities: npt.NDArray[np.int32], inverse: bool
@@ -73,13 +73,15 @@ def get_entity_map(
         Mapped indices of entities.
     """
     try:
-        sub_top = entity_map.sub_topology
+        em = typing.cast(_EntityMap, entity_map)
+        sub_top = em.sub_topology
         assert isinstance(sub_top, dolfinx.mesh.Topology)
-        sub_map = sub_top.index_map(entity_map.dim)
+        sub_map = sub_top.index_map(em.dim)
         indices = np.arange(sub_map.size_local + sub_map.num_ghosts, dtype=np.int32)
-        return entity_map.sub_topology_to_topology(indices, inverse=False)
+        return em.sub_topology_to_topology(indices, inverse=False)
     except AttributeError:
-        return entity_map
+        # Deprecated array-based entity map (older DOLFINx)
+        return typing.cast(npt.NDArray[np.int32], entity_map)
 
 
 def create_entity_markers(
@@ -207,8 +209,6 @@ def reverse_mark_entities(
     Returns:
         Local indices marked on any process sharing this entity
     """
-    if hasattr(dolfinx.common, "index_map"):
-        entity_map = entity_map
     comm_vec = dolfinx.la.vector(entity_map, dtype=np.int32)
     comm_vec.array[:] = 0
     comm_vec.array[entities] = 1
@@ -249,11 +249,11 @@ def extract_submesh(
     submesh, cell_map, vertex_map, node_map = dolfinx.mesh.create_submesh(mesh, edim, entities)
 
     # Transfer cell markers
-    if hasattr(dolfinx.mesh, "transfer_meshtags_to_submesh"):
-        new_et = dolfinx.mesh.transfer_meshtags_to_submesh(
-            entity_tag, submesh, vertex_to_parent=vertex_map, cell_to_parent=cell_map
+    try:
+        new_et = fenicsx_compat.transfer_meshtags_to_submesh(
+            entity_tag, submesh, cell_map, vertex_map
         )
-    else:
+    except NotImplementedError:  # DOLFINx 0.10 has no native version
         new_et, _ = transfer_meshtags_to_submesh(
             entity_tag, submesh, vertex_to_parent=vertex_map, cell_to_parent=cell_map
         )
@@ -276,11 +276,7 @@ def find_interface(
     Returns:
         The facets shared between the two domains.
     """
-    # Wrapping C++ objects to be back compatible with older versions of dolfinx
-    if not isinstance(cell_tags.topology, dolfinx.cpp.mesh.Topology):
-        topology = cell_tags.topology
-    else:
-        topology = dolfinx.mesh.Topology(cell_tags.topology)
+    topology = fenicsx_compat.meshtags_topology(cell_tags)
 
     assert topology.dim == cell_tags.dim
     tdim = topology.dim
@@ -352,7 +348,7 @@ def compute_subdomain_exterior_facets(
     sub_facets = dolfinx.mesh.exterior_facet_indices(sub_mesh.topology)
 
     # Map exterior facet to (submesh_cell, local_facet_index) tuples
-    integration_entities = compute_integration_domains(
+    integration_entities = dolfinx.fem.compute_integration_domains(
         dolfinx.fem.IntegralType.exterior_facet, sub_mesh.topology, sub_facets
     ).reshape(-1, 2)
     submap_array = get_entity_map(cell_map)
@@ -393,13 +389,6 @@ def compute_interface_data(
     Returns:
         The integration data.
     """
-    # Future compatibility check
-    integration_args: tuple[int] | tuple
-    if Version("0.10.0") <= Version(dolfinx.__version__):
-        integration_args = ()
-    else:
-        fdim = cell_tags.dim - 1
-        integration_args = (fdim,)
     if include_ghosts:
         if len(facet_indices) == 0:
             return np.empty((0, 4), dtype=np.int32)
@@ -432,15 +421,10 @@ def compute_interface_data(
         assert np.unique(_row).shape[0] == len(_row)
         idata = np.vstack([cells, local_pos]).T.reshape(-1, 4)
     else:
-        if not isinstance(cell_tags.topology, dolfinx.cpp.mesh.Topology):
-            _cpp_topology = cell_tags.topology._cpp_object
-        else:
-            _cpp_topology = cell_tags.topology
         idata = dolfinx.cpp.fem.compute_integration_domains(
             dolfinx.fem.IntegralType.interior_facet,
-            _cpp_topology,
+            fenicsx_compat.meshtags_topology(cell_tags)._cpp_object,
             facet_indices,
-            *integration_args,
         )
     ordered_idata = idata.reshape(-1, 4).copy()
     switch = cell_tags.values[ordered_idata[:, 0]] > cell_tags.values[ordered_idata[:, 2]]
@@ -462,7 +446,7 @@ def create_geometry_function_space(
 
     """
     geom_imap = mesh.geometry.index_map()
-    geom_dofmap = compat.dofmap(mesh)
+    geom_dofmap = fenicsx_compat.dofmap(mesh)
     ufl_domain = mesh.ufl_domain()
     assert ufl_domain is not None
     sub_el = ufl_domain.ufl_coordinate_element().sub_elements[0]
@@ -480,6 +464,12 @@ def create_geometry_function_space(
         ufl_el = basix.ufl.blocked_element(sub_el, shape=(N,))
         value_shape = (N,)
 
+    _fe_constructor: (
+        type[dolfinx.cpp.fem.FiniteElement_float32] | type[dolfinx.cpp.fem.FiniteElement_float64]
+    )
+    _fem_constructor: (
+        type[dolfinx.cpp.fem.FunctionSpace_float32] | type[dolfinx.cpp.fem.FunctionSpace_float64]
+    )
     if ufl_el.dtype == np.float32:
         _fe_constructor = dolfinx.cpp.fem.FiniteElement_float32
         _fem_constructor = dolfinx.cpp.fem.FunctionSpace_float32
@@ -488,24 +478,20 @@ def create_geometry_function_space(
         _fem_constructor = dolfinx.cpp.fem.FunctionSpace_float64
     else:
         raise RuntimeError(f"Unsupported type {ufl_el.dtype}")
-    try:
-        cpp_el = create_cpp_finite_element(
-            _fe_constructor, ufl_el.basix_element._e, mesh.geometry.dim, value_shape
-        )
-    except TypeError:
-        cpp_el = _fe_constructor(ufl_el.basix_element._e, block_size=N, symmetric=False)
+    cpp_el = fenicsx_compat.finite_element_ctor_kwargs(
+        _fe_constructor,
+        ufl_el.basix_element._e,
+        gdim=mesh.geometry.dim,
+        value_shape=value_shape,
+    )
     dof_layout = dolfinx.cpp.fem.create_element_dof_layout(cpp_el, [])
-    if not isinstance(geom_imap, dolfinx.cpp.common.IndexMap):
-        _cpp_im = geom_imap._cpp_object
-    else:
-        _cpp_im = geom_imap
-    cpp_dofmap = dolfinx.cpp.fem.DofMap(dof_layout, _cpp_im, N, adj_list, N)
+    cpp_dofmap = dolfinx.cpp.fem.DofMap(
+        dof_layout, fenicsx_compat.unwrap_index_map(geom_imap), N, adj_list, N
+    )
 
-    # Create function space
-    try:
-        cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap)
-    except TypeError:
-        cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap, value_shape=value_shape)
+    # Create function space. The constructor matches the mesh dtype at runtime,
+    # which the float32/float64 stubs cannot express.
+    cpp_space = _fem_constructor(mesh._cpp_object, cpp_el, cpp_dofmap)  # type: ignore[arg-type]
 
     return dolfinx.fem.FunctionSpace(mesh, ufl_el, cpp_space)
 
@@ -551,9 +537,13 @@ def copy(mesh: dolfinx.mesh.Mesh) -> dolfinx.mesh.Mesh:
         The new mesh
     """
 
-    # Initialize C++ mesh
+    # Initialize C++ mesh (geometry dtype matches the mesh class at runtime)
     cpp_mesh = type(mesh._cpp_object)(
-        mesh.comm, mesh.topology._cpp_object, mesh.geometry._cpp_object
+        mesh.comm,
+        mesh.topology._cpp_object,
+        mesh.geometry._cpp_object,  # type: ignore[arg-type]
     )
     # Initialize Python wrapper with new symbolic numbering in the `ufl.Mesh`
-    return dolfinx.mesh.Mesh(cpp_mesh, ufl.Mesh(mesh.ufl_domain().ufl_coordinate_element()))
+    ufl_domain = mesh.ufl_domain()
+    assert ufl_domain is not None
+    return dolfinx.mesh.Mesh(cpp_mesh, ufl.Mesh(ufl_domain.ufl_coordinate_element()))

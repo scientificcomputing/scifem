@@ -10,7 +10,7 @@ import basix
 import ufl
 from scipy.optimize import minimize
 from ufl.algorithms.signature import compute_expression_signature
-from . import compat
+import fenicsx_compat
 
 
 T = typing.TypeVar("T", int, float)
@@ -121,7 +121,7 @@ def find_cell_extrema(
     jit_options: dict | None = None,
     method: str | None = None,
     options: dict | None = None,
-    tol: float | None = None,
+    tol: float | np.floating | None = None,
 ) -> tuple[npt.NDArray[np.floating], np.floating]:
     """
     Find the extrema of a :py:class:`ufl.core.expr.Expr` within a cell.
@@ -148,7 +148,7 @@ def find_cell_extrema(
     uds = ufl.domain.extract_domains(u)
     if uds is None or len(uds) != 1:
         raise ValueError(f"Expression {u:s} must be defined on a single domain")
-    ud = uds[0]
+    ud = typing.cast(ufl.Mesh, uds[0])
     mesh = dolfinx.mesh.Mesh(ud.ufl_cargo(), ud)
 
     if x0 is None:
@@ -157,9 +157,9 @@ def find_cell_extrema(
         x_ref = x0
 
     _cell = np.array([cell], dtype=np.int32)
-    mesh_nodes = mesh.geometry.x[compat.dofmap(mesh)[cell], : mesh.geometry.dim]
+    mesh_nodes = mesh.geometry.x[fenicsx_compat.dofmap(mesh)[cell], : mesh.geometry.dim]
     _x_p = np.zeros(3)
-    cmap = compat.cmap(mesh)
+    cmap = fenicsx_compat.cmap(mesh)
 
     def eval_J(x_ref):
         # Evaluating basis functions through :py:func:`dolfinx.fem.Function.eval`
@@ -312,7 +312,7 @@ def compute_extrema(
     uds = ufl.domain.extract_domains(u)
     if uds is None or len(uds) != 1:
         raise ValueError(f"Expression {u:s} must be defined on a single domain")
-    ud = uds[0]
+    ud = typing.cast(ufl.Mesh, uds[0])
     mesh = dolfinx.mesh.Mesh(ud.ufl_cargo(), ud)
 
     if kind is builtins.max:
@@ -348,7 +348,7 @@ def compute_extrema(
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=False, delete=True) as cache_dir:
         jit_options["cache_dir"] = cache_dir
         # Find local extrema
-        local_min = np.inf
+        local_min: float | np.floating = np.inf
         local_X = None
         for cell in candidate_cells:
             X_c, extrema = find_cell_extrema(

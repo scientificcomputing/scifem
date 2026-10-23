@@ -4,10 +4,9 @@ from mpi4py import MPI
 import dolfinx
 import basix
 import numpy as np
+import fenicsx_compat
 from . import _scifem  # type: ignore
-from .compat import create_cpp_finite_element
 from collections.abc import Sequence
-from packaging.version import Version
 
 
 def create_real_functionspace(
@@ -25,17 +24,14 @@ def create_real_functionspace(
         For scalar elements value shape is ``()``.
 
     """
-    if Version(dolfinx.__version__) >= Version("0.11.0"):
+    if fenicsx_compat.at_least("0.11.0"):
         warn(
             "`create_real_functionspace()` is deprecated and will be removed in a future version."
             + "Please use `basix.ufl.create_real_element()` instead.",
             category=DeprecationWarning,
             stacklevel=2,
         )
-        el = basix.ufl.real_element(
-            mesh.basix_cell(), value_shape=value_shape, dtype=mesh.geometry.x.dtype
-        )
-        return dolfinx.fem.functionspace(mesh, el)
+        return fenicsx_compat.real_functionspace(mesh, value_shape)
 
     dtype = mesh.geometry.x.dtype
     ufl_e = basix.ufl.element(
@@ -55,7 +51,7 @@ def create_space_of_simple_functions(
     mesh: dolfinx.mesh.Mesh,
     cell_tag: dolfinx.mesh.MeshTags,
     tags: Sequence[int | np.int32 | np.int64],
-    value_shape: tuple[()] | tuple[int | tuple[int]] | None = None,
+    value_shape: tuple[int, ...] | None = None,
 ) -> dolfinx.fem.FunctionSpace:
     """Create a space of simple functions.
 
@@ -78,11 +74,7 @@ def create_space_of_simple_functions(
 
     """
     value_shape = () if value_shape is None else value_shape
-    if not isinstance(cell_tag.topology, dolfinx.cpp.mesh.Topology):
-        _cpp_topology = cell_tag.topology._cpp_object
-    else:
-        _cpp_topology = cell_tag.topology
-    if mesh.topology._cpp_object != _cpp_topology:
+    if mesh.topology._cpp_object != fenicsx_compat.meshtags_topology(cell_tag)._cpp_object:
         raise ValueError("Topology of cell tag is not the mesh topology")
     if cell_tag.dim != mesh.topology.dim:
         raise ValueError(
@@ -94,7 +86,8 @@ def create_space_of_simple_functions(
     # Sanity check cell tags
     if cell_map.size_local + cell_map.num_ghosts != len(cell_tag.indices):
         raise ValueError("Every cell in the cell tag must have a value assigned to it.")
-    if not np.isin(cell_tag.values, tags).all():
+    # numpy stubs reject a sequence mixing Python and numpy integers
+    if not np.isin(cell_tag.values, tags).all():  # type: ignore[arg-type]
         raise ValueError("All values in the cell tag must be in the input tags.")
 
     # Determine the owner of the material degrees of freedom.
@@ -110,16 +103,7 @@ def create_space_of_simple_functions(
     # Create index map describing the distribution of dofs across processes
     ghosts = np.arange(num_ghosts, dtype=np.int64)
     owners = np.full(num_ghosts, ghost_owner_rank, dtype=np.int32)
-    if Version(dolfinx.__version__) > Version("0.9.0"):
-        imap_kwargs = {"tag": 321}
-    else:
-        imap_kwargs = {}
-    if hasattr(dolfinx.common, "index_map"):
-        dof_imap = dolfinx.common.index_map(
-            mesh.comm, num_dofs, ghosts=(ghosts, owners), **imap_kwargs
-        )
-    else:
-        dof_imap = dolfinx.common.IndexMap(mesh.comm, num_dofs, ghosts, owners, **imap_kwargs)
+    dof_imap = fenicsx_compat.create_index_map(mesh.comm, num_dofs, ghosts, owners, tag=321)
 
     # Create element dof layout (1 dof per cell, based of the DG-0 element)
     value_size = int(np.prod(value_shape))
@@ -133,34 +117,32 @@ def create_space_of_simple_functions(
     # Create dofmap mapping local dofs to position in `tags` input.
     adj_flattened = np.zeros_like(cell_tag.values)
     for i, tag in enumerate(tags):
-        adj_flattened[cell_tag.find(tag)] = i
+        # numpy integer tags are accepted at runtime; the stub only admits int | float
+        adj_flattened[cell_tag.find(tag)] = i  # type: ignore[arg-type]
 
     # Create dofmap
+    # Cell tag values are int32 at runtime; the stub admits any MeshTags value dtype
     dofmap_adj = dolfinx.cpp.graph.AdjacencyList_int32(
-        adj_flattened, np.arange(len(cell_tag.values) + 1, dtype=np.int32)
+        adj_flattened,  # type: ignore[arg-type]
+        np.arange(len(cell_tag.values) + 1, dtype=np.int32),
     )
-    if not isinstance(dof_imap, dolfinx.cpp.common.IndexMap):
-        _cpp_im = dof_imap._cpp_object
-    else:
-        _cpp_im = dof_imap
-    cpp_dofmap = dolfinx.cpp.fem.DofMap(e_layout, _cpp_im, index_map_bs, dofmap_adj, bs)
+    cpp_dofmap = dolfinx.cpp.fem.DofMap(
+        e_layout, fenicsx_compat.unwrap_index_map(dof_imap), index_map_bs, dofmap_adj, bs
+    )
 
     # Create function space
-    try:
-        cpp_el = create_cpp_finite_element(
-            dolfinx.cpp.fem.FiniteElement_float64,
-            el.basix_element._e,
-            mesh.geometry.dim,
-            value_shape,  # type: ignore
-        )
-        cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(mesh._cpp_object, cpp_el, cpp_dofmap)
-    except TypeError:
-        cpp_el = dolfinx.cpp.fem.FiniteElement_float64(
-            el.basix_element._e, block_size=bs, symmetric=False
-        )
-        cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(
-            mesh._cpp_object, cpp_el, cpp_dofmap, value_shape=value_shape
-        )
+    cpp_el = fenicsx_compat.finite_element_ctor_kwargs(
+        dolfinx.cpp.fem.FiniteElement_float64,
+        el.basix_element._e,
+        gdim=mesh.geometry.dim,
+        value_shape=value_shape,
+    )
+    # Only float64 meshes are supported here
+    cpp_space = dolfinx.cpp.fem.FunctionSpace_float64(
+        mesh._cpp_object,  # type: ignore[arg-type]
+        cpp_el,
+        cpp_dofmap,
+    )
 
     _el = basix.ufl.element("P", mesh.basix_cell(), 0, shape=value_shape, discontinuous=True)
     V = dolfinx.fem.FunctionSpace(mesh, _el, cpp_space)

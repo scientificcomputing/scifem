@@ -48,8 +48,8 @@ from scifem.periodic import create_periodic_mesh, transfer_function_to_parent_me
 # :class: tip dropdown
 #
 # On the `main` branch of DOLFINx, ghost mode is supplied directly to {py:func}`dolfinx.mesh.create_mesh`,
-# rather than through the partitioner. Use {py:func}`scifem.compat.create_partitioner` to get
-# a partitioner that works on all versions.
+# rather than through the partitioner. Use {py:func}`fenicsx_compat.create_mesh` to supply a
+# ghost mode in a way that works on all versions.
 # ```
 
 N = 25

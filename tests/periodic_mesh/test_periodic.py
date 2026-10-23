@@ -15,7 +15,6 @@ Run serially, or under MPI::
 """
 
 from mpi4py import MPI
-import inspect
 
 import basix.ufl
 import numpy as np
@@ -23,8 +22,8 @@ import pytest
 import ufl
 
 import dolfinx
+import fenicsx_compat
 
-from scifem.compat import create_partitioner
 from scifem.periodic.geometrical_search import match_vertices_geometric
 from scifem.periodic.mesh import create_periodic_mesh
 from scifem.periodic.mesh import (
@@ -646,10 +645,6 @@ def test_a_facet_with_three_distinct_cells_is_not_a_collapse():
     cannot ask. `shared_facet` is what brings the third one over.
     """
     comm = MPI.COMM_WORLD
-    # `max_facet_to_cell_links` defaults to 2, which is DOLFINx refusing exactly this mesh
-    # unless asked. Probed by signature rather than by version, as elsewhere in the suite.
-    if "max_facet_to_cell_links" not in inspect.signature(dolfinx.mesh.create_mesh).parameters:
-        pytest.skip("this DOLFINx cannot be asked for more than two cells per facet")
 
     # The input goes in on one rank and is distributed from there; handing every rank the
     # same cells would build the mesh `comm.size` times over.
@@ -674,19 +669,17 @@ def test_a_facet_with_three_distinct_cells_is_not_a_collapse():
         points = np.zeros((0, 3), dtype=np.float64)
         cells = np.zeros((0, 3), dtype=np.int64)
 
-    # Ghosting is a `create_mesh` keyword on 0.12 and a partitioner on 0.11, the same split
-    # `model_to_mesh` carries in test_gmsh_periodic.py. Both places have to be told that a
-    # facet may carry three cells, or the third sheet is not ghosted and the check sees two.
-    partitioner = create_partitioner(dolfinx.mesh.GhostMode.shared_facet, max_facet_to_cell_links=3)
-    ghost_mode = dolfinx.mesh.GhostMode.shared_facet
-    kwargs = {}
-    if "ghost_mode" in inspect.signature(dolfinx.mesh.create_mesh).parameters:
-        kwargs["ghost_mode"] = ghost_mode
-    kwargs["partitioner"] = partitioner
-
+    # `max_facet_to_cell_links` defaults to 2, which is DOLFINx refusing exactly this mesh
+    # unless asked. It has to reach the ghosting as well as the mesh, or the third sheet is
+    # not ghosted and the check sees two.
     domain = ufl.Mesh(basix.ufl.element("Lagrange", "triangle", 1, shape=(3,)))
-    mesh = dolfinx.mesh.create_mesh(
-        comm, cells, domain, points, max_facet_to_cell_links=3, **kwargs
+    mesh = fenicsx_compat.create_mesh(
+        comm,
+        cells,
+        domain,
+        points,
+        ghost_mode=dolfinx.mesh.GhostMode.shared_facet,
+        max_facet_to_cell_links=3,
     )
     assert mesh.topology.index_map(2).size_global == 6
 

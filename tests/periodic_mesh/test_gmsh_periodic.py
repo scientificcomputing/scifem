@@ -27,7 +27,7 @@ from scifem.periodic import (
     PeriodicNodes,
     read_periodic_mesh_from_msh,
 )
-from scifem.periodic.gmsh import model_to_mesh
+import fenicsx_compat
 
 
 @pytest.fixture
@@ -308,7 +308,7 @@ def periodic_square(comm, res=1.0 / 5, directions=("x", "y"), low_is_replaced=Fa
     else:
         pairs = PeriodicNodes()
 
-    mesh = model_to_mesh(gmsh.model, comm, rank=0, gdim=2)
+    mesh = fenicsx_compat.model_to_mesh(gmsh.model, comm, 0, gdim=2).mesh
     if started_here:
         gmsh.finalize()
     return mesh, pairs
@@ -538,11 +538,7 @@ def test_read_periodic_mesh_from_msh_round_trip(tmp_path):
             gmsh.finalize()
     comm.Barrier()
 
-    ghost_mode = dolfinx.mesh.GhostMode.shared_facet
-    partitioner = scifem.compat.create_partitioner(ghost_mode=ghost_mode, max_facet_to_cell_links=2)
-    periodic_mesh, _, _ = read_periodic_mesh_from_msh(
-        filename, comm, gdim=2, partitioner=partitioner
-    )
+    periodic_mesh, _, _ = read_periodic_mesh_from_msh(filename, comm, gdim=2)
 
     num_vertices, volume, bad, jump = torus_invariants(periodic_mesh)
     assert (num_vertices, bad) == (33, 0)
@@ -618,7 +614,7 @@ def periodic_box(comm, res=1.0 / 4, low_is_replaced=True, order=1):
     else:
         pairs = PeriodicNodes()
 
-    mesh = model_to_mesh(gmsh.model, comm, rank=0, gdim=3)
+    mesh = fenicsx_compat.model_to_mesh(gmsh.model, comm, 0, gdim=3).mesh
     if started_here:
         gmsh.finalize()
     return mesh, pairs
