@@ -58,9 +58,10 @@ def evaluate_function(
                 be called on all active processes synchronously.
 
             Note:
-                If the function is discontinuous, different processes may return
-                different values for the same point.
-                In this case, the value returned is the maximum value across all processes.
+                A point found on several processes (e.g. on a process boundary)
+                takes its value from the lowest-ranked of them, so all processes
+                return the same values, also for discontinuous functions.
+                Points that are not found on any process are ``nan``.
 
     Returns:
         The values of the function evaluated at the points.
@@ -92,22 +93,18 @@ def evaluate_function(
 
     values = u.eval(points_on_proc, cells)
     if broadcast:
-        bs = u.function_space.dofmap.index_map_bs
-        # Create array to store values and fill with -inf
-        # to ensure that all points are included in the allreduce
-        # with op=MPI.MAX
-        u_out = np.ones((num_points, bs), dtype=np.float64) * -np.inf
-        # Fill in values for points on this process
-        u_out[indices, :] = values
-        # Now loop over all processes and find the maximum value
-        for i in range(num_points):
-            if bs > 1:
-                # If block size is larger than 1, loop over blocks
-                for j in range(bs):
-                    u_out[i, j] = comm.allreduce(u_out[i, j], op=MPI.MAX)
-            else:
-                u_out[i] = comm.allreduce(u_out[i], op=MPI.MAX)
-
+        value_size = int(np.prod(u.ufl_shape))
+        # Each point is owned by the lowest rank that finds it (comm.size if none does)
+        owner = np.full(num_points, comm.size, dtype=np.int32)
+        owner[indices] = comm.rank
+        comm.Allreduce(MPI.IN_PLACE, owner, op=MPI.MIN)
+        # Only the owner contributes the value of a point, so summing over ranks
+        # passes every value (including nan) through unchanged
+        owned = owner[indices] == comm.rank
+        u_out = np.zeros((num_points, value_size), dtype=np.result_type(values.dtype, np.float64))
+        u_out[indices[owned], :] = np.reshape(values, (len(indices), value_size))[owned]
+        comm.Allreduce(MPI.IN_PLACE, u_out, op=MPI.SUM)
+        u_out[owner == comm.size, :] = np.nan
         return u_out
     else:
         return values
